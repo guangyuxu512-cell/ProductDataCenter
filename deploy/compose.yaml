@@ -1,0 +1,47 @@
+services:
+  product-api:
+    image: product-data-center-api:${RELEASE_SHA:?required}
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    restart: unless-stopped
+    user: '1026:100'
+    environment:
+      BACKEND_DATABASE_URL_FILE: /run/secrets/product_database_url
+      BACKEND_API_TOKEN_FILE: /run/secrets/product_api_token
+      BACKEND_ENABLE_GROUP_WRITES: ${BACKEND_ENABLE_GROUP_WRITES:-false}
+      BACKEND_DATA_ROOT: /data
+    volumes:
+      - ${NAS_DATA_ROOT:?existing data root required}:/data:ro
+    secrets: [product_api_token, product_database_url]
+    networks: [workbench, nas]
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8180/health", timeout=3)']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  product-web:
+    image: product-data-center-web:${RELEASE_SHA:?required}
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    ports:
+      - '${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3612}:80'
+    secrets: [product_api_token, web_htpasswd]
+    networks: [workbench]
+    depends_on:
+      product-api:
+        condition: service_healthy
+secrets:
+  product_database_url:
+    file: ${DATABASE_URL_FILE:?existing NAS database connection file required}
+  product_api_token:
+    file: ${API_TOKEN_FILE:?required}
+  web_htpasswd:
+    file: ${WEB_HTPASSWD_FILE:?required}
+networks:
+  workbench:
+  nas:
+    external: true
+    name: ${NAS_NETWORK:?existing database network required}

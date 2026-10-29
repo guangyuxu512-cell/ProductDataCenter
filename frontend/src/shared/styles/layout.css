@@ -1,0 +1,63 @@
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#app {
+  min-width: 0;
+  min-height: 0;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.page-container {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--layout-section-gap);
+  padding: var(--layout-page-padding-y) var(--layout-page-padding-x);
+}
+
+@media (max-width: 1400px) {
+  .page-container {
+    padding-right: var(--space-4);
+    padding-left: var(--space-4);
+  }
+}
+
+.app-field {
+  width: 100%;
+  min-width: 0;
+}
+
+.app-field--xs {
+  max-width: var(--field-width-xs);
+}
+
+.app-field--sm {
+  max-width: var(--field-width-sm);
+}
+
+.app-field--md {
+  max-width: var(--field-width-md);
+}
+
+.app-field--lg {
+  max-width: var(--field-width-lg);
+}
+
+.app-field--xl {
+  max-width: var(--field-width-xl);
+}
+
+.app-field--full {
+  max-width: none;
+}

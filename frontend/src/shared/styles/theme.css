@@ -1,0 +1,26 @@
+@import './tokens.css';
+@import './typography.css';
+@import './layout.css';
+
+body {
+  background: var(--bg-app);
+  transition:
+    color 160ms ease,
+    background-color 160ms ease;
+}
+
+::selection {
+  color: var(--text-on-primary);
+  background: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
