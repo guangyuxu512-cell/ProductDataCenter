@@ -1,3 +1,19 @@
 # Local service configuration contains credentials and must not be committed.
 **/package-service.env
 
+**/node_modules/
+**/dist/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/*.egg-info/
+**/*.pyc
+**/*.tsbuildinfo
+**/test-results/
+**/playwright-report/
+**/.env
+**/.env.*
+!**/.env.example
+**/secrets/
+.DS_Store
+

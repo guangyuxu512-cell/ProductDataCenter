@@ -1,0 +1,28 @@
+server {
+    listen 80;
+    server_name _;
+    root /usr/share/nginx/html;
+    auth_basic "ProductDataCenter";
+    auth_basic_user_file /run/secrets/web_htpasswd;
+
+    location = /health {
+        auth_basic off;
+        default_type application/json;
+        return 200 '{"status":"ok"}';
+    }
+    location /api/ {
+        proxy_pass http://product-api:8180;
+        proxy_set_header Authorization "Bearer ${PRODUCT_API_TOKEN}";
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+        client_max_body_size 1m;
+    }
+    location /assets/ {
+        try_files $uri =404;
+        add_header Cache-Control "private, max-age=31536000, immutable";
+    }
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache";
+    }
+}
