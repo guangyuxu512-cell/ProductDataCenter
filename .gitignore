@@ -1,0 +1,3 @@
+# Local service configuration contains credentials and must not be committed.
+**/package-service.env
+
