@@ -33,7 +33,10 @@ export function useProductLibrary() {
     select: detailView,
     staleTime: 0,
   })
-  watch(filterKey, () => { filters.page = 1; selected.value = []; detailId.value = null }, { flush: 'sync' })
+  watch(filterKey, () => {
+    counts.clear()
+    filters.page = 1; selected.value = []; detailId.value = null
+  }, { flush: 'sync' })
   watch(() => [filters.page, filters.pageSize], () => { selected.value = []; detailId.value = null }, { flush: 'sync' })
 
   async function refresh() {

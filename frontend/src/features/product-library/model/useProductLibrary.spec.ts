@@ -61,6 +61,25 @@ describe('商品查询缓存与竞态', () => {
     expect(state.list.data.value?.items[0]?.product_id).toBe('pdd:3837817973876326524')
   })
 
+  it('返回已访问的筛选时重新统计新增商品，翻页仍复用本轮总数', async () => {
+    let currentTotal = 60
+    vi.mocked(api.fetchProducts).mockImplementation(async (filters, includeTotal) =>
+      page(includeTotal ? (filters.platform === 'pinduoduo' ? 10 : currentTotal) : null))
+    const state = setup(); await flushPromises()
+    expect(state.total.value).toBe(60)
+    state.filters.platform = 'pinduoduo'; await nextTick(); await flushPromises()
+    expect(state.total.value).toBe(10)
+
+    currentTotal = 85
+    state.filters.platform = ''; await nextTick(); await flushPromises()
+    expect(api.fetchProducts).toHaveBeenLastCalledWith(expect.objectContaining({ platform: '', page: 1 }), true, expect.any(AbortSignal))
+    expect(state.total.value).toBe(85)
+
+    state.filters.page = 2; await nextTick(); await flushPromises()
+    expect(api.fetchProducts).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }), false, expect.any(AbortSignal))
+    expect(state.total.value).toBe(85)
+  })
+
   it('手动刷新重新统计，不使用三秒商品轮询', async () => {
     const state = setup(); await flushPromises()
     vi.mocked(api.fetchProducts).mockClear()
