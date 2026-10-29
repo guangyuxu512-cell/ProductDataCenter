@@ -50,6 +50,18 @@ describe('商品查询缓存与竞态', () => {
     expect(api.fetchProducts).toHaveBeenLastCalledWith(expect.objectContaining({ platform: 'pinduoduo', page: 1 }), true, expect.any(AbortSignal))
   })
 
+  it('慢速翻页保留旧页面，响应完成后切换到新页面', async () => {
+    const state = setup(); await flushPromises()
+    let resolvePage!: (value: ProductListResponse) => void
+    vi.mocked(api.fetchProducts).mockReturnValueOnce(new Promise((resolve) => { resolvePage = resolve }))
+    state.filters.page = 2; await nextTick(); await flushPromises()
+    expect(state.list.isPlaceholderData.value).toBe(true)
+    expect(state.list.data.value?.items[0]?.product_id).toBe('3760269504500859111')
+    resolvePage(page(null, 'new-page')); await flushPromises()
+    expect(state.list.isPlaceholderData.value).toBe(false)
+    expect(state.list.data.value?.items[0]?.product_id).toBe('new-page')
+  })
+
   it('旧请求延迟返回不会覆盖新筛选或总数', async () => {
     let resolveOld!: (value: ProductListResponse) => void
     vi.mocked(api.fetchProducts).mockReturnValueOnce(new Promise((resolve) => { resolveOld = resolve }))

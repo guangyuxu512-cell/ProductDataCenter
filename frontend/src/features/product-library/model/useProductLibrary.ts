@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from 'vue'
-import { useQuery, useQueryClient } from '@tanstack/vue-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { fetchCapabilities, fetchDetail, fetchGroups, fetchProducts } from '../api/products'
 import type { ProductFilters } from './nas-contracts'
 import { detailView } from './format'
@@ -23,6 +23,7 @@ export function useProductLibrary() {
       return response
     },
     staleTime: 0,
+    placeholderData: keepPreviousData,
   })
   const groups = useQuery({ queryKey: ['product-groups'], queryFn: ({ signal }) => fetchGroups(signal) })
   const capabilities = useQuery({ queryKey: ['capabilities'], queryFn: ({ signal }) => fetchCapabilities(signal) })
@@ -32,6 +33,7 @@ export function useProductLibrary() {
     queryFn: ({ signal, queryKey }) => fetchDetail(queryKey[1]!, signal),
     select: detailView,
     staleTime: 0,
+    placeholderData: keepPreviousData,
   })
   watch(filterKey, () => {
     counts.clear()

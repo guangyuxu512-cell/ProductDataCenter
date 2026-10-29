@@ -3,9 +3,9 @@ import { computed, h, ref } from 'vue'
 import { NDatePicker, NEllipsis, NFormItem, useMessage, type DataTableColumns } from 'naive-ui'
 import { ProductInfoCell } from '@/entities/product'
 import { PlatformDisplay } from '@/entities/platform'
-import { ContextSwitchBar, DataTable, ErrorState, FilterBar, FilterField, FormDialog,
-  LoadingState, ManagementListSection, PaginationBar, TableToolbar } from '@/shared/components'
-import { AppButton, AppDialog, AppInput, AppSelect } from '@/shared/ui'
+import { ContextSwitchBar, DataTable, FilterBar, FilterField, FormDialog,
+  ManagementListSection, PaginationBar, TableToolbar } from '@/shared/components'
+import { AppButton, AppInput, AppSelect } from '@/shared/ui'
 import { useProductLibrary } from '../model/useProductLibrary'
 import { capturedTime, platformCode, priceRange } from '../model/format'
 import { exportProducts, moveProducts } from '../api/products'
@@ -21,6 +21,11 @@ const rows = computed(() => list.data.value?.items ?? [])
 const groupItems = computed(() => groups.data.value ?? [])
 const canWriteGroups = computed(() => capabilities.data.value?.groupWrites === true)
 const preview = computed(() => detailId.value ? detail.data.value ?? null : null)
+const previewIndex = computed(() => rows.value.findIndex((row) => row.product_id === detailId.value))
+function navigatePreview(direction: 'previous' | 'next') {
+  const index = previewIndex.value + (direction === 'previous' ? -1 : 1)
+  if (previewIndex.value >= 0 && rows.value[index]) detailId.value = rows.value[index].product_id
+}
 const groupOptions = computed(() => [
   { label: '全部分组', value: '' }, { label: '未分组', value: 'ungrouped' },
   ...groupItems.value.map((group) => ({ label: `${group.name}（${group.productCount}）`, value: group.groupId })),
@@ -135,22 +140,22 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
         </template>
       </TableToolbar>
       <DataTable :columns="columns" :data="rows" :loading="list.isFetching.value"
+        :inert="list.isFetching.value || undefined"
         :error="list.error.value ? errorText(list.error.value) : null" :row-key="(row: ProductRow) => row.product_id"
         :checked-row-keys="selected" :scroll-x="1690" viewport="fill" appearance="list" show-header-when-empty
         empty-description="暂无商品" @update:checked-row-keys="selected = $event.map(String)" @retry="refresh" />
-      <PaginationBar :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
+      <PaginationBar :inert="list.isFetching.value || undefined" :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
         @update:page="filters.page = $event" @update:page-size="filters.pageSize = $event; filters.page = 1" />
     </ManagementListSection>
-    <ProductPreviewDialog :show="!!preview" :product="preview" :editable="false" :exportable="!busy"
+    <ProductPreviewDialog :show="!!detailId" :product="preview" :editable="false" :exportable="!busy"
+      :loading="detail.isFetching.value" :error="detail.error.value ? errorText(detail.error.value) : null"
+      :can-previous="previewIndex > 0 && !detail.isFetching.value"
+      :can-next="previewIndex >= 0 && previewIndex < rows.length - 1 && !detail.isFetching.value"
       :groupable="canWriteGroups" :navigation-items="rows.map((row) => ({ id: row.product_id, title: row.title,
         subtitle: row.source_product_id || row.product_id, imageUrl: row.main_image_url }))"
-      @update:show="!$event && (detailId = null)" @navigate-to="detailId = $event"
+      @update:show="!$event && (detailId = null)" @navigate-to="detailId = $event" @navigate="navigatePreview"
+      @retry="detail.refetch()"
       @export="download([$event.id])" @group="openMove([$event.id])" />
-    <AppDialog v-if="!!detailId && !preview" :show="true" title="商品详情" positive-text="关闭" :show-negative="false"
-      @update:show="!$event && (detailId = null)" @confirm="detailId = null">
-      <ErrorState v-if="detail.error.value" :description="errorText(detail.error.value)" retryable @retry="detail.refetch()" />
-      <LoadingState v-else />
-    </AppDialog>
     <ProductGroupManager v-model:show="managerOpen" :groups="groupItems" :writable="canWriteGroups" @changed="groupsChanged" />
     <FormDialog v-model:show="moveOpen" title="移动商品分组" :submitting="busy" :submit-disabled="!canWriteGroups" @submit="submitMove">
       <NFormItem label="目标分组"><AppSelect v-model="moveTarget" :options="groupOptions.filter((item) => item.value !== '')" /></NFormItem>
