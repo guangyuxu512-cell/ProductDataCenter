@@ -18,6 +18,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import { ProductImage } from '@/entities/product'
+import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState, StatusTag } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
@@ -73,6 +74,9 @@ const emit = defineEmits<{
 const message = useMessage()
 const dialog = useDialog()
 const detailTab = ref('sku')
+const imageRetries = ref<Record<string, number>>({})
+function retryImage(key: string) { imageRetries.value[key] = (imageRetries.value[key] ?? 0) + 1 }
+watch(() => props.product?.id, () => { imageRetries.value = {} })
 const editing = ref(false)
 const editDraft = ref<ProductEditDraft | null>(null)
 const editBaseline = ref<ProductEditDraft | null>(null)
@@ -651,14 +655,19 @@ const allText = computed(() => {
                   <div class="product-preview__image-canvas">
                     <NImage
                       v-if="image.src"
+                      :key="imageRetries[`${section.key}:${index}`] ?? 0"
                       :src="image.src"
                       :alt="`${product.title} ${image.label}`"
+                      lazy
                       object-fit="contain"
                       :img-props="{
-                        loading: 'lazy',
                         referrerpolicy: 'no-referrer',
                       }"
-                    />
+                    >
+                      <template #error>
+                        <AppButton size="small" @click.stop="retryImage(`${section.key}:${index}`)">重试</AppButton>
+                      </template>
+                    </NImage>
                     <NText v-else depth="3">尚未绑定图片</NText>
                   </div>
                   <strong>{{ image.label }}</strong>
@@ -857,10 +866,9 @@ const allText = computed(() => {
                   class="product-preview__navigator-thumbnail"
                   aria-hidden="true"
                 >
-                  <ProductImage
+                  <DeferredPreviewThumbnail
                     :src="item.imageUrl"
                     :title="item.title"
-                    size="thumbnail"
                   />
                 </span>
                 <span class="product-preview__navigator-copy">
