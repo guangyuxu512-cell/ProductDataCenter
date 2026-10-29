@@ -13,13 +13,23 @@
 
 构建仍有单个 JS 块约 1.18 MB（gzip 338 KB）的体积提示。FastAPI 测试环境有 Starlette/httpx 弃用提示；均不是测试失败。
 
-## CI 阻塞
+## CI 结果
+
+验收提交 `e2c043a804ecfd0629234f66f79a000d35d8d16f` 的 [GitHub CI 40837301222](https://github.com/guangyuxu512-cell/ProductDataCenter/actions/runs/40837301222) 三项全部成功：
+
+- Backend：36 项基础测试、3 项真实 PostgreSQL 16 集成测试。集成覆盖秒级范围/精确 ID、并发写入时列表与计数的快照一致性、分组 CRUD 和已有商品/SKU/UU/路径保留。
+- Frontend：依赖锁定安装、lint、6 项单测、类型/生产构建、3 项 Playwright 浏览器测试。
+- Containers：API 和 Web 两个镜像实际 Docker 构建成功。
+
+这仍不等于 NAS Compose 运行验收、真实备份恢复、生产部署或独立代码审查通过。容器用户权限、现有 NAS 网络、真实数据分布及部署配置需在发布演练中验证。
+
+## 初始 CI 阻塞（已解除）
 
 [首次 push CI](https://github.com/guangyuxu512-cell/ProductDataCenter/actions/runs/40836646388) 和 [PR CI](https://github.com/guangyuxu512-cell/ProductDataCenter/actions/runs/40836698993) 均在启动任务前失败：三个 job 的 steps 为空、runner_id 为 0。
 
 已用 GitHub 页面只读核对 Annotations：账号近期付款失败或需要增加支出额度，导致任务未开始。未修改 Billing、支出上限、仓库可见性或 Runner 设置。
 
-因此 PostgreSQL 16 集成测试、Docker 实际构建仍为**未执行**，不能声明 CI Green、独立审查通过或具备生产发布条件。待账号问题解决后重跑最终 Candidate 的工作流，或在获授权的本地 Docker 环境执行同等检查。
+用户调整仓库可见性后，后续 CI 已正常启动并通过，结果见上节。初始失败没有执行代码测试，不是业务断言失败。
 
 未访问真实 NAS 数据库，没有部署、写入生产、APK/手机操作、真实采集或新的 30 万商品端到端压测。Windows `D:\商品云库` 未被本云端会话写入。
 
