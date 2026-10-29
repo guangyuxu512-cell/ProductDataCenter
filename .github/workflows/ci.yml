@@ -78,3 +78,4 @@ jobs:
           lfs: false
       - run: docker build -f deploy/api.Dockerfile -t product-api:test .
       - run: docker build -f deploy/web.Dockerfile -t product-web:test .
+      - run: python scripts/container-smoke.py

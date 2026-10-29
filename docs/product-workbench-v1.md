@@ -63,7 +63,7 @@ NAS Web 入口使用已有反向代理 HTTPS，容器 Nginx 检查挂载的 htpa
 1. 核对 Candidate/CI、运行中采集任务、数据库迁移记录和真实数据根目录。留存现有 Compose、数据库 custom-format dump、源码/镜像及校验值。
 2. 将备份恢复到隔离 PostgreSQL 16，验证本服务列表/详情、时间、分组事务、UU 文件、原手机任务查询。需要测试的分组操作只在隔离库执行。
 3. 从精确 SHA 构建 `deploy/api.Dockerfile` 和 `deploy/web.Dockerfile`。复制 `deploy/.env.example` 到仓库外配置目录，填入现有 NAS 数据库地址和网络名；不创建替代生产库。
-4. 使用独立数据库账号，初始仅授予商品相关表 SELECT。数据目录只读；Token 文件需容器 `1026:100` 能读，htpasswd 需 Nginx 能读，禁止放入 Git。
+4. 使用独立数据库账号，初始仅授予商品相关表 SELECT。完整的 `postgresql+psycopg://` 连接写入仓库外凭据文件，由 `DATABASE_URL_FILE` 引用，不放进 Compose 环境值。连接文件和 Token 文件需容器 `1026:100` 能读（例如属主/组 `1026:100`、`0440`）；数据目录只读，htpasswd 需 Nginx 能读。禁止把这些文件放入 Git。配置同时给出 URL 和 URL_FILE 时拒绝启动，凭据错误不回显连接内容。
 5. 使用唯一 SHA 镜像标签部署两套新容器，与采集项目并行，不重建旧采集 API/数据库。首次 `BACKEND_ENABLE_GROUP_WRITES=false`。
 6. 核验真实商品数量、平台/分组/秒级时间、图片/SKU 和 UU 导出原文件校验值，检查登录保护、资源、刷新路由和无外层滚动。`/health` 仅证明进程存活，不能代替数据库验收。
 7. 如启用分组管理，授予分组表 INSERT/UPDATE/DELETE 和商品 `group_id` 更新所需权限（含已有触发器所需权限），在隔离库用相同角色通过测试后再启用开关。不开商品正文编辑。
@@ -73,7 +73,7 @@ NAS Web 入口使用已有反向代理 HTTPS，容器 Nginx 检查挂载的 htpa
 
 - 本地：源码复用校验、SQL 差异测试、认证/错误/UU 导出测试，Vue lint/单测/类型检查/构建，隔离浏览器交互。
 - CI：全新 PostgreSQL 16 使用手机项目 0001～0008 原 SQL 建库，验证秒级筛选、快照一致性及分组 CRUD；这不是恢复真实 NAS 备份。
-- CI：两套 Docker 构建；仅构建不等于 DSM 运行权限或 NAS 网络验证。
+- CI：两套 Docker 构建后运行 `scripts/container-smoke.py`，使用生产 Compose 启动临时 PG16 和新服务，验证 `1026:100` 读取凭据文件、Web Basic/API Bearer 鉴权、列表/详情、UU 原始字节、默认写禁用和最小权限分组 CRUD。测试只删除本轮随机名称的容器/网络；这仍不能代替 DSM 运行和真实备份恢复验证。
 - 尚未执行：真实 NAS 备份恢复、生产配置、生产部署、真实手机采集、APK 操作、中控商品数据迁移、RPA 接入、独立人工审查。
 
 最终可声明范围以对应提交的 CI 结果为准，失败或未运行的检查不能记作通过。

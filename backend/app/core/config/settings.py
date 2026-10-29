@@ -6,9 +6,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="BACKEND_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="BACKEND_", env_file=".env", extra="ignore", hide_input_in_errors=True)
 
-    database_url: str | None = None
+    database_url: str | None = Field(default=None, repr=False)
+    database_url_file: Path | None = None
     api_token: SecretStr | None = None
     api_token_file: Path | None = None
     data_root: Path = Path("/data")
@@ -17,6 +18,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def check_postgres(self):
+        if self.database_url_file:
+            if self.database_url:
+                raise ValueError("数据库连接只能配置 URL 或凭据文件其中一项")
+            self.database_url = self.database_url_file.read_text(encoding="utf-8").strip()
+            if not self.database_url:
+                raise ValueError("数据库连接凭据文件不能为空")
         if self.database_url and not self.database_url.startswith("postgresql+psycopg://"):
             raise ValueError("BACKEND_DATABASE_URL 必须使用 postgresql+psycopg")
         return self
