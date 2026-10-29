@@ -170,3 +170,41 @@ test('切换详情失败时保留弹窗并显示错误，不能操作旧商品',
   await expect(page.getByRole('dialog').getByRole('button', { name: '重新加载' })).toBeVisible()
   await expect(page.getByText('商品 ID ' + firstId)).toHaveCount(0)
 })
+
+test('40 张详情图片按需加载，失败可单图重试，右侧缩略图随滚动加载', async ({ page }) => {
+  await fixtures(page)
+  const requested: string[] = []
+  let firstImageAttempts = 0
+  await page.route('https://product-image.invalid/**', async (route) => {
+    const name = new URL(route.request().url()).pathname
+    requested.push(name)
+    if (name === '/main-0.svg' && firstImageAttempts++ === 0) return route.abort('failed')
+    return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="gray"/></svg>' })
+  })
+  await page.route(`**/api/v1/products/${firstId}`, async (route) => {
+    const images = ([['main', 12], ['sku', 7], ['detail', 21]] as const).flatMap(([image_type, count]) =>
+      Array.from({ length: count }, (_, sort_order) => ({ image_type, sort_order, rel_path: '', source_url: `https://product-image.invalid/${image_type}-${sort_order}.svg` })))
+    const skus = Array.from({ length: 7 }, (_, sort_order) => ({ sku_id: `sku-${sort_order}`, sku_name: `测试SKU-${sort_order}`, current_price: '19.99', image_rel_path: '', sort_order }))
+    return route.fulfill({ json: { product: product(firstId), skus, images } })
+  })
+  await page.goto('/#/products')
+  await expect(page.locator('.pagination-bar')).toContainText('共 60 条')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const gallery = page.locator('.product-preview__image-section')
+  await expect(gallery.first().getByRole('button', { name: '重试', exact: true })).toBeVisible()
+  await gallery.first().getByRole('button', { name: '重试', exact: true }).click()
+  await expect.poll(() => firstImageAttempts).toBe(2)
+  await expect(gallery.locator('img')).toHaveCount(40)
+  expect(await gallery.locator('img').evaluateAll((imgs) => imgs.every((img) => img.getAttribute('loading') === 'lazy'))).toBe(true)
+  await page.waitForTimeout(500)
+  expect(requested.length).toBeLessThan(41)
+  const sidebar = page.locator('.product-preview__navigator-list')
+  await expect(sidebar.locator('.deferred-preview-thumbnail')).toHaveCount(20)
+  await expect(sidebar.locator('.deferred-preview-thumbnail').first().locator('.product-image')).toHaveCount(1)
+  await expect.poll(() => sidebar.locator('.deferred-preview-thumbnail .product-image').count()).toBeLessThan(20)
+  const last = sidebar.locator('.deferred-preview-thumbnail').last()
+  await last.scrollIntoViewIfNeeded()
+  await expect(last.locator('.product-image')).toHaveCount(1)
+  await gallery.nth(2).locator('img').last().scrollIntoViewIfNeeded()
+  await expect.poll(() => requested.includes('/detail-20.svg')).toBe(true)
+})
