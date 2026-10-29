@@ -26,4 +26,3 @@ export type {
   FieldWidth,
   OverlaySize,
 } from './types'
-

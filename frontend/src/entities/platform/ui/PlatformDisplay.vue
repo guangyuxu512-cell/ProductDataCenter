@@ -69,4 +69,3 @@ const meta = computed(() => getPlatformDefinition(props.code))
   font-size: var(--font-size-secondary);
 }
 </style>
-

@@ -197,4 +197,3 @@ function cancel(): void {
   display: inline-flex;
 }
 </style>
-

@@ -37,4 +37,3 @@ SELECT
   g.group_name
 FROM products p
 LEFT JOIN product_groups g ON g.group_id = p.group_id;
-

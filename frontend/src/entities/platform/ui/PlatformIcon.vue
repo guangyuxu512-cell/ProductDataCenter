@@ -33,4 +33,3 @@ const meta = computed(() =>
   border-radius: var(--radius-sm);
 }
 </style>
-

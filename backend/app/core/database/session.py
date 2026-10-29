@@ -31,4 +31,3 @@ def get_session_factory() -> sessionmaker[Session]:
 def get_database_session() -> Iterator[Session]:
     with get_session_factory()() as session:
         yield session
-

@@ -58,4 +58,3 @@ defineEmits<{
     <slot />
   </NButton>
 </template>
-

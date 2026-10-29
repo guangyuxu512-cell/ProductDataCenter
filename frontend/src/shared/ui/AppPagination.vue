@@ -38,4 +38,3 @@ defineEmits<{
     @update:page-size="$emit('update:pageSize', $event)"
   />
 </template>
-

@@ -100,4 +100,3 @@ def install_exception_handlers(application: FastAPI) -> None:
             content=response.model_dump(mode="json"),
             headers={"X-Request-ID": request_id},
         )
-

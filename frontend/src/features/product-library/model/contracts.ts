@@ -132,4 +132,3 @@ export interface ProductLibraryService {
   recollect(ids: string[]): Promise<number>
   exportSingle(id: string): Promise<ProductLibraryExportFile>
 }
-

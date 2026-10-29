@@ -16,4 +16,3 @@ class AppError(Exception):
         super().__init__(message or self.message)
         self.message = message or self.message
         self.details = details
-

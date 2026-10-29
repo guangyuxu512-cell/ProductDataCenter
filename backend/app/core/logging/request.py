@@ -106,4 +106,3 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             if isinstance(value, str):
                 fields[field] = value
         request_logger.info(json.dumps(fields, ensure_ascii=False, separators=(",", ":")))
-

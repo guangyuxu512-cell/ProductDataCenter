@@ -82,4 +82,3 @@ CREATE INDEX capture_ingest_job_idx
 CREATE TRIGGER capture_ingest_set_updated_at
 BEFORE UPDATE ON capture_ingest
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-

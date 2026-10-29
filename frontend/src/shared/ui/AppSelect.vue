@@ -171,4 +171,3 @@ function updateValue(value: AppSelectValue | null): void {
   pointer-events: auto;
 }
 </style>
-

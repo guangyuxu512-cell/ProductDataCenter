@@ -29,4 +29,3 @@ defineEmits<{
     <slot />
   </NCheckbox>
 </template>
-

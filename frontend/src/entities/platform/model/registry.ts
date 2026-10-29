@@ -161,4 +161,3 @@ export const PLATFORM_NAVIGATION_ITEMS = PLATFORM_REGISTRY.filter(
 )
 export const PLATFORM_CREATE_OPTIONS = getPlatformCreateOptions()
 export const PLATFORM_ONBOARDING_OPTIONS = getPlatformOnboardingOptions()
-

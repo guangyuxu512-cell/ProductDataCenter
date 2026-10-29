@@ -23,4 +23,3 @@ withDefaults(defineProps<{ description?: string }>(), {
   place-items: center;
 }
 </style>
-

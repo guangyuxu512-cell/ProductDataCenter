@@ -162,4 +162,3 @@ async function copyId() {
   min-width: var(--product-id-copy-size);
 }
 </style>
-

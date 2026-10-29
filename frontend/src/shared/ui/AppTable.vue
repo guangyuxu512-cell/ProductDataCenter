@@ -97,4 +97,3 @@ function handleSorterUpdate(
   flex: 1;
 }
 </style>
-

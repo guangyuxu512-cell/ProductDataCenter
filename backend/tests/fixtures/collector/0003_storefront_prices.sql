@@ -101,4 +101,3 @@ $$;
 CREATE TRIGGER product_skus_storefront_price
 BEFORE INSERT OR UPDATE OF current_price ON product_skus
 FOR EACH ROW EXECUTE FUNCTION collector_apply_sku_storefront_price();
-

@@ -75,4 +75,3 @@ pnpm --dir frontend test:e2e
 ```
 
 GitHub Actions 分开验证 PostgreSQL 16、浏览器交互和两个 Docker 镜像。详细的数据库归属、部署步骤及限制见 [V1 交付说明](docs/product-workbench-v1.md)。
-

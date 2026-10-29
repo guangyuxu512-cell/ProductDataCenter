@@ -28,4 +28,3 @@ defineEmits<{
     <slot />
   </NTabs>
 </template>
-

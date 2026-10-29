@@ -17,4 +17,3 @@ ALTER TABLE capture_ingest ADD CONSTRAINT capture_ingest_status_check
     'received', 'processing', 'relay_pending', 'relayed',
     'succeeded', 'failed', 'superseded'
   ));
-

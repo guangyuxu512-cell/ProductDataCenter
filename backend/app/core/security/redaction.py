@@ -27,4 +27,3 @@ def redact_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any
             safe_error.pop("ctx", None)
         redacted.append(safe_error)
     return redacted
-

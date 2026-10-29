@@ -58,4 +58,3 @@ defineEmits<{
   width: var(--date-picker-width-range);
 }
 </style>
-

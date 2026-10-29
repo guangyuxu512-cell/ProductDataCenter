@@ -40,4 +40,3 @@ defineEmits<{ retry: [] }>()
   padding: var(--space-4);
 }
 </style>
-

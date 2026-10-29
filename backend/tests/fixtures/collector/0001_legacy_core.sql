@@ -203,4 +203,3 @@ SELECT
   p.captured_at,
   p.updated_at
 FROM products p;
-

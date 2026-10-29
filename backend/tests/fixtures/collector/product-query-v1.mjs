@@ -250,4 +250,3 @@ function localDateTimeParameter(value, label) {
 function requestError(message) {
   return Object.assign(new Error(message), { status: 400 });
 }
-

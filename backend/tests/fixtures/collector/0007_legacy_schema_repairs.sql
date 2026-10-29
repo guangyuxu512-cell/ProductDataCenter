@@ -37,4 +37,3 @@ BEGIN
   END IF;
 END
 $migration$;
-

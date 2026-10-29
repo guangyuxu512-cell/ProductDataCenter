@@ -27,4 +27,3 @@ CREATE INDEX products_search_trgm_idx
     COALESCE(shop_name, '') || E'\x1F' ||
     COALESCE(category_path, '')
   ) gin_trgm_ops);
-

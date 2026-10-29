@@ -13,4 +13,3 @@ export interface AppOption {
   value: AppOptionValue
   disabled?: boolean
 }
-

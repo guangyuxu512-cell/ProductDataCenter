@@ -24,4 +24,3 @@ withDefaults(defineProps<{ description?: string }>(), {
   color: var(--text-secondary);
 }
 </style>
-

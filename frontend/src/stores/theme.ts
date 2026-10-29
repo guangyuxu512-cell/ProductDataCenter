@@ -85,4 +85,3 @@ export const useThemeStore = defineStore('theme', () => {
 
   return { mode, resolvedPreset, resolvedTheme, initialize, setMode }
 })
-

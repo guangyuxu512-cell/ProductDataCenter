@@ -68,4 +68,3 @@ function selectTheme(key: string | number): void {
   font-size: var(--font-size-secondary);
 }
 </style>
-

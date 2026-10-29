@@ -12,4 +12,3 @@ export const queryClient = new QueryClient({
 export async function resetQueriesForActorContextChange(): Promise<void> {
   await queryClient.resetQueries()
 }
-

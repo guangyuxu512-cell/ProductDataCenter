@@ -28,4 +28,3 @@ defineEmits<{ 'update:show': [value: boolean] }>()
     <template v-if="$slots.footer" #footer><slot name="footer" /></template>
   </AppDrawer>
 </template>
-

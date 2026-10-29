@@ -9,4 +9,3 @@
 - 任何生产发布独立执行，先备份并在恢复的隔离库核对；本地测试和 GitHub CI 不等于 NAS 部署或真实采集验收。
 - 不提交凭据、用户原始包、真实数据库备份、node_modules、构建缓存。既有安装包和 Git LFS 历史保留。
 - 检查：`python scripts/verify-source-baseline.py`、后端 `python -m pytest`、隔离 PG16 `python -m pytest -m integration`、前端 lint / test / build / test:e2e。
-

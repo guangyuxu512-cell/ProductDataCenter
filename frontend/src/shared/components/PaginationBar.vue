@@ -62,4 +62,3 @@ defineEmits<{
   font-size: var(--list-compact-font-size);
 }
 </style>
-

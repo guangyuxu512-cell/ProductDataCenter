@@ -359,4 +359,3 @@ function navigate(key: string): void {
   background: var(--bg-app);
 }
 </style>
-

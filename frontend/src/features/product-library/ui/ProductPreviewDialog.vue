@@ -1173,4 +1173,3 @@ const allText = computed(() => {
   }
 }
 </style>
-

@@ -24,4 +24,3 @@ import { APP_OVERLAY_HOST_ID } from './overlay-host'
   pointer-events: auto;
 }
 </style>
-

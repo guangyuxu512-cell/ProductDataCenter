@@ -62,4 +62,3 @@ const tagType = computed(() =>
   background: var(--status-danger);
 }
 </style>
-

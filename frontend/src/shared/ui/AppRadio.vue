@@ -31,4 +31,3 @@ defineEmits<{
     </NRadioButton>
   </NRadioGroup>
 </template>
-

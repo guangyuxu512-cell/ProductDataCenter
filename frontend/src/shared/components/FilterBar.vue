@@ -83,4 +83,3 @@ withDefaults(defineProps<{ density?: ListDensity }>(), { density: 'default' })
   gap: var(--list-compact-gap);
 }
 </style>
-

@@ -62,4 +62,3 @@ withDefaults(defineProps<{ label?: string; width?: FieldWidth }>(), {
   flex: 1 1 100%;
 }
 </style>
-

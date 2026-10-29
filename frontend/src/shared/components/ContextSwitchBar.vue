@@ -92,4 +92,3 @@ function select(item: ContextSwitchItem): void {
   border-color: var(--color-primary-pressed);
 }
 </style>
-

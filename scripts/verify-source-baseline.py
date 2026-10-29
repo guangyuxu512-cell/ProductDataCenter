@@ -8,7 +8,13 @@ manifest = json.loads((root / "docs/source-baseline.json").read_text(encoding="u
 errors = []
 for relative, expected in manifest["unchanged_files"].items():
     path = root / relative
-    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+    if not path.is_file():
+        errors.append(relative)
+        continue
+    data = path.read_bytes()
+    source_blob = manifest["source_git_blobs"][relative]
+    git_blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+    if hashlib.sha256(data).hexdigest() != expected or git_blob != source_blob:
         errors.append(relative)
 if errors:
     raise SystemExit("来源文件发生变化：\n" + "\n".join(errors))
