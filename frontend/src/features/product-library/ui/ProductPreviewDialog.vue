@@ -7,6 +7,7 @@ import {
   NForm,
   NFormItem,
   NImage,
+  NSpin,
   NList,
   NListItem,
   NTabPane,
@@ -18,7 +19,7 @@ import {
 } from 'naive-ui'
 import { ProductImage } from '@/entities/product'
 import { PlatformDisplay } from '@/entities/platform'
-import { StatusTag } from '@/shared/components'
+import { ErrorState, LoadingState, StatusTag } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import type {
   LibraryProduct,
@@ -32,6 +33,8 @@ const props = withDefaults(
     show: boolean
     product: LibraryProduct | null
     saving?: boolean
+    loading?: boolean
+    error?: string | null
     canPrevious?: boolean
     canNext?: boolean
     positionLabel?: string
@@ -47,6 +50,8 @@ const props = withDefaults(
   }>(),
   {
     saving: false,
+    loading: false,
+    error: null,
     canPrevious: false,
     canNext: false,
     positionLabel: '',
@@ -61,6 +66,7 @@ const emit = defineEmits<{
   export: [product: LibraryProduct]
   group: [product: LibraryProduct]
   save: [draft: ProductEditDraft]
+  retry: []
   navigate: [direction: 'previous' | 'next']
   'navigate-to': [id: string]
 }>()
@@ -529,9 +535,12 @@ const allText = computed(() => {
         </AppButton>
       </div>
     </template>
-    <template v-if="product">
-      <div class="product-preview__layout">
-        <div class="product-preview__content">
+    <ErrorState v-if="error" :description="error" retryable @retry="emit('retry')" />
+    <LoadingState v-else-if="!product" />
+    <template v-else>
+      <div class="product-preview__layout" :aria-busy="loading">
+        <div v-if="loading" class="product-preview__loading-mask" role="status" aria-label="加载中"><NSpin size="small" /></div>
+        <div class="product-preview__content" :inert="loading || undefined">
           <section class="product-preview__summary">
             <div class="product-preview__summary-heading">
               <div class="product-preview__summary-title">
@@ -823,7 +832,7 @@ const allText = computed(() => {
           </AppTabs>
         </div>
 
-        <aside class="product-preview__navigator" aria-label="当前范围商品列表">
+        <aside class="product-preview__navigator" :inert="loading || undefined" aria-label="当前范围商品列表">
           <header class="product-preview__navigator-header">
             <strong>当前范围商品</strong>
             <NText v-if="positionLabel" depth="3">{{ positionLabel }}</NText>
@@ -894,6 +903,7 @@ const allText = computed(() => {
 
 <style scoped>
 .product-preview__layout {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) clamp(320px, 22vw, 360px);
   align-items: stretch;
@@ -902,6 +912,16 @@ const allText = computed(() => {
   min-height: 0;
   overflow: hidden;
 }
+.product-preview__loading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-surface-solid) 55%, transparent);
+}
+
 .product-preview__content {
   min-width: 0;
   min-height: 0;
