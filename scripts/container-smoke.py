@@ -93,7 +93,9 @@ def main():
             command("docker", "run", "-d", "--name", postgres, "--network", run, "--network-alias", "postgres",
                     "-e", "POSTGRES_USER=pdc_test", "-e", "POSTGRES_DB=product_workbench_test",
                     "-e", f"POSTGRES_PASSWORD={password}", "postgres:16-alpine")
-            wait_for(lambda: "accepting connections" in command("docker", "exec", postgres, "pg_isready", "-U", "pdc_test", "-d", "product_workbench_test"), "PostgreSQL")
+            # The init-only server accepts Unix sockets before restarting. Wait
+            # for TCP, which is only enabled on the final PostgreSQL process.
+            wait_for(lambda: "accepting connections" in command("docker", "exec", postgres, "pg_isready", "-h", "127.0.0.1", "-U", "pdc_test", "-d", "product_workbench_test"), "PostgreSQL")
             for path in sorted((ROOT / "backend/tests/fixtures/collector").glob("*.sql")):
                 psql(path.read_text())
             psql(f"""INSERT INTO products(product_id,title,source_platform,source_product_id,captured_at,uu_json,uu_rel_path,uu_sha256)
