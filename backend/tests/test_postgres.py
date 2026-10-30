@@ -57,6 +57,38 @@ def test_exact_id_and_second_precision(engine):
     assert "uu_json" not in detail["product"]
 
 
+def test_rpa_group_list_uses_real_postgres_and_preserves_uu(engine, tmp_path):
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.products.api import get_service
+
+    repo = ProductRepository(engine)
+    group_service = ProductService(repo, Settings(data_root=tmp_path))
+    group = group_service.save_group("RPA 测试分组")["group"]
+    try:
+        group_service.assign_group(["3760269504500859111", "pdd:3760269504500859111"], group["groupId"])
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_settings] = lambda: settings
+        # Auth reads the cached configuration directly, so explicitly seed it for this isolated test.
+        from unittest.mock import patch
+        with patch("app.core.security.access.get_settings", return_value=settings):
+            app.dependency_overrides[get_service] = lambda: group_service
+            with TestClient(app) as client:
+                auth = {"Authorization": "Bearer rpa-test"}
+                page = client.get(f"/rpa/v1/product-groups/{group['groupId']}/products?limit=1", headers=auth).json()
+                assert page["total"] == 2
+                second = client.get(f"/rpa/v1/product-groups/{group['groupId']}/products?limit=1&offset=1", headers=auth).json()
+                assert page["items"][0]["product_id"] != second["items"][0]["product_id"]
+                response = client.get("/rpa/v1/products/3760269504500859111/uu", headers=auth)
+                assert response.status_code == 200
+                assert response.json()["goodsInfo"]["productId"] == "3760269504500859111"
+                assert len(response.headers["x-uu-sha256"]) == 64
+    finally:
+        group_service.delete_group(group["groupId"])
+
+
 def test_list_and_count_share_snapshot_under_concurrent_insert(engine):
     injected = False
     def after_cursor(conn, cursor, statement, parameters, context, executemany):

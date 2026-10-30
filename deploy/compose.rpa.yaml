@@ -1,0 +1,10 @@
+# 仅在启用 RPA 只读接口时与 compose.yaml 一起加载；密钥文件留在仓库外。
+services:
+  product-api:
+    environment:
+      BACKEND_RPA_API_TOKEN_FILE: /run/secrets/rpa_api_token
+    secrets:
+      - rpa_api_token
+secrets:
+  rpa_api_token:
+    file: ${RPA_TOKEN_FILE:?RPA token file required}

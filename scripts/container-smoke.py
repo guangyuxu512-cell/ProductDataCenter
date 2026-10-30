@@ -46,7 +46,7 @@ def wait_for(check, label):
 def main():
     run = "pdc-smoke-" + secrets.token_hex(6)
     postgres = run + "-postgres"
-    password, token, web_password = (secrets.token_urlsafe(32) for _ in range(3))
+    password, token, web_password, rpa_token = (secrets.token_urlsafe(32) for _ in range(4))
     with tempfile.TemporaryDirectory(prefix=run) as directory:
         root = Path(directory)
         root.chmod(0o755)
@@ -58,6 +58,7 @@ def main():
         credentials.mkdir(mode=0o755)
         (credentials / "database_url").write_text(f"postgresql+psycopg://pdc_reader:{password}@postgres:5432/product_workbench_test")
         (credentials / "api_token").write_text(token)
+        (credentials / "rpa_token").write_text(rpa_token)
         hashed = command("openssl", "passwd", "-6", "-stdin", stdin=web_password + "\n")
         (credentials / "htpasswd").write_text("reviewer:" + hashed + "\n")
         with socket.socket() as sock:
@@ -66,15 +67,18 @@ def main():
         env = dict(os.environ, RELEASE_SHA=run, DATABASE_URL_FILE=str(credentials / "database_url"),
                    API_TOKEN_FILE=str(credentials / "api_token"), WEB_HTPASSWD_FILE=str(credentials / "htpasswd"),
                    NAS_DATA_ROOT=str(media), NAS_NETWORK=run, WEB_BIND_ADDRESS="127.0.0.1", WEB_PORT=str(port),
-                   BACKEND_ENABLE_GROUP_WRITES="false")
+                   BACKEND_ENABLE_GROUP_WRITES="false", RPA_TOKEN_FILE=str(credentials / "rpa_token"))
         def compose(*args, **kwargs):
-            return command("docker", "compose", "-p", run, "-f", str(ROOT / "deploy/compose.yaml"), *args, env=env, **kwargs)
+            return command("docker", "compose", "-p", run, "-f", str(ROOT / "deploy/compose.yaml"),
+                           "-f", str(ROOT / "deploy/compose.rpa.yaml"), *args, env=env, **kwargs)
         def psql(sql):
             return command("docker", "exec", "-i", postgres, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "pdc_test", "-d", "product_workbench_test", stdin=sql)
         base = f"http://127.0.0.1:{port}"
         basic = base64.b64encode(f"reviewer:{web_password}".encode()).decode()
-        def request(path, *, status=200, method="GET", body=None, auth=True):
+        def request(path, *, status=200, method="GET", body=None, auth=True, bearer=None):
             headers = {"Authorization": "Basic " + basic} if auth else {}
+            if bearer is not None:
+                headers["Authorization"] = "Bearer " + bearer
             if body is not None:
                 headers["Content-Type"] = "application/json"
             req = urllib.request.Request(base + path, headers=headers, method=method,
@@ -137,6 +141,22 @@ def main():
             wait_for(lambda: request("/api/v1/capabilities")["groupWrites"], "group writes")
             group = request("/api/v1/product-groups", method="POST", body={"name": "隔离分组"})["group"]["groupId"]
             assert request("/api/v1/products/group", method="PATCH", body={"productIds": [IDENTITY], "groupId": group})["updated"] == [IDENTITY]
+            request("/rpa/v1/product-groups", auth=False, status=401)
+            request("/rpa/v1/product-groups", auth=False, bearer=token, status=401)
+            groups = request("/rpa/v1/product-groups", auth=False, bearer=rpa_token)
+            assert any(item["groupId"] == group and item["productCount"] == 1 for item in groups["groups"])
+            page = request("/rpa/v1/product-groups/" + group + "/products", auth=False, bearer=rpa_token)
+            assert page["items"][0]["product_id"] == IDENTITY
+            rpa_uu = request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
+                             auth=False, bearer=rpa_token)
+            assert rpa_uu == json.loads(UU)
+            request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + "0" * 64,
+                    auth=False, bearer=rpa_token, status=409)
+            request("/api/v1/product-groups", method="POST", body={"name": "RPA不能写"},
+                    auth=False, bearer=rpa_token, status=401)
+            request("/rpa/v1/product-groups", method="POST", body={"name": "RPA不能写"},
+                    auth=False, bearer=rpa_token, status=405)
+            print("PASS: RPA proxy, independent read-only token, group/list, UU version and write rejection", flush=True)
             assert request("/api/v1/product-groups/" + group, method="PATCH", body={"name": "改名"})["group"]["productCount"] == 1
             assert request("/api/v1/product-groups/" + group, method="DELETE")["deleted"]["productCount"] == 1
             assert request("/api/v1/products/" + IDENTITY)["product"]["group_id"] is None

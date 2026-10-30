@@ -43,6 +43,11 @@ class ProductRepository:
                 FROM product_groups g LEFT JOIN products p ON p.group_id=g.group_id
                 GROUP BY g.group_id ORDER BY lower(g.group_name), g.created_at""")).mappings()]
 
+    def group_exists(self, group_id) -> bool:
+        with self.engine.connect() as conn:
+            return bool(conn.execute(text("SELECT EXISTS (SELECT 1 FROM product_groups WHERE group_id=:id)"),
+                                     {"id": group_id}).scalar_one())
+
     @staticmethod
     def _group(row) -> dict:
         return {"groupId": row["group_id"], "name": row["group_name"],
