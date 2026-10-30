@@ -5,7 +5,7 @@ RPA 通过商品云库读取分组和 UU；无商品或分组写入权限。只�
 ## 鉴权与网络
 
 - `/rpa/v1/` 使用独立 Bearer Token。未配置或与网页管理 Token 相同会返回 503；错误或缺失凭据返回 401。
-- 网页 `/api/` 维持原 Basic 认证和管理 Token 注入；RPA 路径透传调用方的 Authorization，不注入管理 Token。
+- 网页 `/api/` 默认保持 Basic 认证和管理 Token 注入；可按 `product-desktop-lan-v1.md` 选择局域网免登录。RPA 路径透传调用方的 Authorization，不注入管理 Token。局域网免登录不代表可信网段内的 RPA 主机无法访问网页开放的接口。
 - 默认不启用。部署时使用独立强随机 Token 文件，示例 `docker compose -f deploy/compose.yaml -f deploy/compose.rpa.yaml ...`，`RPA_TOKEN_FILE` 指向仓库外文件，确保容器 UID 1026 能读取。删除或替换该文件并重建服务即可撤销或轮换。不得把凭据放入 Git、URL、RPA 渲染进程或日志。
 - RPA 客户端放 Electron 主进程；仅在可信网络或经过正确认证的 HTTPS 链路传输，不应将现有 NAS HTTP 端口直接暴露公网。跨设备访问的网络、TLS、凭据分发由部署时核实，本次不新开公网。
 

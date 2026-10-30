@@ -1,0 +1,45 @@
+name: Product desktop Windows
+on:
+  push:
+    branches: [main, 'feat/**', 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm package:win
+      - run: node tests/packaged-smoke.cjs
+      - name: Record installer SHA256
+        shell: pwsh
+        run: |
+          Get-ChildItem release/*-setup.exe | ForEach-Object {
+            "$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower())  $($_.Name)" |
+              Out-File -Encoding ascii release/SHA256SUMS
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: product-workbench-windows-${{ github.sha }}
+          path: |
+            desktop/release/*-setup.exe
+            desktop/release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7

@@ -76,6 +76,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: false
+      - run: python scripts/test_web_configuration.py
       - run: docker build -f deploy/api.Dockerfile -t product-api:test .
       - run: docker build -f deploy/web.Dockerfile -t product-web:test .
       - run: python scripts/container-smoke.py

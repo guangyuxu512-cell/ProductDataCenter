@@ -20,7 +20,9 @@
 | mobile-product-collector | `4d79329d15b3b30c6a69b4bb91801e3091b00670` | NAS 商品字段、优化 SQL、分组和时间筛选语义、UU 导出约定；历史迁移仅作测试夹具 |
 | ProductDataCenter | `7a0d1deb915b245fdfd622720a470ace2e1c6a81` | 保留原仓库及安装包历史；新增前后端源码 |
 
-49 个原样复用文件的校验记录在 `docs/source-baseline.json`。商品页面数据绑定和详情字段进行了适配，公共组件和样式文件没有重设计。
+原样复用文件的校验记录在 `docs/source-baseline.json`。商品页面数据绑定、详情字段和 HTTP 环境下的复制行为进行了适配，公共布局和样式没有重设计。
+
+桌面客户端和免网页登录的局域网部署方式见 [桌面客户端说明](docs/product-desktop-lan-v1.md)。RPA 专用只读凭据保持独立。
 
 ## 本地运行
 
