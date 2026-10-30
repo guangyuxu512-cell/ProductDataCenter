@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NConfigProvider, NImage, NText } from 'naive-ui'
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { AppButton, createListDensityTheme } from '@/shared/ui'
 import type { ListDensity } from '@/shared/ui'
 import { thumbnailImageUrl } from '../model/thumbnail-image-url'
@@ -17,16 +17,31 @@ const props = withDefaults(
 )
 const failed = ref(false),
   revision = ref(0),
-  useOriginal = ref(false)
+  useOriginal = ref(false),
+  imageBox = ref<HTMLElement | null>(null),
+  scrollRoot = shallowRef<HTMLElement | null>(null)
 const displaySrc = computed(() => {
   if (!props.src || useOriginal.value || props.size !== 'thumbnail') return props.src
   return thumbnailImageUrl(props.src)
 })
-// A null root respects the clipping of the table's internal scroll container.
-// When observers are unavailable, Naive UI falls back to native lazy loading.
-const observerOptions = typeof IntersectionObserver === 'undefined'
-  ? undefined
-  : { rootMargin: '120px' }
+// Use the actual internal scroll area so the 120px margin can prefetch its
+// next rows. When observers are unavailable, use native lazy loading instead.
+const observerOptions = computed<IntersectionObserverInit | undefined>(() =>
+  typeof IntersectionObserver === 'undefined'
+    ? undefined
+    : { root: scrollRoot.value, rootMargin: '120px' },
+)
+onMounted(() => {
+  let parent = imageBox.value?.parentElement ?? null
+  while (parent) {
+    const overflow = getComputedStyle(parent)
+    if (/(auto|scroll)/.test(overflow.overflowY) && parent.scrollHeight > parent.clientHeight) {
+      scrollRoot.value = parent
+      break
+    }
+    parent = parent.parentElement
+  }
+})
 watch(
   () => props.src,
   () => {
@@ -54,6 +69,7 @@ function onImageError(event: Event) {
 
 <template>
   <div
+    ref="imageBox"
     class="product-image"
     :class="[
       'product-image--' + size,

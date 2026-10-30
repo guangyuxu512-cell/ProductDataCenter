@@ -320,6 +320,18 @@ test('商品列表按可见区域加载小图，失败回退原图，原图失�
   await expect.poll(() => requested.includes(original(1))).toBe(true)
   await expect(page.getByRole('button', { name: '重试商品图片' })).toBeVisible()
   expect(requested.some((url) => url.includes('list-19~'))).toBe(false)
+  const nearNextRow = await images.evaluateAll((elements) => {
+    const scrollArea = elements[0]?.closest('.n-scrollbar-container')
+    if (!scrollArea) return null
+    const bottom = scrollArea.getBoundingClientRect().bottom
+    return elements.find((element) => {
+      const top = element.getBoundingClientRect().top
+      return top > bottom && top < bottom + 100
+    })?.getAttribute('data-preview-src') ?? null
+  })
+  expect(nearNextRow).not.toBeNull()
+  const nearThumbnail = nearNextRow!.replace('resize_q:1080:1080:q90', 'resize_q:144:144:q80')
+  await expect.poll(() => requested.includes(nearThumbnail)).toBe(true)
   expect(await images.first().getAttribute('data-preview-src')).toBe(original(0))
   retryAllowed = true
   await page.getByRole('button', { name: '重试商品图片' }).click()
