@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { NConfigProvider, NImage, NText } from 'naive-ui'
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { AppButton, createListDensityTheme } from '@/shared/ui'
 import type { ListDensity } from '@/shared/ui'
+import { thumbnailImageUrl } from '../model/thumbnail-image-url'
 
 // Shared source: b364a89a9955ffe4aae1c3fb6dbfcabfd0dedf8f.
 const props = withDefaults(
@@ -15,16 +16,39 @@ const props = withDefaults(
   { size: 'summary', density: 'default' },
 )
 const failed = ref(false),
-  revision = ref(0)
+  revision = ref(0),
+  useOriginal = ref(false)
+const displaySrc = computed(() => {
+  if (!props.src || useOriginal.value || props.size !== 'thumbnail') return props.src
+  return thumbnailImageUrl(props.src)
+})
+// A null root respects the clipping of the table's internal scroll container.
+// When observers are unavailable, Naive UI falls back to native lazy loading.
+const observerOptions = typeof IntersectionObserver === 'undefined'
+  ? undefined
+  : { rootMargin: '120px' }
 watch(
   () => props.src,
   () => {
     failed.value = false
+    useOriginal.value = false
   },
+  { flush: 'sync' },
 )
 function retry() {
   failed.value = false
+  useOriginal.value = false
   revision.value += 1
+}
+function onImageError(event: Event) {
+  const image = event.currentTarget
+  // An old request may fail just as the row changes to a different product.
+  if (!(image instanceof HTMLImageElement) || image.getAttribute('src') !== displaySrc.value) return
+  if (!useOriginal.value && props.src && displaySrc.value !== props.src) {
+    useOriginal.value = true
+  } else {
+    failed.value = true
+  }
 }
 </script>
 
@@ -54,12 +78,15 @@ function retry() {
       >
       <NImage
         v-else
-        :key="revision"
-        :src="src"
+        :key="`${displaySrc}:${revision}`"
+        :src="displaySrc ?? undefined"
+        :preview-src="src ?? undefined"
         :alt="title"
         object-fit="contain"
-        :img-props="{ loading: 'lazy', referrerpolicy: 'no-referrer' }"
-        @error="failed = true"
+        lazy
+        :intersection-observer-options="observerOptions"
+        :img-props="{ referrerpolicy: 'no-referrer' }"
+        @error="onImageError"
       />
     </NConfigProvider>
   </div>
