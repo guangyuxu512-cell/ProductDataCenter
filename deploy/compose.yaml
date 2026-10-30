@@ -28,6 +28,9 @@ services:
     restart: unless-stopped
     ports:
       - '${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3612}:80'
+    environment:
+      WEB_ACCESS_MODE: ${WEB_ACCESS_MODE:-basic}
+      WEB_TRUSTED_CIDR: ${WEB_TRUSTED_CIDR:-192.168.0.0/24}
     secrets: [product_api_token, web_htpasswd]
     networks: [workbench]
     depends_on:

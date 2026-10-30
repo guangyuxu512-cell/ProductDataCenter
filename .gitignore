@@ -11,6 +11,7 @@
 **/*.tsbuildinfo
 **/test-results/
 **/playwright-report/
+desktop/release/
 **/.env
 **/.env.*
 !**/.env.example

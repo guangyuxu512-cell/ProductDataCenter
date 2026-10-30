@@ -1,9 +1,16 @@
+# A bearer credential supplied by a client must never be silently upgraded to
+# the web management credential. Browsers either send no header or cached Basic.
+map $http_authorization $product_web_authorization {
+    default $http_authorization;
+    "" "Bearer ${PRODUCT_API_TOKEN}";
+    ~*^Basic "Bearer ${PRODUCT_API_TOKEN}";
+}
+
 server {
     listen 80;
     server_name _;
     root /usr/share/nginx/html;
-    auth_basic "ProductDataCenter";
-    auth_basic_user_file /run/secrets/web_htpasswd;
+    ${WEB_AUTH_DIRECTIVES}
 
     location = /health {
         auth_basic off;
@@ -11,8 +18,9 @@ server {
         return 200 '{"status":"ok"}';
     }
     location /api/ {
+        ${WEB_NETWORK_DIRECTIVES}
         proxy_pass http://product-api:8180;
-        proxy_set_header Authorization "Bearer ${PRODUCT_API_TOKEN}";
+        proxy_set_header Authorization $product_web_authorization;
         proxy_set_header Host $host;
         proxy_read_timeout 120s;
         client_max_body_size 1m;
@@ -26,10 +34,12 @@ server {
         proxy_read_timeout 120s;
     }
     location /assets/ {
+        ${WEB_NETWORK_DIRECTIVES}
         try_files $uri =404;
         add_header Cache-Control "private, max-age=31536000, immutable";
     }
     location / {
+        ${WEB_NETWORK_DIRECTIVES}
         try_files $uri $uri/ /index.html;
         add_header Cache-Control "no-cache";
     }

@@ -5,6 +5,7 @@ import { computed, ref } from 'vue'
 import type { CSSProperties } from 'vue'
 import { AppButton, createListDensityTheme } from '@/shared/ui'
 import type { ListDensity } from '@/shared/ui'
+import { copyText } from '@/shared/utils/copy-text'
 import ProductImage from './ProductImage.vue'
 
 // Shared source: b364a89a9955ffe4aae1c3fb6dbfcabfd0dedf8f. Use NTooltip
@@ -36,7 +37,7 @@ async function copyId() {
   if (copying.value || !id.value) return
   copying.value = true
   try {
-    await navigator.clipboard.writeText(id.value)
+    await copyText(id.value)
     message.success('商品ID已复制')
   } catch {
     message.error('复制失败，可选中商品ID手动复制')

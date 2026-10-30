@@ -162,6 +162,29 @@ def main():
             assert request("/api/v1/products/" + IDENTITY)["product"]["group_id"] is None
             assert request("/api/v1/products")["total"] == 1
             print("PASS: restricted-role group CRUD/move, product preserved", flush=True)
+
+            # Test opt-in anonymous LAN access separately from the default Basic mode.
+            # The RPA route remains independently authenticated in both modes.
+            env["WEB_ACCESS_MODE"] = "lan"
+            env["WEB_TRUSTED_CIDR"] = "192.168.0.0/24"
+            compose("up", "-d", "--no-build", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "100", "product-web")
+            request("/", auth=False, status=403)
+            request("/api/v1/products", auth=False, status=403)
+            assert request("/rpa/v1/product-groups", auth=False, bearer=rpa_token)["groups"] == []
+            request("/rpa/v1/product-groups", auth=False, status=401)
+
+            # Published localhost ports reach Nginx from the bridge gateway.
+            web_id = compose("ps", "-q", "product-web")
+            gateway = command("docker", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}", web_id)
+            env["WEB_TRUSTED_CIDR"] = gateway + "/32"
+            compose("up", "-d", "--no-build", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "100", "product-web")
+            assert b"<html" in request("/", auth=False)
+            assert request("/api/v1/products", auth=False)["total"] == 1
+            request("/api/v1/product-groups", method="POST", body={"name": "RPA 不能写"}, auth=False, bearer=rpa_token, status=401)
+            request("/rpa/v1/product-groups", auth=False, bearer=rpa_token)
+            request("/rpa/v1/product-groups", auth=False, status=401)
+            request("/rpa/v1/product-groups", auth=False, bearer="wrong", status=401)
+            print("PASS: anonymous trusted network, denied other network, unchanged RPA credentials", flush=True)
         finally:
             compose("down", "--remove-orphans", check=False)
             command("docker", "rm", "-f", postgres, check=False)

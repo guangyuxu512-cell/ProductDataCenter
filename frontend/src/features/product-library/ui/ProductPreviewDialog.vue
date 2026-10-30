@@ -22,6 +22,7 @@ import { previewImageUrl } from '../model/preview-image-url'
 import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState, StatusTag } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
+import { copyText } from '@/shared/utils/copy-text'
 import type {
   LibraryProduct,
   ProductEditDraft,
@@ -478,7 +479,7 @@ function replaceImage() {
 
 async function copy(value: string, label: string) {
   try {
-    await navigator.clipboard.writeText(value)
+    await copyText(value)
     message.success(`${label}已复制`)
   } catch {
     message.error('复制失败，请重试')
