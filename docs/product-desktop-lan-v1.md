@@ -21,6 +21,16 @@
 
 在 `desktop` 目录使用 `pnpm install --frozen-lockfile`、`pnpm test`、`pnpm package:win`；CI 在 Windows 构建 NSIS 包。需要变更服务地址时，可在启动进程前配置 `PRODUCT_WORKBENCH_URL` 为无路径和凭据的服务根地址。它不改变 NAS 或 RPA 配置。
 
-正式发布依项目既有流程先备份、隔离验证、核实 RPA 测试窗口，随后仅更新网页服务并保留现有 API、数据库、RPA Token、端口与采集服务。切回 `WEB_ACCESS_MODE=basic` 并重建网页容器可恢复旧认证；原 htpasswd 文件保留。无数据库迁移。
+正式发布依项目既有流程先备份、隔离验证、核实 RPA 测试窗口，并保留现有 API、数据库、RPA Token、端口与采集服务。常规网络模式切回 `WEB_ACCESS_MODE=basic` 并重建网页容器可恢复旧认证；原 htpasswd 文件保留。无数据库迁移。
+
+### 群晖 Docker 来源地址被改写时
+
+某些群晖 Docker 端口转发会让网页容器看到 Docker 网关地址，而非访问电脑的局域网地址。不能把网关地址直接加入免登录白名单：其他来源也可能经过该网关。先以无真实数据的临时服务确认实际来源；不能识别原地址时保持 Basic 认证。
+
+此类环境可使用 `deploy/compose.synology-lan.yaml` 独立部署配置：网页使用主机网络，只绑定 NAS 的指定 IPv4 和端口；现有 API 通过仅绑定 `127.0.0.1` 的端口供网页代理访问，并继续连接原有数据库网络。该配置需重建 API 和 Web，切换期间包括 RPA 在内的请求会短暂中断。保留原 API 镜像、数据库连接文件、RPA Token 和数据目录；不做数据库迁移。
+
+发布前备份实际运行的 Compose 和数据库；填写 `PRODUCT_API_IMAGE`、`PRODUCT_WEB_IMAGE`、`DATABASE_URL_FILE`、`API_TOKEN_FILE`、`RPA_TOKEN_FILE`、`NAS_DATA_ROOT`、`NAS_NETWORK`、`WEB_BIND_ADDRESS` 和 `WEB_TRUSTED_CIDR`，按需填写 `WEB_PORT`、`LOCAL_API_PORT`、`BACKEND_ENABLE_GROUP_WRITES`。先用隔离数据验证 LAN 成功、非可信来源拒绝、后端端口无法从 LAN 直接访问，以及 RPA Token 正反例。发布后复验真实只读 RPA 接口与页面；保留原 htpasswd 文件和原 Compose，以便恢复。不得将匿名网页入口接入公网或经会改写来源地址的代理转发。
+
+`127.0.0.1` 绑定并不是完整的设备权限隔离，NAS 本机及已接入相关 Docker 网络的容器仍可能访问后端；后端 Token 和网络权限仍需独立保护。公网转发与真实用户权限需另行验证。
 
 测试范围必须区分：桌面单元测试、打包及隔离运行，Docker 双模式与 RPA 鉴权回归，NAS 真实访问及 Windows 安装各自独立验收。不得以 CI 或导入镜像代替真实 NAS 和 Windows 验收。

@@ -1,0 +1,74 @@
+# Synology LAN mode: retain the client's source IP by running only the web
+# proxy on the host network. API access is published on NAS loopback only.
+# Image references and secret file paths are supplied by the operator.
+services:
+  product-api:
+    image: ${PRODUCT_API_IMAGE:?existing API image required}
+    pull_policy: never
+    restart: unless-stopped
+    user: '1026:100'
+    environment:
+      BACKEND_DATABASE_URL_FILE: /run/secrets/product_database_url
+      BACKEND_API_TOKEN_FILE: /run/secrets/product_api_token
+      BACKEND_RPA_API_TOKEN_FILE: /run/secrets/rpa_api_token
+      BACKEND_ENABLE_GROUP_WRITES: ${BACKEND_ENABLE_GROUP_WRITES:-false}
+      BACKEND_DATA_ROOT: /data
+    volumes:
+      - ${NAS_DATA_ROOT:?existing data root required}:/data:ro
+    secrets: [product_api_token, product_database_url, rpa_api_token]
+    networks: [workbench, nas]
+    ports:
+      - '127.0.0.1:${LOCAL_API_PORT:-18189}:8180'
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8180/health", timeout=3)']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  product-web:
+    image: ${PRODUCT_WEB_IMAGE:?LAN-capable web image required}
+    pull_policy: never
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      WEB_ACCESS_MODE: lan
+      WEB_TRUSTED_CIDR: ${WEB_TRUSTED_CIDR:?trusted private IPv4 CIDR required}
+      WEB_BIND_ADDRESS: ${WEB_BIND_ADDRESS:?specific NAS IPv4 address required}
+      WEB_PORT: ${WEB_PORT:-3612}
+      LOCAL_API_PORT: ${LOCAL_API_PORT:-18189}
+    secrets: [product_api_token]
+    depends_on:
+      product-api:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        case "$${WEB_BIND_ADDRESS}" in ''|0.0.0.0|*[!0-9.]*) echo 'Invalid web bind address' >&2; exit 1;; esac
+        for port in "$${WEB_PORT}" "$${LOCAL_API_PORT}"; do
+          case "$$port" in ''|*[!0-9]*) echo 'Invalid port' >&2; exit 1;; esac
+          [ "$$port" -ge 1 ] && [ "$$port" -le 65535 ] || exit 1
+        done
+        /docker-entrypoint.d/40-product-workbench.sh
+        sed -i -e "s#listen 80;#listen $${WEB_BIND_ADDRESS}:$${WEB_PORT};#g" -e "s#http://product-api:8180#http://127.0.0.1:$${LOCAL_API_PORT}#g" /etc/nginx/conf.d/default.conf
+        grep -Fq "listen $${WEB_BIND_ADDRESS}:$${WEB_PORT};" /etc/nginx/conf.d/default.conf
+        ! grep -Fq 'product-api:8180' /etc/nginx/conf.d/default.conf
+        nginx -t
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://${WEB_BIND_ADDRESS:?required}:${WEB_PORT:-3612}/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+secrets:
+  product_database_url:
+    file: ${DATABASE_URL_FILE:?existing NAS database connection file required}
+  product_api_token:
+    file: ${API_TOKEN_FILE:?required}
+  rpa_api_token:
+    file: ${RPA_TOKEN_FILE:?existing RPA token file required}
+networks:
+  workbench:
+  nas:
+    external: true
+    name: ${NAS_NETWORK:?existing database network required}

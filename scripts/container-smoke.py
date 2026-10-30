@@ -64,13 +64,25 @@ def main():
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            local_api_port = sock.getsockname()[1]
+        while local_api_port == port:
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                local_api_port = sock.getsockname()[1]
         env = dict(os.environ, RELEASE_SHA=run, DATABASE_URL_FILE=str(credentials / "database_url"),
                    API_TOKEN_FILE=str(credentials / "api_token"), WEB_HTPASSWD_FILE=str(credentials / "htpasswd"),
                    NAS_DATA_ROOT=str(media), NAS_NETWORK=run, WEB_BIND_ADDRESS="127.0.0.1", WEB_PORT=str(port),
-                   BACKEND_ENABLE_GROUP_WRITES="false", RPA_TOKEN_FILE=str(credentials / "rpa_token"))
+                   BACKEND_ENABLE_GROUP_WRITES="false", RPA_TOKEN_FILE=str(credentials / "rpa_token"),
+                   PRODUCT_API_IMAGE=f"product-data-center-api:{run}",
+                   PRODUCT_WEB_IMAGE=f"product-data-center-web:{run}", LOCAL_API_PORT=str(local_api_port))
         def compose(*args, **kwargs):
             return command("docker", "compose", "-p", run, "-f", str(ROOT / "deploy/compose.yaml"),
                            "-f", str(ROOT / "deploy/compose.rpa.yaml"), *args, env=env, **kwargs)
+        def synology_compose(*args, **kwargs):
+            return command("docker", "compose", "-p", run + "-host", "-f",
+                           str(ROOT / "deploy/compose.synology-lan.yaml"), *args, env=env, **kwargs)
         def psql(sql):
             return command("docker", "exec", "-i", postgres, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "pdc_test", "-d", "product_workbench_test", stdin=sql)
         base = f"http://127.0.0.1:{port}"
@@ -185,7 +197,28 @@ def main():
             request("/rpa/v1/product-groups", auth=False, status=401)
             request("/rpa/v1/product-groups", auth=False, bearer="wrong", status=401)
             print("PASS: anonymous trusted network, denied other network, unchanged RPA credentials", flush=True)
+
+            # The Synology variant preserves source IP on host networking and
+            # proxies to a separate API container via host loopback. Use the
+            # same isolated database and fixture credentials, never production.
+            compose("down", "--remove-orphans")
+            env["WEB_TRUSTED_CIDR"] = "192.168.0.0/24"
+            synology_compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "100")
+            wait_for(lambda: request("/health", auth=False)["status"] == "ok", "Synology host web")
+            assert b"<html" in request("/", auth=False)
+            assert request("/api/v1/products", auth=False)["total"] == 1
+            request("/rpa/v1/product-groups", auth=False, status=401)
+            request("/rpa/v1/product-groups", auth=False, bearer="wrong", status=401)
+            assert request("/rpa/v1/product-groups", auth=False, bearer=rpa_token)["groups"] == []
+            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
+                           auth=False, bearer=rpa_token) == json.loads(UU)
+            request("/api/v1/product-groups", method="POST", body={"name": "RPA不能写"},
+                    auth=False, bearer=rpa_token, status=401)
+            request("/rpa/v1/product-groups", method="POST", body={"name": "RPA不能写"},
+                    auth=False, bearer=rpa_token, status=405)
+            print("PASS: Synology host proxy, loopback API, RPA token and UU", flush=True)
         finally:
+            synology_compose("down", "--remove-orphans", check=False)
             compose("down", "--remove-orphans", check=False)
             command("docker", "rm", "-f", postgres, check=False)
             command("docker", "network", "rm", run, check=False)
