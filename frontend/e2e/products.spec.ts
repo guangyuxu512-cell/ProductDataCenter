@@ -208,3 +208,61 @@ test('40 张详情图片按需加载，失败可单图重试，右侧缩略图�
   await gallery.nth(2).locator('img').last().scrollIntoViewIfNeeded()
   await expect.poll(() => requested.includes('/detail-20.svg')).toBe(true)
 })
+
+test('详情图片还在请求时有固定显示区域，滚动后可加载后续图片', async ({ page }) => {
+  await fixtures(page)
+  let releaseImages!: () => void
+  const gate = new Promise<void>((resolve) => { releaseImages = resolve })
+  const requested: string[] = []
+  await page.route('https://slow-image.invalid/**', async (route) => {
+    requested.push(new URL(route.request().url()).pathname)
+    await gate
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800"><rect width="800" height="800" fill="gray"/></svg>' })
+  })
+  await page.route(`**/api/v1/products/${firstId}`, async (route) => {
+    const images = Array.from({ length: 20 }, (_, sort_order) => ({ image_type: 'main', sort_order, rel_path: '', source_url: `https://slow-image.invalid/main-${sort_order}.svg` }))
+    await route.fulfill({ json: { product: product(firstId), skus: [], images } })
+  })
+  try {
+    await page.goto('/#/products')
+    await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+    const gallery = page.locator('.product-preview__image-section').first()
+    const first = gallery.locator('img').first()
+    await expect(first).toBeAttached()
+    await expect.poll(() => requested.includes('/main-0.svg')).toBe(true)
+    await expect.poll(async () => Math.round((await first.boundingBox())?.width ?? 0)).toBe(128)
+    expect(Math.round((await first.boundingBox())?.height ?? 0)).toBe(128)
+    expect(requested.length).toBeLessThan(20)
+    releaseImages()
+    await expect.poll(() => first.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(800)
+    await gallery.locator('img').last().scrollIntoViewIfNeeded()
+    await expect.poll(() => requested.includes('/main-19.svg')).toBe(true)
+  } finally {
+    releaseImages()
+  }
+})
+
+test('抖音详情优先请求平台小图，失败回退原图，放大使用原图', async ({ page }) => {
+  await fixtures(page)
+  const requested: string[] = []
+  const original = (index: number) => `https://p3-item.ecombdimg.com/img/ecom-shop-material/test-${index}~tplv-5mmsx3fupr-resize_q:1080:1080:q90.webp`
+  await page.route('https://p3-item.ecombdimg.com/**', async (route) => {
+    const url = route.request().url()
+    requested.push(url)
+    if (url.includes('test-1~') && url.includes('resize:384:0')) return route.abort('failed')
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="384" height="384"><rect width="384" height="384" fill="gray"/></svg>' })
+  })
+  await page.route(`**/api/v1/products/${firstId}`, async (route) => {
+    const images = [0, 1].map((sort_order) => ({ image_type: 'main', sort_order, rel_path: '', source_url: original(sort_order) }))
+    await route.fulfill({ json: { product: product(firstId), skus: [], images } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const images = page.locator('.product-preview__image-section').first().locator('img')
+  await expect(images).toHaveCount(2)
+  await expect.poll(() => requested.some((url) => url.includes('test-0~') && url.includes('resize:384:0'))).toBe(true)
+  await expect.poll(() => requested.includes(original(1))).toBe(true)
+  expect(await images.first().getAttribute('data-preview-src')).toBe(original(0))
+  await images.first().click()
+  await expect.poll(() => requested.includes(original(0))).toBe(true)
+})

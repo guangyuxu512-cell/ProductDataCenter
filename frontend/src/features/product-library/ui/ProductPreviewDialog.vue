@@ -19,6 +19,7 @@ import {
 } from 'naive-ui'
 import { ProductImage } from '@/entities/product'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
+import { previewImageUrl } from '../model/preview-image-url'
 import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState, StatusTag } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
@@ -75,8 +76,13 @@ const message = useMessage()
 const dialog = useDialog()
 const detailTab = ref('sku')
 const imageRetries = ref<Record<string, number>>({})
+const imageFallbacks = ref<Record<string, boolean>>({})
 function retryImage(key: string) { imageRetries.value[key] = (imageRetries.value[key] ?? 0) + 1 }
-watch(() => props.product?.id, () => { imageRetries.value = {} })
+function imageSource(key: string, source: string) { return imageFallbacks.value[key] ? source : previewImageUrl(source) }
+function fallbackImage(key: string, source: string) {
+  if (!imageFallbacks.value[key] && previewImageUrl(source) !== source) imageFallbacks.value[key] = true
+}
+watch(() => props.product?.id, () => { imageRetries.value = {}; imageFallbacks.value = {} })
 const editing = ref(false)
 const editDraft = ref<ProductEditDraft | null>(null)
 const editBaseline = ref<ProductEditDraft | null>(null)
@@ -656,13 +662,15 @@ const allText = computed(() => {
                     <NImage
                       v-if="image.src"
                       :key="imageRetries[`${section.key}:${index}`] ?? 0"
-                      :src="image.src"
+                      :src="imageSource(`${section.key}:${index}`, image.src)"
+                      :preview-src="image.src"
                       :alt="`${product.title} ${image.label}`"
                       lazy
                       object-fit="contain"
                       :img-props="{
                         referrerpolicy: 'no-referrer',
                       }"
+                      @error="fallbackImage(`${section.key}:${index}`, image.src)"
                     >
                       <template #error>
                         <AppButton size="small" @click.stop="retryImage(`${section.key}:${index}`)">重试</AppButton>
@@ -1124,12 +1132,14 @@ const allText = computed(() => {
   border-radius: var(--radius-sm);
   background: var(--bg-surface);
 }
-.product-preview__image-canvas :deep(.n-image),
-.product-preview__image-canvas :deep(img) {
-  width: auto;
+.product-preview__image-canvas :deep(.n-image) {
+  width: 128px;
   max-width: 100%;
-  height: auto;
-  max-height: 128px;
+  height: 128px;
+}
+.product-preview__image-canvas :deep(img) {
+  width: 100%;
+  height: 100%;
   object-fit: contain;
 }
 .product-preview__image-caption {
