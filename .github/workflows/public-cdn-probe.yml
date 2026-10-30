@@ -1,0 +1,26 @@
+name: Public CDN image probe
+on:
+  push:
+    branches: ['codex/image-cdn-probe-20261030']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare public image variants
+        shell: bash
+        run: |
+          set -eu
+          base='https://p26-item.ecombdimg.com/img/ecom-shop-material/whzMpqPW_m_d12c8302ee573fd11b1acb50d02c2a11_sx_1986350_www1125-1125'
+          curl -sS -L --max-time 20 -w 'original HTTP=%{http_code} bytes=%{size_download} seconds=%{time_total}\n' -o /tmp/original.png "${base}~tplv-5mmsx3fupr-resize_q:1080:1080:q90.png"
+          curl -sS -L --max-time 20 -w 'preview HTTP=%{http_code} bytes=%{size_download} seconds=%{time_total}\n' -o /tmp/preview.png "${base}~tplv-5mmsx3fupr-resize:384:0.png"
+          python - <<'PY'
+          import pathlib, struct
+          for name in ('original', 'preview'):
+              data = pathlib.Path('/tmp/' + name + '.png').read_bytes()
+              if data[:8] != b'\x89PNG\r\n\x1a\n':
+                  print(name, 'not PNG')
+              else:
+                  print(name, 'dimensions', *struct.unpack('>II', data[16:24]))
+          PY
