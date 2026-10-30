@@ -17,6 +17,14 @@ server {
         proxy_read_timeout 120s;
         client_max_body_size 1m;
     }
+    # RPA 使用单独的只读凭据；不得替换成网页管理 Token。
+    location /rpa/v1/ {
+        auth_basic off;
+        proxy_pass http://product-api:8180;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
     location /assets/ {
         try_files $uri =404;
         add_header Cache-Control "private, max-age=31536000, immutable";

@@ -22,3 +22,15 @@ def require_api_access(
 def require_group_writes() -> None:
     if not get_settings().enable_group_writes:
         raise HTTPException(403, "当前商品服务未启用分组写入")
+
+
+def require_rpa_access(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> None:
+    settings = get_settings()
+    expected = settings.configured_rpa_token()
+    admin = settings.configured_token()
+    if not expected or (admin and compare_digest(expected.encode(), admin.encode())):
+        raise HTTPException(503, "RPA 只读访问凭据未配置或与管理凭据重复")
+    if not credentials or not compare_digest(credentials.credentials.encode(), expected.encode()):
+        raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"})
