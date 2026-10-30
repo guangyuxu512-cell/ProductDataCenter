@@ -266,3 +266,28 @@ test('抖音详情优先请求平台小图，失败回退原图，放大使用�
   await images.first().click()
   await expect.poll(() => requested.includes(original(0))).toBe(true)
 })
+
+test('未显示的 SKU 明细不会提前请求原尺寸图片，滚动后仍能展示', async ({ page }) => {
+  await fixtures(page)
+  const requested: string[] = []
+  const original = (type: string, index: number) => `https://p3-item.ecombdimg.com/img/ecom-shop-material/${type}-${index}~tplv-5mmsx3fupr-resize:1200:0.webp`
+  await page.route('https://p3-item.ecombdimg.com/**', async (route) => {
+    requested.push(route.request().url())
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="384" height="384"><rect width="384" height="384" fill="gray"/></svg>' })
+  })
+  await page.route(`**/api/v1/products/${firstId}`, async (route) => {
+    const images = ([['main', 12], ['sku', 9], ['detail', 15]] as const).flatMap(([image_type, count]) =>
+      Array.from({ length: count }, (_, sort_order) => ({ image_type, sort_order, rel_path: '', source_url: original(image_type, sort_order) })))
+    const skus = Array.from({ length: 9 }, (_, sort_order) => ({ sku_id: `sku-${sort_order}`, sku_name: `SKU ${sort_order}`, current_price: '19.99', image_rel_path: '', sort_order }))
+    await route.fulfill({ json: { product: product(firstId), skus, images } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await expect(page.locator('.product-preview__image-section').first().locator('img').first()).toBeVisible()
+  await expect.poll(() => requested.some((url) => url.includes('sku-0~') && url.includes('resize:384:0'))).toBe(true)
+  expect(requested.filter((url) => url.includes('/sku-') && url.includes('resize:1200:0'))).toHaveLength(0)
+  const row = page.locator('.product-preview__sku').first()
+  await row.scrollIntoViewIfNeeded()
+  await expect.poll(() => requested.includes(original('sku', 0))).toBe(true)
+  await expect(row.locator('img')).toBeVisible()
+})

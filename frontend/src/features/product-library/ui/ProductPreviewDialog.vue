@@ -17,7 +17,6 @@ import {
   useDialog,
   useMessage,
 } from 'naive-ui'
-import { ProductImage } from '@/entities/product'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import { previewImageUrl } from '../model/preview-image-url'
 import { PlatformDisplay } from '@/entities/platform'
@@ -763,10 +762,9 @@ const allText = computed(() => {
                 <NList bordered>
                   <NListItem v-for="sku in product.skus" :key="sku.draftKey">
                     <div class="product-preview__sku">
-                      <ProductImage
+                      <DeferredPreviewThumbnail
                         :src="sku.imageUrl"
                         :title="sku.name"
-                        size="thumbnail"
                       />
                       <div>
                         <strong>{{ sku.name }}</strong
@@ -1182,6 +1180,10 @@ const allText = computed(() => {
   grid-template-columns: 72px minmax(180px, 1fr) 96px 120px;
   align-items: center;
   gap: var(--space-3);
+}
+.product-preview__sku > .deferred-preview-thumbnail {
+  width: 64px;
+  height: 64px;
 }
 .product-preview__sku-specs {
   margin-top: var(--space-1);
