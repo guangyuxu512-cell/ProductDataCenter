@@ -11,7 +11,6 @@
     "frontend/src/stores/theme.ts": "7be4a61b87dba671e4a5e281bd7b09d19d0aadb0e43fe24f73b880e51717442c",
     "frontend/src/entities/platform/ui/PlatformIcon.vue": "81561fd0ca3837453f1dbdfc34a3e67efbe3bdbbc152f1b6e896321c67642c5d",
     "frontend/src/entities/platform/ui/PlatformDisplay.vue": "f73eaa079895ff439c0b4be76a3d184df59b1e0dd030c198806966eb6b5ad8ee",
-    "frontend/src/entities/product/ui/ProductImage.vue": "f00565462e68ba82561af62a0e412ed59c8012410f2724bbc28c2c20d75ce7e5",
     "frontend/src/shared/ui/AppInput.vue": "7aafbc5e7128c73d83fc999fb3f098f5d33f39996fb5a91fd43cdc00f2940d60",
     "frontend/src/shared/ui/AppNumberInput.vue": "e97eaeae061d7d4abc40099561a5fbf0e6db19da2137d122dd4990bee69bd459",
     "frontend/src/shared/ui/AppOverlayHost.vue": "1409ce86f347730b4567701134b6f98c3bbc28abc01a064e8e5dce4af433832f",
@@ -61,7 +60,6 @@
     "frontend/src/stores/theme.ts": "4c48e4920d4c210a6832462c6df4e5cfeb2890d3",
     "frontend/src/entities/platform/ui/PlatformIcon.vue": "372ef4302bc09aaaaa04bbb055cbdecc47efc452",
     "frontend/src/entities/platform/ui/PlatformDisplay.vue": "3ddf1a5bb277efbeb227858715ca1691d876b7ac",
-    "frontend/src/entities/product/ui/ProductImage.vue": "0754257f519f1dd0daf0500857524bf18eff5cd0",
     "frontend/src/shared/ui/AppInput.vue": "0e2e859e51e6941e6e57283d6541b5aeece4aec9",
     "frontend/src/shared/ui/AppNumberInput.vue": "19d800e32b1c02f1512b5a23038f5e565211cf65",
     "frontend/src/shared/ui/AppOverlayHost.vue": "a353ef3a56fb161adefc956eca8511126d3001e3",
@@ -106,6 +104,11 @@
       "source_sha256": "f450b81fd92f8f2d073c2a9dd622d0d1781bb09eaad2d9549a1e0f947acb3832",
       "source_git_blob": "733c18f51583d1b73e530238e7d49f11a2919676",
       "reason": "复用原组件，复制操作增加局域网 HTTP 降级；布局和样式未改。"
+    },
+    "frontend/src/entities/product/ui/ProductImage.vue": {
+      "source_sha256": "f00565462e68ba82561af62a0e412ed59c8012410f2724bbc28c2c20d75ce7e5",
+      "source_git_blob": "0754257f519f1dd0daf0500857524bf18eff5cd0",
+      "reason": "复用中控原图片组件，增加已验证的平台列表小图、可见区域懒加载和失败回退；原图预览与布局样式保持不变。"
     }
   }
 }

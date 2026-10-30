@@ -1,0 +1,42 @@
+name: Isolated product query benchmark
+on:
+  push:
+    branches: ['codex/product-list-thumbnails-v1']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pdc_perf
+          POSTGRES_PASSWORD: isolated-perf-only
+          POSTGRES_DB: product_workbench_perf
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U pdc_perf -d product_workbench_perf"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e './backend'
+      - run: python scripts/benchmark-product-list.py
+        env:
+          BACKEND_DATABASE_URL: postgresql+psycopg://pdc_perf:isolated-perf-only@127.0.0.1:5432/product_workbench_perf
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: product-query-benchmark-${{ github.sha }}
+          path: benchmark-results.json
+          if-no-files-found: ignore
+          retention-days: 7

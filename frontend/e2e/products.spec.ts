@@ -288,6 +288,101 @@ test('未显示的 SKU 明细不会提前请求原尺寸图片，滚动后仍能
   expect(requested.filter((url) => url.includes('/sku-') && url.includes('resize:1200:0'))).toHaveLength(0)
   const row = page.locator('.product-preview__sku').first()
   await row.scrollIntoViewIfNeeded()
-  await expect.poll(() => requested.includes(original('sku', 0))).toBe(true)
+  await expect.poll(() => requested.some((url) => url.includes('sku-0~') && url.includes('resize_q:144:144:q80'))).toBe(true)
+  expect(requested.includes(original('sku', 0))).toBe(false)
   await expect(row.locator('img')).toBeVisible()
+  await row.locator('img').click()
+  await expect.poll(() => requested.includes(original('sku', 0))).toBe(true)
+})
+
+test('商品列表按可见区域加载小图，失败回退原图，原图失败可重试', async ({ page }) => {
+  await fixtures(page)
+  const requested: string[] = []
+  let retryAllowed = false
+  const original = (index: number) => `https://p3-item.ecombdimg.com/img/ecom-shop-material/list-${index}~tplv-5mmsx3fupr-resize_q:1080:1080:q90.webp`
+  await page.route('https://p3-item.ecombdimg.com/**', async (route) => {
+    const url = route.request().url()
+    requested.push(url)
+    if (url.includes('list-1~') && url.includes('resize_q:144:144:q80')) return route.abort('failed')
+    if (url.includes('list-2~') && !retryAllowed) return route.abort('failed')
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" fill="gray"/></svg>' })
+  })
+  await page.route('**/api/v1/products**', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname !== '/api/v1/products') return route.fallback()
+    const items = Array.from({ length: 20 }, (_, i) => ({ ...product(String(BigInt(firstId) + BigInt(i))), main_image_url: original(i) }))
+    return route.fulfill({ json: { items, total: 20, totalIncluded: true, limit: 20, offset: 0 } })
+  })
+  await page.goto('/#/products')
+  const images = page.locator('.data-table .product-image img')
+  await expect(page.locator('.data-table .product-image')).toHaveCount(20)
+  await expect.poll(() => requested.some((url) => url.includes('list-0~') && url.includes('resize_q:144:144:q80'))).toBe(true)
+  await expect.poll(() => requested.includes(original(1))).toBe(true)
+  await expect(page.getByRole('button', { name: '重试商品图片' })).toBeVisible()
+  expect(requested.some((url) => url.includes('list-19~'))).toBe(false)
+  const nearNextRow = await images.evaluateAll((elements) => {
+    const scrollArea = elements[0]?.closest('.n-scrollbar-container')
+    if (!scrollArea) return null
+    const bottom = scrollArea.getBoundingClientRect().bottom
+    return elements.find((element) => {
+      const top = element.getBoundingClientRect().top
+      return top > bottom && top < bottom + 100
+    })?.getAttribute('data-preview-src') ?? null
+  })
+  expect(nearNextRow).not.toBeNull()
+  const nearThumbnail = nearNextRow!.replace('resize_q:1080:1080:q90', 'resize_q:144:144:q80')
+  await expect.poll(() => requested.includes(nearThumbnail)).toBe(true)
+  expect(await images.first().getAttribute('data-preview-src')).toBe(original(0))
+  retryAllowed = true
+  await page.getByRole('button', { name: '重试商品图片' }).click()
+  await expect(page.getByRole('button', { name: '重试商品图片' })).toHaveCount(0)
+  await expect.poll(() => requested.filter((url) => url.includes('list-2~') && url.includes('resize_q:144:144:q80')).length).toBe(2)
+  await images.last().scrollIntoViewIfNeeded()
+  await expect.poll(() => requested.some((url) => url.includes('list-19~') && url.includes('resize_q:144:144:q80'))).toBe(true)
+  await images.first().scrollIntoViewIfNeeded()
+  await images.first().click()
+  await expect.poll(() => requested.includes(original(0))).toBe(true)
+})
+
+test('拼多多带参数的图片保留原地址，不尝试推测缩略图格式', async ({ page }) => {
+  await fixtures(page)
+  const original = 'https://img.pddpic.com/fixture/list.webp?signature=example'
+  const requested: string[] = []
+  await page.route('https://img.pddpic.com/**', async (route) => {
+    requested.push(route.request().url())
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" fill="gray"/></svg>' })
+  })
+  await page.route('**/api/v1/products**', async (route) => {
+    if (new URL(route.request().url()).pathname !== '/api/v1/products') return route.fallback()
+    return route.fulfill({ json: { items: [{ ...product('pdd:3800000000000000001', 'pinduoduo'), main_image_url: original }], total: 1, totalIncluded: true, limit: 20, offset: 0 } })
+  })
+  await page.goto('/#/products')
+  const image = page.locator('.data-table .product-image img')
+  await expect.poll(() => requested.length).toBeGreaterThan(0)
+  await expect(image).toHaveAttribute('data-preview-src', original)
+  expect(requested.every((url) => url === original)).toBe(true)
+})
+
+test('拼多多无参数图片使用小图，失败回退原图，放大仍是原图', async ({ page }) => {
+  await fixtures(page)
+  const requested: string[] = []
+  const original = (index: number) => `https://img.pddpic.com/mms-material-img/list-${index}.jpeg.a.jpeg`
+  await page.route('https://img.pddpic.com/**', async (route) => {
+    const url = route.request().url()
+    requested.push(url)
+    if (url.includes('list-1.') && url.includes('?imageView2')) return route.abort('failed')
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" fill="gray"/></svg>' })
+  })
+  await page.route('**/api/v1/products**', async (route) => {
+    if (new URL(route.request().url()).pathname !== '/api/v1/products') return route.fallback()
+    const items = [0, 1].map((i) => ({ ...product(`pdd:${3800000000000000001n + BigInt(i)}`, 'pinduoduo'), main_image_url: original(i) }))
+    return route.fulfill({ json: { items, total: 2, totalIncluded: true, limit: 20, offset: 0 } })
+  })
+  await page.goto('/#/products')
+  const images = page.locator('.data-table .product-image img')
+  await expect.poll(() => requested.includes(original(0) + '?imageView2/2/w/144/q/80/format/webp')).toBe(true)
+  await expect.poll(() => requested.includes(original(1))).toBe(true)
+  await expect(images.first()).toHaveAttribute('data-preview-src', original(0))
+  await images.first().click()
+  await expect.poll(() => requested.includes(original(0))).toBe(true)
 })
