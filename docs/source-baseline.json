@@ -108,7 +108,7 @@
     "frontend/src/entities/product/ui/ProductImage.vue": {
       "source_sha256": "f00565462e68ba82561af62a0e412ed59c8012410f2724bbc28c2c20d75ce7e5",
       "source_git_blob": "0754257f519f1dd0daf0500857524bf18eff5cd0",
-      "reason": "复用中控原图片组件，增加已验证的抖音列表小图、可见区域懒加载和失败回退；原图预览与布局样式保持不变。"
+      "reason": "复用中控原图片组件，增加已验证的平台列表小图、可见区域懒加载和失败回退；原图预览与布局样式保持不变。"
     }
   }
 }

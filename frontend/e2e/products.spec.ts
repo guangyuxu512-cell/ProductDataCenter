@@ -350,3 +350,27 @@ test('拼多多带参数的图片保留原地址，不尝试推测缩略图格�
   await expect(image).toHaveAttribute('data-preview-src', original)
   expect(requested.every((url) => url === original)).toBe(true)
 })
+
+test('拼多多无参数图片使用小图，失败回退原图，放大仍是原图', async ({ page }) => {
+  await fixtures(page)
+  const requested: string[] = []
+  const original = (index: number) => `https://img.pddpic.com/mms-material-img/list-${index}.jpeg.a.jpeg`
+  await page.route('https://img.pddpic.com/**', async (route) => {
+    const url = route.request().url()
+    requested.push(url)
+    if (url.includes('list-1.') && url.includes('?imageView2')) return route.abort('failed')
+    await route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" fill="gray"/></svg>' })
+  })
+  await page.route('**/api/v1/products**', async (route) => {
+    if (new URL(route.request().url()).pathname !== '/api/v1/products') return route.fallback()
+    const items = [0, 1].map((i) => ({ ...product(`pdd:${3800000000000000001n + BigInt(i)}`, 'pinduoduo'), main_image_url: original(i) }))
+    return route.fulfill({ json: { items, total: 2, totalIncluded: true, limit: 20, offset: 0 } })
+  })
+  await page.goto('/#/products')
+  const images = page.locator('.data-table .product-image img')
+  await expect.poll(() => requested.includes(original(0) + '?imageView2/2/w/144/q/80/format/webp')).toBe(true)
+  await expect.poll(() => requested.includes(original(1))).toBe(true)
+  await expect(images.first()).toHaveAttribute('data-preview-src', original(0))
+  await images.first().click()
+  await expect.poll(() => requested.includes(original(0))).toBe(true)
+})

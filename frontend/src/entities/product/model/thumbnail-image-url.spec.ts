@@ -10,6 +10,15 @@ describe('thumbnailImageUrl', () => {
     }
   })
 
+  it('derives a 144px CDN view for unsigned PDD images on the verified hosts', () => {
+    for (const host of ['img.pddpic.com', 'commimg.pddpic.com']) {
+      for (const ext of ['jpeg.a.jpeg', 'jpeg', 'png']) {
+        const source = `https://${host}/mms-material-img/example.${ext}`
+        expect(thumbnailImageUrl(source)).toBe(`${source}?imageView2/2/w/144/q/80/format/webp`)
+      }
+    }
+  })
+
   it('does not alter signed, unknown, unsupported, local, or already small images', () => {
     for (const source of [
       'https://p3-item.ecombdimg.com/img/example~tplv-5mmsx3fupr-resize:800:800.webp?signature=abc',
@@ -20,7 +29,9 @@ describe('thumbnailImageUrl', () => {
       'https://p3-item.ecombdimg.com/img/example~tplv-another-resize:800:800.webp',
       'https://p3-item.ecombdimg.com/img/example~tplv-5mmsx3fupr-resize:800:800.jpeg',
       'https://p3-item.ecombdimg.com/img/example~tplv-5mmsx3fupr-resize:144:144.webp',
-      'https://img.pddpic.com/example.jpeg',
+      'https://img.pddpic.com/example.jpeg?signature=abc',
+      'https://img.pddpic.com.evil.invalid/example.jpeg',
+      'https://img.pddpic.com/example.gif',
       'http://p3-item.ecombdimg.com/img/example~tplv-5mmsx3fupr-resize:800:800.webp',
       '/api/v1/products/1/images/main/0',
       'data:image/svg+xml,example',
