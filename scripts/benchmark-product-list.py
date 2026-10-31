@@ -84,19 +84,13 @@ assert counts == {'products': 300000, 'product_images': 1200000, 'product_skus':
 engine.dispose()
 setup_seconds = round(time.perf_counter() - started, 2)
 
-environment = dict(os.environ, BACKEND_API_TOKEN='isolated-admin-token', BACKEND_RPA_API_TOKEN='isolated-rpa-token',
-                   BACKEND_ENABLE_PRODUCT_EDITS='true' if EDIT_DRAFTS else 'false')
-server = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1',
-                           '--port', '18761', '--no-access-log', '--log-level', 'warning'],
-                          cwd=ROOT / 'backend', env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-
 def percentile(values: list[float], fraction: float) -> float:
     return round(sorted(values)[math.ceil(len(values) * fraction) - 1], 2)
 
 
-async def measure() -> dict:
-    async with httpx.AsyncClient(base_url='http://127.0.0.1:18761', timeout=30, trust_env=False,
+async def measure(editing_enabled: bool) -> dict:
+    port = 18762 if editing_enabled else 18761
+    async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{port}', timeout=30, trust_env=False,
                                  headers={'Authorization': 'Bearer isolated-admin-token'}) as client:
         for _ in range(100):
             try:
@@ -108,7 +102,7 @@ async def measure() -> dict:
             raise RuntimeError('Isolated backend did not become healthy')
         capabilities = await client.get('/api/v1/capabilities')
         capabilities.raise_for_status()
-        assert capabilities.json()['productEdit'] is EDIT_DRAFTS
+        assert capabilities.json()['productEdit'] is editing_enabled
         cases = [
             ('default_with_total', {'limit': '20'}, 300000),
             ('page_without_total', {'limit': '20', 'offset': '20', 'includeTotal': 'false'}, None),
@@ -120,8 +114,9 @@ async def measure() -> dict:
             ('deep_offset_299800', {'offset': '299800', 'includeTotal': 'false'}, None),
         ]
         if EDIT_DRAFTS:
-            cases.append(('edited_title_four_chars', {'q': '人工编辑'}, 30000))
             cases.append(('keyword_four_with_platform', {'q': '厨房收纳', 'platform': 'pinduoduo'}, 6000))
+        if editing_enabled:
+            cases.append(('edited_title_four_chars', {'q': '人工编辑'}, 30000))
             cases.append(('edited_title_with_group', {'q': '人工编辑', 'groupId': group_id}, 15000))
         results = {}
         async def request(params, expected):
@@ -157,15 +152,28 @@ async def measure() -> dict:
         return results
 
 
-try:
-    measurements = asyncio.run(measure())
-finally:
-    server.terminate()
+def run_measurement(editing_enabled: bool) -> dict:
+    port = '18762' if editing_enabled else '18761'
+    environment = dict(os.environ, BACKEND_API_TOKEN='isolated-admin-token', BACKEND_RPA_API_TOKEN='isolated-rpa-token',
+                       BACKEND_ENABLE_PRODUCT_EDITS='true' if editing_enabled else 'false')
+    server = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1',
+                               '--port', port, '--no-access-log', '--log-level', 'warning'],
+                              cwd=ROOT / 'backend', env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        server.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        server.kill()
-        server.wait()
+        return asyncio.run(measure(editing_enabled))
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait()
+
+
+# Use the very same dataset and machine for both modes. The first pass also
+# warms the database for the second; this is not a cold-cache comparison.
+baseline_without_edits = run_measurement(False) if EDIT_DRAFTS else None
+measurements = run_measurement(EDIT_DRAFTS)
 
 plans = {}
 if EDIT_DRAFTS:
@@ -198,6 +206,7 @@ report = {'environment': 'GitHub Actions isolated PostgreSQL, synthetic data, wa
           'postgresql': pg_version, 'counts': counts, 'setup_seconds': setup_seconds,
           'product_edit_enabled': EDIT_DRAFTS, 'synthetic_drafts': 30000 if EDIT_DRAFTS else 0,
           'notes': 'HTTP API only; no frontend render, image download, real NAS or production data.', 'cases': measurements,
+          'baseline_without_edits': baseline_without_edits,
           'rpa_readonly_auth_and_uu': 'pass', 'query_plans': plans}
 destination = ROOT / 'benchmark-results.json'
 destination.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
