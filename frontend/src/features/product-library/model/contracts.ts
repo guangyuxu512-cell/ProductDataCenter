@@ -67,6 +67,8 @@ export interface LibraryProduct {
   mainImageUrl: string | null
   /** Frontend/Mock preview draft only; this is not a Backend DTO field. */
   previewMainImageUrls?: string[]
+  /** Collected SKU images; these are not necessarily one per SKU row. */
+  previewSkuImageUrls?: string[]
   detailImageUrls: string[]
   /** Frontend/Mock editing draft only; this is not a Backend DTO field. */
   specDimensions: ProductSpecDimension[]

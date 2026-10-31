@@ -40,13 +40,18 @@ export function detailView(detail: NasDetail): LibraryProduct {
     currentPrice: row.current_price_min === null && row.current_price_max === null ? null : priceRange(row),
     currency: 'CNY', collectedAt: capturedTime(row.captured_at), sourceUrl: null,
     mainImageUrl: images('main')[0] || row.main_image_url, previewMainImageUrls: images('main'),
+    previewSkuImageUrls: images('sku'),
     detailImageUrls: images('detail'), specDimensions: [], attributes: [], mockEditedAt: null,
-    skus: detail.skus.map((sku) => ({
-      draftKey: sku.sku_id, sourceSkuId: sku.sku_id, name: sku.sku_name,
-      currentPrice: sku.current_price, stockLabel: null, specValues: {},
-      imageUrl: detail.images.find((image) => image.image_type === 'sku' && image.sort_order === sku.sort_order)
-        ? imageUrl(detail.images.find((image) => image.image_type === 'sku' && image.sort_order === sku.sort_order)!) : null,
-    })),
+    skus: detail.skus.map((sku) => {
+      // An image's position is not an association with a SKU row. Use only an explicit path match.
+      const linkedImage = sku.image_rel_path && detail.images.find((image) =>
+        image.image_type === 'sku' && image.rel_path && image.rel_path === sku.image_rel_path)
+      return {
+        draftKey: sku.sku_id, sourceSkuId: sku.sku_id, name: sku.sku_name,
+        currentPrice: sku.current_price, stockLabel: null, specValues: {},
+        imageUrl: linkedImage ? imageUrl(linkedImage) : null,
+      }
+    }),
     packageFiles: [], history: [],
   }
 }

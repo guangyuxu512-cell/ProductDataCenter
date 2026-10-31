@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
 import {
-  NDescriptions, NDescriptionsItem, NFormItem, NImage, NSpin, NTab, NText, NTooltip,
+  NDropdown, NFormItem, NImage, NSpin, NSwitch, NTab, NText,
   type DataTableColumns, useMessage,
 } from 'naive-ui'
 import { PlatformDisplay } from '@/entities/platform'
@@ -10,6 +10,7 @@ import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
+import { sourceSpecLayout } from '../model/source-spec-layout'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
 
@@ -56,6 +57,10 @@ async function copy(value: string, label: string) {
   try { await copyText(value); message.success(`${label}已复制`) }
   catch { message.error('复制失败，请重试') }
 }
+function copyFromMenu(key: string) {
+  if (key === 'title' && props.product) void copy(props.product.title, '商品标题')
+  if (key === 'basic') void copy(basicText.value, '基础信息')
+}
 
 const imageSections = computed(() => {
   const product = props.product
@@ -65,11 +70,12 @@ const imageSections = computed(() => {
       (product.mainImageUrl ? [product.mainImageUrl] : [])).map((src, index) => ({
         src, label: `主图 ${index + 1}`, caption: '', skuKey: undefined,
       })) },
-    { key: 'sku', label: 'SKU 图', images: product.skus.map((sku) => ({
-      src: sku.imageUrl, label: sku.name, caption: sku.sourceSkuId ?? '', skuKey: sku.draftKey,
-    })) },
     { key: 'detail', label: '详情图', images: product.detailImageUrls.map((src, index) => ({
       src, label: `详情图 ${index + 1}`, caption: '', skuKey: undefined,
+    })) },
+    { key: 'sku', label: '规格图', images: (product.previewSkuImageUrls ??
+      product.skus.flatMap((sku) => sku.imageUrl ? [sku.imageUrl] : [])).map((src, index) => ({
+      src, label: `规格图 ${index + 1}`, caption: '', skuKey: undefined,
     })) },
   ]
 })
@@ -91,23 +97,42 @@ const allText = computed(() => {
   return item ? [basicText.value, '', 'SKU：', skuText.value, '', '属性：',
     ...item.attributes.map((attribute) => `${attribute.name}：${attribute.value}`)].join('\n') : ''
 })
-const skuColumns: DataTableColumns<ProductSku> = [
-  { title: '规格', key: 'name', minWidth: 240, render: (row) => h('div', { class: 'product-preview__sku' }, [
-    h(DeferredPreviewThumbnail, { src: row.imageUrl, title: row.name }),
-    h('span', row.name || '—'),
-  ]) },
-  { title: '价格', key: 'price', width: 120, render: (row) => row.currentPrice === null ? '—' : `¥${row.currentPrice}` },
-  { title: '库存', key: 'stock', width: 100, render: (row) => row.stockLabel ?? '—' },
-  { title: 'SKU ID', key: 'skuId', minWidth: 160, render: (row) => row.sourceSkuId ?? '—' },
-  { title: '商家编码', key: 'merchantCode', width: 140, render: () => '—' },
-  { title: 'SKU 状态', key: 'skuStatus', width: 110, render: () => '—' },
-]
+const titleLength = computed(() => Array.from(props.product?.title ?? '')
+  .reduce((sum, character) => sum + ((character.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0))
+const specLayout = computed(() => sourceSpecLayout(props.product?.skus ?? []))
+const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
+  const layout = specLayout.value
+  const specColumns: DataTableColumns<ProductSku> = layout
+    ? layout.axes.map((axis, index) => ({ title: axis.name, key: `spec-${index}`, minWidth: 140,
+      render: (row: ProductSku) => layout.rows[row.draftKey]?.[index] ?? '—' }))
+    : [{ title: '规格', key: 'name', minWidth: 240, render: (row: ProductSku) =>
+      h('div', { class: 'product-preview__sku' }, [
+        h(DeferredPreviewThumbnail, { src: row.imageUrl, title: row.name }), h('span', row.name || '—'),
+      ]) }]
+  return [
+    ...specColumns,
+    { title: '价格', key: 'price', width: 130, render: (row) => h(AppInput, {
+      modelValue: row.currentPrice === null ? '' : `¥${row.currentPrice}`, disabled: true, ariaLabel: 'SKU 价格',
+    }) },
+    { title: '库存', key: 'stock', width: 120, render: (row) => h(AppInput, {
+      modelValue: row.stockLabel ?? '', disabled: true, ariaLabel: 'SKU 库存',
+    }) },
+    { title: 'SKU ID', key: 'skuId', minWidth: 170, render: (row) => row.sourceSkuId ?? '—' },
+    { title: '商家编码', key: 'merchantCode', width: 150, render: () => h(AppInput, {
+      modelValue: '', disabled: true, ariaLabel: 'SKU 商家编码',
+    }) },
+    { title: 'SKU 状态', key: 'skuStatus', width: 110, render: () => '—' },
+    { title: '操作', key: 'actions', width: 80, render: () => h(AppButton, {
+      tone: 'link', size: 'small', disabled: true,
+    }, () => '删除') },
+  ]
+})
 </script>
 
 <template>
-  <AppDialog :show="show" title="商品详情" size="workspace" :content-scrollable="false"
-    positive-text="关闭" :show-negative="false"
-    @update:show="!$event && emit('update:show', false)" @confirm="emit('update:show', false)">
+  <AppDialog :show="show" title="编辑商品" size="workspace" :content-scrollable="false"
+    positive-text="保存" negative-text="关闭" :positive-disabled="true" positive-disabled-reason="商品编辑尚未接入"
+    @update:show="!$event && emit('update:show', false)">
     <ErrorState v-if="error" :description="error" retryable @retry="emit('retry')" />
     <LoadingState v-else-if="!product" />
     <div v-else class="product-preview__layout" :aria-busy="loading">
@@ -124,8 +149,9 @@ const skuColumns: DataTableColumns<ProductSku> = [
             <span>分组 {{ product.groupName ?? '未分组' }}</span>
           </div>
           <div class="product-preview__actions">
-            <AppButton size="small" @click="copy(product.title, '商品标题')">复制标题</AppButton>
-            <AppButton size="small" @click="copy(basicText, '基础信息')">复制基础信息</AppButton>
+            <NDropdown trigger="click" :options="[{ label: '复制标题', key: 'title' }, { label: '复制基础信息', key: 'basic' }]" @select="copyFromMenu">
+              <AppButton size="small">更多</AppButton>
+            </NDropdown>
             <AppButton size="small" :disabled="!groupable" @click="emit('group', product)">移动分组</AppButton>
             <AppButton tone="primary" size="small" :disabled="!exportable" @click="emit('export', product)">导出商品数据包</AppButton>
           </div>
@@ -138,22 +164,27 @@ const skuColumns: DataTableColumns<ProductSku> = [
         </AppTabs>
         <div class="product-preview__content" :inert="loading || undefined">
           <section v-if="tab === 'base'" class="product-preview__section">
-            <NFormItem label="商品标题"><AppInput :model-value="product.title" aria-label="商品标题" readonly /></NFormItem>
-            <NFormItem label="来源类目"><AppInput :model-value="product.category ?? ''" aria-label="来源类目" readonly /></NFormItem>
-            <NDescriptions bordered :column="3" label-placement="left">
-              <NDescriptionsItem label="来源店铺">{{ product.shopName || '—' }}</NDescriptionsItem>
-              <NDescriptionsItem label="当前价格">{{ product.currentPrice === null ? '—' : `¥${product.currentPrice}` }}</NDescriptionsItem>
-              <NDescriptionsItem label="采集时间">{{ product.collectedAt }}</NDescriptionsItem>
-              <NDescriptionsItem label="SKU 数量">{{ product.skuCount ?? product.skus.length }}</NDescriptionsItem>
-              <NDescriptionsItem label="主图">{{ product.mainImageCount ?? 0 }}</NDescriptionsItem>
-              <NDescriptionsItem label="详情图">{{ product.detailImageCount ?? 0 }}</NDescriptionsItem>
-            </NDescriptions>
+            <NFormItem label="商品标题" required>
+              <AppInput :model-value="product.title" aria-label="商品标题" readonly />
+              <span class="product-preview__count">{{ titleLength }}/60</span>
+              <AppButton size="small" disabled>AI 优化</AppButton>
+            </NFormItem>
+            <NFormItem label="抖店类目" required>
+              <AppInput model-value="" aria-label="抖店类目" disabled />
+              <AppButton size="small" disabled>更换类目</AppButton>
+            </NFormItem>
+            <NText v-if="product.category" depth="3">来源类目：{{ product.category }}</NText>
           </section>
           <section v-if="tab === 'images'" class="product-preview__image-workspace">
             <article v-for="section in imageSections" :key="section.key" class="product-preview__image-section">
-              <header class="product-preview__image-section-header"><strong>{{ section.label }}</strong><NText depth="3">{{ section.images.length }} 张</NText></header>
-              <NText v-if="!section.images.length" depth="3">—</NText>
-              <div v-else class="product-preview__image-strip">
+              <header class="product-preview__image-section-header">
+                <strong>{{ section.label }}</strong>
+                <div v-if="section.key !== 'sku'" class="product-preview__actions">
+                  <AppButton size="small" disabled>AI 创作</AppButton><AppButton size="small" disabled>添加图片</AppButton>
+                </div>
+                <AppButton v-else tone="link" size="small" @click="tab = 'sku'">在规格与 SKU 中设置</AppButton>
+              </header>
+              <div class="product-preview__image-strip">
                 <div v-for="(image, index) in section.images" :key="image.skuKey ?? `${section.key}:${image.src}:${index}`" class="product-preview__image-card">
                   <div class="product-preview__image-canvas">
                     <NImage v-if="image.src" :key="imageRetries[`${section.key}:${index}`] ?? 0"
@@ -165,24 +196,49 @@ const skuColumns: DataTableColumns<ProductSku> = [
                     </NImage>
                     <NText v-else depth="3">—</NText>
                   </div>
-                  <strong>{{ image.label }}</strong>
-                  <NTooltip v-if="image.caption"><template #trigger><NText depth="3" class="product-preview__image-caption">{{ image.caption }}</NText></template>{{ image.caption }}</NTooltip>
+                  <div v-if="section.key !== 'sku'" class="product-preview__image-actions">
+                    <AppButton tone="link" size="small" disabled>上移</AppButton>
+                    <AppButton tone="link" size="small" disabled>下移</AppButton>
+                    <AppButton tone="link" size="small" disabled>删除</AppButton>
+                  </div>
+                  <NText v-else class="product-preview__image-caption">{{ image.label }}</NText>
                 </div>
               </div>
             </article>
           </section>
           <section v-if="tab === 'attributes'" class="product-preview__section">
-            <NDescriptions v-if="product.attributes.length" bordered :column="3">
-              <NDescriptionsItem v-for="item in product.attributes" :key="item.name" :label="item.name">{{ item.value }}</NDescriptionsItem>
-            </NDescriptions>
-            <NText v-else depth="3">—</NText>
+            <div class="product-preview__attributes">
+              <NFormItem v-for="item in product.attributes" :key="item.name" :label="item.name">
+                <AppInput :model-value="item.value" readonly />
+              </NFormItem>
+            </div>
           </section>
           <section v-if="tab === 'sku'" class="product-preview__section">
-            <div class="product-preview__section-heading"><strong>规格与 SKU</strong>
+            <div class="product-preview__section-heading"><strong>销售规格</strong>
+              <AppButton size="small" disabled>添加规格类型</AppButton>
+            </div>
+            <div v-for="axis in specLayout?.axes ?? []" :key="axis.name" class="product-preview__axis">
+              <div class="product-preview__axis-heading">
+                <AppInput :model-value="axis.name" aria-label="规格类型" readonly />
+                <span class="product-preview__status"><NSwitch :value="false" disabled />添加规格图</span>
+                <div class="product-preview__actions">
+                  <AppButton tone="link" size="small" disabled>上移</AppButton><AppButton tone="link" size="small" disabled>下移</AppButton>
+                  <AppButton tone="link" size="small" disabled>删除</AppButton>
+                </div>
+              </div>
+              <div class="product-preview__values">
+                <div v-for="value in axis.values" :key="value" class="product-preview__value">
+                  <AppInput :model-value="value" :aria-label="`${axis.name}规格值`" readonly />
+                  <AppButton tone="link" size="small" disabled>删除</AppButton>
+                </div>
+                <AppButton size="small" disabled>添加规格值</AppButton>
+              </div>
+            </div>
+            <div class="product-preview__section-heading"><strong>价格与库存</strong>
               <div class="product-preview__actions"><AppButton size="small" @click="copy(skuText, 'SKU 信息')">复制 SKU</AppButton>
                 <AppButton size="small" @click="copy(allText, '全部商品信息')">复制全部信息</AppButton></div>
             </div>
-            <AppTable :columns="skuColumns" :data="product.skus" :row-key="(row) => row.draftKey" :scroll-x="970" bordered />
+            <AppTable :columns="skuColumns" :data="product.skus" :row-key="(row) => row.draftKey" :scroll-x="1000" bordered />
           </section>
         </div>
       </section>
@@ -201,15 +257,25 @@ const skuColumns: DataTableColumns<ProductSku> = [
 .product-preview__content { min-width:0; min-height:0; flex:1; overflow:auto; padding:var(--space-3) var(--space-1) var(--space-3) 0; scrollbar-gutter:stable; }
 .product-preview__section,.product-preview__image-workspace { display:grid; grid-template-columns:minmax(0,1fr); min-width:0; gap:var(--space-4); }
 .product-preview__section :deep(.n-form-item-feedback-wrapper) { min-height:0; }
+.product-preview__section :deep(.n-form-item-blank) { gap:var(--space-2); }
+.product-preview__count { white-space:nowrap; color:var(--text-secondary); }
 .product-preview__section-heading,.product-preview__image-section-header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
-.product-preview__image-section { display:grid; gap:var(--space-2); min-width:0; padding:var(--space-3); border:1px solid var(--border-subtle); border-radius:var(--radius-card); }
+.product-preview__image-section { display:grid; gap:var(--space-2); min-width:0; }
 .product-preview__image-strip { display:flex; gap:var(--space-3); overflow-x:auto; padding-bottom:var(--space-2); }
-.product-preview__image-card { flex:0 0 152px; min-width:0; padding:var(--space-2); border:1px solid var(--border-subtle); border-radius:var(--radius-card); }
+.product-preview__image-card { flex:0 0 128px; min-width:0; padding:var(--space-2); border:1px solid var(--border-subtle); border-radius:var(--radius-card); text-align:center; }
 .product-preview__image-card strong,.product-preview__image-caption { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.product-preview__image-canvas { display:grid; place-items:center; width:128px; height:128px; margin-bottom:var(--space-2); }
-.product-preview__image-canvas :deep(img) { width:128px; height:128px; object-fit:contain; }
+.product-preview__image-canvas { display:grid; place-items:center; width:112px; height:112px; margin-bottom:var(--space-2); }
+.product-preview__image-canvas :deep(img) { width:112px; height:112px; object-fit:contain; }
+.product-preview__image-actions { display:flex; justify-content:center; gap:var(--space-1); }
+.product-preview__attributes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-3); }
+.product-preview__axis { display:grid; gap:var(--space-3); padding:var(--space-3); background:var(--bg-surface-raised); border:1px solid var(--border-subtle); border-radius:var(--radius-card); }
+.product-preview__axis-heading,.product-preview__values,.product-preview__value { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }
+.product-preview__axis-heading > :first-child { width:150px; }
+.product-preview__axis-heading > .product-preview__actions { margin-left:auto; }
+.product-preview__value > :deep(.n-input) { width:140px; }
+.product-preview__status { display:flex; align-items:center; gap:var(--space-2); color:var(--text-secondary); }
 .product-preview__content :deep(.product-preview__sku) { display:flex; align-items:center; gap:var(--space-3); }
 .product-preview__content :deep(.product-preview__sku .deferred-preview-thumbnail) { width:64px; height:64px; flex:0 0 64px; }
-@media (max-width:820px) { .product-preview__layout { grid-template-columns:minmax(160px,30%) minmax(0,1fr); } .product-preview__header { flex-wrap:wrap; } }
+@media (max-width:820px) { .product-preview__layout { grid-template-columns:minmax(160px,30%) minmax(0,1fr); } .product-preview__header { flex-wrap:wrap; } .product-preview__attributes { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:560px) { .product-preview__layout { grid-template-columns:minmax(0,1fr); grid-template-rows:180px minmax(0,1fr); } }
 </style>
