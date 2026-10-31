@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import httpx
@@ -78,6 +79,36 @@ def test_session_identity_platform_and_cache_policy_are_checked(configured):
         client = mock_client(configured, lambda request: httpx.Response(200, json=payload, headers=headers))
         with pytest.raises(CentralConnectionError, match="invalid_response"):
             client.read_session(shop_id, "douyin")
+
+
+def test_concurrent_store_sessions_remain_separate(configured):
+    ids = [uuid4() for _ in range(5)]
+
+    def handler(request):
+        shop_id = request.url.path.split('/')[-2]
+        assert request.headers["Authorization"] == "Bearer " + APPLICATION_TOKEN
+        payload = session(shop_id)
+        payload["cookies"][0]["value"] = "synthetic-cookie-for-" + shop_id
+        return httpx.Response(200, json=payload, headers={"Cache-Control": "no-store"})
+
+    client = mock_client(configured, handler)
+    requested = [ids[i % len(ids)] for i in range(25)]
+    with ThreadPoolExecutor(max_workers=25) as executor:
+        results = list(executor.map(lambda item: client.read_session(item, "douyin"), requested))
+    for requested_shop, result in zip(requested, results, strict=True):
+        assert result.shop_id == requested_shop
+        assert result.cookies[0].value.get_secret_value() == "synthetic-cookie-for-" + str(requested_shop)
+
+
+def test_connection_failure_never_exposes_token_or_cookie(configured):
+    def handler(request):
+        raise httpx.ConnectError(APPLICATION_TOKEN + COOKIE_VALUE, request=request)
+
+    client = mock_client(configured, handler)
+    with pytest.raises(CentralConnectionError) as error:
+        client.list_shops()
+    assert error.value.reason == "upstream_unavailable"
+    assert APPLICATION_TOKEN not in str(error.value) and COOKIE_VALUE not in str(error.value)
 
 
 def test_rejects_redirects_without_sending_token_to_another_host(configured):
