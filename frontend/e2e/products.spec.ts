@@ -38,6 +38,10 @@ async function fixtures(page: Page) {
       return route.fulfill({ json: { items: ids.map((id) => product(id, platform || 'douyin')), total: url.searchParams.get('includeTotal') === 'false' ? null : total,
         totalIncluded: url.searchParams.get('includeTotal') !== 'false', limit: 20, offset } })
     }
+    if (url.pathname === '/api/v1/products/group' && method === 'PATCH') {
+      const body = route.request().postDataJSON()
+      return route.fulfill({ json: { updated: body.productIds, missing: [] } })
+    }
     if (url.pathname.startsWith('/api/v1/products/')) {
       const id = decodeURIComponent(url.pathname.split('/').at(-1)!)
       return route.fulfill({ json: { product: product(id),
@@ -210,6 +214,23 @@ test('窄窗口内商品范围、四个页签和底部关闭按钮可用', async
     expect(body.scrollWidth).toBeLessThanOrEqual(body.width + 1)
   }
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+})
+
+test('详情内移动分组沿用原有写接口', async ({ page }) => {
+  await fixtures(page)
+  let body: { productIds: string[]; groupId: string | null } | undefined
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/v1/products/group' && request.method() === 'PATCH') {
+      body = request.postDataJSON()
+    }
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('dialog').getByRole('button', { name: '移动分组' }).click()
+  const form = page.getByRole('dialog').last()
+  await expect(form.getByText('目标分组')).toBeVisible()
+  await form.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => body).toEqual({ productIds: [firstId], groupId: null })
 })
 
 test('切换详情失败时保留弹窗并显示错误，不能操作旧商品', async ({ page }) => {
