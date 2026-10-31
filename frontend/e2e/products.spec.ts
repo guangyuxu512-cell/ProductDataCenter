@@ -74,6 +74,7 @@ test('中控布局、内部滚动、详情、复制和分页总数复用', async
   await expect(page.getByRole('button', { name: '关闭', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   await expect(page.getByText('商品详情', { exact: true })).toBeVisible()
+  await page.getByRole('tab', { name: '规格与 SKU', exact: true }).click()
   await expect(page.getByText('白色', { exact: true }).first()).toBeVisible()
   await expect(page.locator('.app-dialog')).toHaveCSS('opacity', '1')
   await page.screenshot({ path: testInfo.outputPath('product-detail-1440.png'), fullPage: true, animations: 'disabled' })
@@ -153,6 +154,64 @@ test('慢速翻页与切换详情保持外框，旧数据加载时不可操作',
   await expect(page.getByRole('button', { name: '上一件', exact: true })).toBeEnabled()
 })
 
+test('商品范围在左，四个页签读取当前商品并支持连续查看', async ({ page }) => {
+  await fixtures(page)
+  const writes: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/v1/') && request.method() !== 'GET') writes.push(request.method())
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  const navigator = dialog.locator('.product-preview__navigator')
+  const content = dialog.locator('.product-preview__main')
+  await expect(dialog.getByRole('textbox', { name: '商品标题' })).toHaveAttribute('readonly', '')
+  await expect(dialog.getByRole('textbox', { name: '来源类目' })).toHaveValue('家居/厨房/收纳')
+  expect((await navigator.boundingBox())!.x).toBeLessThan((await content.boundingBox())!.x)
+  for (const name of ['基本信息', '图文信息', '商品属性', '规格与 SKU']) {
+    await expect(dialog.getByRole('tab', { name, exact: true })).toBeVisible()
+  }
+  await expect(dialog.getByRole('button', { name: '移动分组' })).toBeEnabled()
+  await expect(dialog.getByRole('button', { name: '导出商品数据包' })).toBeEnabled()
+  await dialog.getByRole('tab', { name: '图文信息', exact: true }).click()
+  await expect(dialog.locator('.product-preview__image-section')).toHaveCount(3)
+  await dialog.getByRole('tab', { name: '规格与 SKU', exact: true }).click()
+  await expect(dialog.locator('.product-preview__sku')).toContainText('白色')
+  const bodyMetrics = await dialog.locator('.product-preview__content').evaluate((node) => ({
+    width: node.clientWidth, scrollWidth: node.scrollWidth,
+  }))
+  expect(bodyMetrics.scrollWidth).toBeLessThanOrEqual(bodyMetrics.width + 1)
+  const actions = await dialog.getByRole('button', { name: '复制全部信息' }).boundingBox()
+  const main = await content.boundingBox()
+  expect(actions!.x + actions!.width).toBeLessThanOrEqual(main!.x + main!.width + 1)
+  await dialog.getByRole('button', { name: '下一件', exact: true }).click()
+  await expect(dialog.getByText('商品 ID ' + String(BigInt(firstId) + 1n))).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: '规格与 SKU' })).toHaveAttribute('aria-selected', 'true')
+  await expect(dialog.getByRole('button', { name: /保存编辑|编辑商品资料/ })).toHaveCount(0)
+  expect(writes).toEqual([])
+})
+
+test('窄窗口内商品范围、四个页签和底部关闭按钮可用', async ({ page }) => {
+  await fixtures(page)
+  await page.setViewportSize({ width: 900, height: 560 })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  for (const width of [900, 640]) {
+    await page.setViewportSize({ width, height: 560 })
+    await expect(dialog.getByRole('tab', { name: '图文信息' })).toBeVisible()
+    await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+    const close = await dialog.getByRole('button', { name: '关闭', exact: true }).boundingBox()
+    expect(close!.y + close!.height).toBeLessThanOrEqual(560)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    const body = await dialog.locator('.product-preview__content').evaluate((node) => ({
+      width: node.clientWidth, scrollWidth: node.scrollWidth,
+    }))
+    expect(body.scrollWidth).toBeLessThanOrEqual(body.width + 1)
+  }
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+})
+
 test('切换详情失败时保留弹窗并显示错误，不能操作旧商品', async ({ page }) => {
   await fixtures(page)
   const secondId = String(BigInt(firstId) + 1n)
@@ -171,7 +230,7 @@ test('切换详情失败时保留弹窗并显示错误，不能操作旧商品',
   await expect(page.getByText('商品 ID ' + firstId)).toHaveCount(0)
 })
 
-test('40 张详情图片按需加载，失败可单图重试，右侧缩略图随滚动加载', async ({ page }) => {
+test('40 张详情图片按需加载，失败可单图重试，商品范围缩略图随滚动加载', async ({ page }) => {
   await fixtures(page)
   const requested: string[] = []
   let firstImageAttempts = 0
@@ -190,6 +249,7 @@ test('40 张详情图片按需加载，失败可单图重试，右侧缩略图�
   await page.goto('/#/products')
   await expect(page.locator('.pagination-bar')).toContainText('共 60 条')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('tab', { name: '图文信息', exact: true }).click()
   const gallery = page.locator('.product-preview__image-section')
   await expect(gallery.first().getByRole('button', { name: '重试', exact: true })).toBeVisible()
   await gallery.first().getByRole('button', { name: '重试', exact: true }).click()
@@ -226,6 +286,7 @@ test('详情图片还在请求时有固定显示区域，滚动后可加载后�
   try {
     await page.goto('/#/products')
     await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+    await page.getByRole('tab', { name: '图文信息', exact: true }).click()
     const gallery = page.locator('.product-preview__image-section').first()
     const first = gallery.locator('img').first()
     await expect(first).toBeAttached()
@@ -258,6 +319,7 @@ test('抖音详情优先请求平台小图，失败回退原图，放大使用�
   })
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('tab', { name: '图文信息', exact: true }).click()
   const images = page.locator('.product-preview__image-section').first().locator('img')
   await expect(images).toHaveCount(2)
   await expect.poll(() => requested.some((url) => url.includes('test-0~') && url.includes('resize:384:0'))).toBe(true)
@@ -283,9 +345,11 @@ test('未显示的 SKU 明细不会提前请求原尺寸图片，滚动后仍能
   })
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('tab', { name: '图文信息', exact: true }).click()
   await expect(page.locator('.product-preview__image-section').first().locator('img').first()).toBeVisible()
   await expect.poll(() => requested.some((url) => url.includes('sku-0~') && url.includes('resize:384:0'))).toBe(true)
   expect(requested.filter((url) => url.includes('/sku-') && url.includes('resize:1200:0'))).toHaveLength(0)
+  await page.getByRole('tab', { name: '规格与 SKU', exact: true }).click()
   const row = page.locator('.product-preview__sku').first()
   await row.scrollIntoViewIfNeeded()
   await expect.poll(() => requested.some((url) => url.includes('sku-0~') && url.includes('resize_q:144:144:q80'))).toBe(true)

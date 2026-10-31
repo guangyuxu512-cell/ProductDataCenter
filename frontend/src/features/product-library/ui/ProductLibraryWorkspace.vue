@@ -71,7 +71,7 @@ async function download(ids: string[]) {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = result.filename
     document.body.append(anchor); anchor.click(); anchor.remove()
     setTimeout(() => URL.revokeObjectURL(url), 10_000)
-    if (result.missing) message.warning(`已导出 ${result.exported} 个商品，${result.missing} 个缺少 UU`)
+    if (result.missing) message.warning(`已导出 ${result.exported} 个商品，${result.missing} 个缺少商品数据包`)
     else message.success(`已导出 ${result.exported} 个商品`)
   } catch (error) { message.error(errorText(error)) }
   finally { busy.value = false }
@@ -101,7 +101,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   { title: '采集时间', key: 'captured_at', width: 176, align: 'center', render: (row) => capturedTime(row.captured_at) },
   { title: '操作', key: 'actions', width: 170, fixed: 'right', align: 'center', render: (row) => h('div', { class: 'product-library-actions' }, [
     h(AppButton, { tone: 'link', size: 'small', onClick: () => { detailId.value = row.product_id } }, () => '查看商品'),
-    h(AppButton, { size: 'small', disabled: busy.value, onClick: () => download([row.product_id]) }, () => '导出 UU'),
+    h(AppButton, { size: 'small', disabled: busy.value, onClick: () => download([row.product_id]) }, () => '导出商品数据包'),
   ]) },
 ])
 </script>
@@ -134,7 +134,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       <TableToolbar density="compact">
         <span v-if="selected.length">已选 {{ selected.length }} 项</span>
         <template #actions>
-          <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出 UU</AppButton>
+          <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出商品数据包</AppButton>
           <AppButton size="small" :disabled="!selected.length || busy || !canWriteGroups" @click="openMove(selected)">移动分组</AppButton>
           <AppButton size="small" :disabled="busy" @click="refresh">刷新</AppButton>
         </template>
@@ -147,7 +147,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       <PaginationBar :inert="list.isFetching.value || undefined" :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
         @update:page="filters.page = $event" @update:page-size="filters.pageSize = $event; filters.page = 1" />
     </ManagementListSection>
-    <ProductPreviewDialog :show="!!detailId" :product="preview" :editable="false" :exportable="!busy"
+    <ProductPreviewDialog :show="!!detailId" :product="preview" :exportable="!busy"
       :loading="detail.isFetching.value" :error="detail.error.value ? errorText(detail.error.value) : null"
       :can-previous="previewIndex > 0 && !detail.isFetching.value"
       :can-next="previewIndex >= 0 && previewIndex < rows.length - 1 && !detail.isFetching.value"
