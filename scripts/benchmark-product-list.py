@@ -16,6 +16,7 @@ from sqlalchemy.engine import make_url
 
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE_URL = os.environ['BACKEND_DATABASE_URL']
+EDIT_DRAFTS = os.environ.get('BENCHMARK_PRODUCT_EDITS', '0') == '1'
 url = make_url(DATABASE_URL)
 if url.host not in {'127.0.0.1', 'localhost', 'postgres'} or url.database != 'product_workbench_perf':
     raise SystemExit('Only an empty isolated local product_workbench_perf database is allowed')
@@ -59,8 +60,22 @@ with engine.begin() as conn:
     """)
     conn.exec_driver_sql("SET LOCAL session_replication_role = 'origin'")
     conn.exec_driver_sql((fixtures / '0008_product_query_performance.sql').read_text(encoding='utf-8'))
+    if EDIT_DRAFTS:
+        # Apply only to this disposable benchmark database; no application startup DDL.
+        conn.exec_driver_sql((ROOT / 'docs/migrations/product-edit-v1-proposal.sql').read_text(encoding='utf-8'))
+        conn.exec_driver_sql("""
+            INSERT INTO product_workbench_edits(product_id,revision,source_fingerprint,draft)
+            SELECT product_id, 1, repeat('a',64), jsonb_build_object(
+              'title', '人工编辑' || title,
+              'mainImages', jsonb_build_array(jsonb_build_object('id','main-1','url','https://fixture.invalid/a.webp')),
+              'detailImages', '[]'::jsonb,
+              'dimensions', '[]'::jsonb,
+              'imageDimensionId', NULL,
+              'skus', jsonb_build_array(jsonb_build_object('id','sku-1','price','19.99')))
+            FROM products WHERE mod(source_product_id::bigint,10)=0
+        """)
 with engine.connect().execution_options(isolation_level='AUTOCOMMIT') as conn:
-    for table in ('products', 'product_images', 'product_skus', 'product_groups'):
+    for table in ('products', 'product_images', 'product_skus', 'product_groups', *(['product_workbench_edits'] if EDIT_DRAFTS else [])):
         conn.exec_driver_sql(f'ANALYZE {table}')
     counts = {table: conn.execute(text(f'SELECT count(*) FROM {table}')).scalar_one()
               for table in ('products', 'product_images', 'product_skus')}
@@ -69,7 +84,8 @@ assert counts == {'products': 300000, 'product_images': 1200000, 'product_skus':
 engine.dispose()
 setup_seconds = round(time.perf_counter() - started, 2)
 
-environment = dict(os.environ, BACKEND_API_TOKEN='isolated-admin-token', BACKEND_RPA_API_TOKEN='isolated-rpa-token')
+environment = dict(os.environ, BACKEND_API_TOKEN='isolated-admin-token', BACKEND_RPA_API_TOKEN='isolated-rpa-token',
+                   BACKEND_ENABLE_PRODUCT_EDITS='true' if EDIT_DRAFTS else 'false')
 server = subprocess.Popen([sys.executable, '-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1',
                            '--port', '18761', '--no-access-log', '--log-level', 'warning'],
                           cwd=ROOT / 'backend', env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -90,6 +106,9 @@ async def measure() -> dict:
                 await asyncio.sleep(0.1)
         else:
             raise RuntimeError('Isolated backend did not become healthy')
+        capabilities = await client.get('/api/v1/capabilities')
+        capabilities.raise_for_status()
+        assert capabilities.json()['productEdit'] is EDIT_DRAFTS
         cases = [
             ('default_with_total', {'limit': '20'}, 300000),
             ('page_without_total', {'limit': '20', 'offset': '20', 'includeTotal': 'false'}, None),
@@ -100,6 +119,8 @@ async def measure() -> dict:
             ('keyword_two_chars', {'q': '厨房'}, 150000),
             ('deep_offset_299800', {'offset': '299800', 'includeTotal': 'false'}, None),
         ]
+        if EDIT_DRAFTS:
+            cases.append(('edited_title_four_chars', {'q': '人工编辑'}, 30000))
         results = {}
         async def request(params, expected):
             start = time.perf_counter()
@@ -146,6 +167,7 @@ finally:
 
 report = {'environment': 'GitHub Actions isolated PostgreSQL, synthetic data, warm cache, loopback HTTP',
           'postgresql': pg_version, 'counts': counts, 'setup_seconds': setup_seconds,
+          'product_edit_enabled': EDIT_DRAFTS, 'synthetic_drafts': 30000 if EDIT_DRAFTS else 0,
           'notes': 'HTTP API only; no frontend render, image download, real NAS or production data.', 'cases': measurements,
           'rpa_readonly_auth_and_uu': 'pass'}
 destination = ROOT / 'benchmark-results.json'
