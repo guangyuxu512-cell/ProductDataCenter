@@ -77,7 +77,10 @@ test('中控布局、内部滚动、详情、复制和分页总数复用', async
   await expect(page.locator('.n-checkbox--checked')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '关闭', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
-  await expect(page.getByText('商品详情', { exact: true })).toBeVisible()
+  await expect(page.getByText('编辑商品', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '更多', exact: true }).click()
+  await page.getByText('复制标题', { exact: true }).click()
+  expect(await page.evaluate(() => (window as unknown as { copiedId: string }).copiedId)).toBe('厨房收纳盒 · 隔离测试商品')
   await page.getByRole('tab', { name: '规格与 SKU', exact: true }).click()
   await expect(page.getByText('白色', { exact: true }).first()).toBeVisible()
   await expect(page.locator('.app-dialog')).toHaveCSS('opacity', '1')
@@ -170,7 +173,8 @@ test('商品范围在左，四个页签读取当前商品并支持连续查看',
   const navigator = dialog.locator('.product-preview__navigator')
   const content = dialog.locator('.product-preview__main')
   await expect(dialog.getByRole('textbox', { name: '商品标题' })).toHaveAttribute('readonly', '')
-  await expect(dialog.getByRole('textbox', { name: '来源类目' })).toHaveValue('家居/厨房/收纳')
+  await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toBeDisabled()
+  await expect(dialog.getByText('来源类目：家居/厨房/收纳')).toBeVisible()
   expect((await navigator.boundingBox())!.x).toBeLessThan((await content.boundingBox())!.x)
   for (const name of ['基本信息', '图文信息', '商品属性', '规格与 SKU']) {
     await expect(dialog.getByRole('tab', { name, exact: true })).toBeVisible()
@@ -191,8 +195,43 @@ test('商品范围在左，四个页签读取当前商品并支持连续查看',
   await dialog.getByRole('button', { name: '下一件', exact: true }).click()
   await expect(dialog.getByText('商品 ID ' + String(BigInt(firstId) + 1n))).toBeVisible()
   await expect(dialog.getByRole('tab', { name: '规格与 SKU' })).toHaveAttribute('aria-selected', 'true')
-  await expect(dialog.getByRole('button', { name: /保存编辑|编辑商品资料/ })).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
   expect(writes).toEqual([])
+})
+
+test('按来源规格显示布局，不补造缺失 SKU 或错误关联图片', async ({ page }, testInfo) => {
+  await fixtures(page)
+  await page.route(`**/api/v1/products/${firstId}`, async (route) => {
+    const skus = [
+      { sku_id: 's1', sku_name: '颜色（2）：黑色 / 款式：长款', current_price: '19.99', image_rel_path: '', sort_order: 0 },
+      { sku_id: 's2', sku_name: '颜色（2）：黑色 / 款式：短款', current_price: '20.99', image_rel_path: '', sort_order: 1 },
+      { sku_id: 's3', sku_name: '颜色（2）：白色 / 款式：长款', current_price: '21.99', image_rel_path: '', sort_order: 2 },
+    ]
+    const images = [
+      { image_type: 'main', sort_order: 0, rel_path: '', source_url: image },
+      { image_type: 'sku', sort_order: 0, rel_path: '', source_url: image },
+      { image_type: 'sku', sort_order: 1, rel_path: '', source_url: image },
+    ]
+    await route.fulfill({ json: { product: product(firstId), skus, images } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await page.screenshot({ path: testInfo.outputPath('approved-layout-basic.png'), animations: 'disabled' })
+  await dialog.getByRole('tab', { name: '图文信息' }).click()
+  await expect(dialog.locator('.product-preview__image-section').nth(2).locator('img')).toHaveCount(2)
+  await expect(dialog.getByRole('button', { name: '添加图片' }).first()).toBeDisabled()
+  await page.screenshot({ path: testInfo.outputPath('approved-layout-images.png'), animations: 'disabled' })
+  await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  await expect(dialog.getByText('销售规格', { exact: true })).toBeVisible()
+  await expect(dialog.locator('.product-preview__axis')).toHaveCount(2)
+  await expect(dialog.getByLabel('颜色规格值')).toHaveCount(2)
+  await expect(dialog.getByLabel('款式规格值')).toHaveCount(2)
+  await expect(dialog.locator('.n-data-table-tbody .n-data-table-tr')).toHaveCount(3)
+  await expect(dialog.getByLabel('SKU 商家编码')).toHaveCount(3)
+  await expect(dialog.getByLabel('SKU 商家编码').first()).toBeDisabled()
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
+  await page.screenshot({ path: testInfo.outputPath('approved-layout-sku.png'), animations: 'disabled' })
 })
 
 test('窄窗口内商品范围、四个页签和底部关闭按钮可用', async ({ page }) => {
@@ -286,7 +325,7 @@ test('40 张详情图片按需加载，失败可单图重试，商品范围缩�
   const last = sidebar.locator('.deferred-preview-thumbnail').last()
   await last.scrollIntoViewIfNeeded()
   await expect(last.locator('.product-image')).toHaveCount(1)
-  await gallery.nth(2).locator('img').last().scrollIntoViewIfNeeded()
+  await gallery.nth(1).locator('img').last().scrollIntoViewIfNeeded()
   await expect.poll(() => requested.includes('/detail-20.svg')).toBe(true)
 })
 
@@ -312,8 +351,8 @@ test('详情图片还在请求时有固定显示区域，滚动后可加载后�
     const first = gallery.locator('img').first()
     await expect(first).toBeAttached()
     await expect.poll(() => requested.includes('/main-0.svg')).toBe(true)
-    await expect.poll(async () => Math.round((await first.boundingBox())?.width ?? 0)).toBe(128)
-    expect(Math.round((await first.boundingBox())?.height ?? 0)).toBe(128)
+    await expect.poll(async () => Math.round((await first.boundingBox())?.width ?? 0)).toBe(112)
+    expect(Math.round((await first.boundingBox())?.height ?? 0)).toBe(112)
     expect(requested.length).toBeLessThan(20)
     releaseImages()
     await expect.poll(() => first.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(800)
@@ -360,8 +399,8 @@ test('未显示的 SKU 明细不会提前请求原尺寸图片，滚动后仍能
   })
   await page.route(`**/api/v1/products/${firstId}`, async (route) => {
     const images = ([['main', 12], ['sku', 9], ['detail', 15]] as const).flatMap(([image_type, count]) =>
-      Array.from({ length: count }, (_, sort_order) => ({ image_type, sort_order, rel_path: '', source_url: original(image_type, sort_order) })))
-    const skus = Array.from({ length: 9 }, (_, sort_order) => ({ sku_id: `sku-${sort_order}`, sku_name: `SKU ${sort_order}`, current_price: '19.99', image_rel_path: '', sort_order }))
+      Array.from({ length: count }, (_, sort_order) => ({ image_type, sort_order, rel_path: image_type === 'sku' ? `sku-${sort_order}.jpg` : '', source_url: original(image_type, sort_order) })))
+    const skus = Array.from({ length: 9 }, (_, sort_order) => ({ sku_id: `sku-${sort_order}`, sku_name: `SKU ${sort_order}`, current_price: '19.99', image_rel_path: `sku-${sort_order}.jpg`, sort_order }))
     await route.fulfill({ json: { product: product(firstId), skus, images } })
   })
   await page.goto('/#/products')
