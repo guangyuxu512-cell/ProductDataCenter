@@ -1,0 +1,51 @@
+name: NAS signer
+on:
+  push:
+    branches: [main, 'codex/product-nas-signer-v1']
+    paths: ['signer/**', 'deploy/compose.signer.yaml', '.github/workflows/nas-signer.yml']
+  pull_request:
+    paths: ['signer/**', 'deploy/compose.signer.yaml', '.github/workflows/nas-signer.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test signer/tests/server.test.cjs
+      - run: docker build -t product-data-center-signer:${{ github.sha }} signer
+      - name: Test the built image without external network
+        run: |
+          set -eu
+          key_path="$RUNNER_TEMP/pdc-signer-synthetic-key"
+          printf %s 'synthetic-key-for-container-tests-only-123456' > "$key_path"
+          chmod 0444 "$key_path"
+          docker run -d --name pdc-signer-smoke --network none --read-only --tmpfs /tmp:size=16m,mode=1777 --cap-drop ALL \
+            --mount "type=bind,src=$key_path,dst=/run/secrets/product_signer_api_key,readonly" \
+            -e DOUYIN_SIGNER_API_KEY_FILE=/run/secrets/product_signer_api_key \
+            -e DOUYIN_SIGNER_BIND_HOST=0.0.0.0 \
+            -e DOUYIN_SIGNER_WARM_POOL_SIZE=5 product-data-center-signer:${{ github.sha }}
+          trap 'docker rm -f pdc-signer-smoke >/dev/null 2>&1 || true; rm -f "$key_path"' EXIT
+          docker exec -i -e SIGNER_TEST_API_KEY=synthetic-key-for-container-tests-only-123456 pdc-signer-smoke node < signer/tests/container-smoke.cjs
+      - name: Package signer image for NAS
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p signer-release
+          docker save product-data-center-signer:${{ github.sha }} | gzip > signer-release/product-data-center-signer.tar.gz
+          cd signer-release
+          sha256sum product-data-center-signer.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: product-data-center-signer-${{ github.sha }}
+          path: signer-release/
+          compression-level: 0
+          retention-days: 3

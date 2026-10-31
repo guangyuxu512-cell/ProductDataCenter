@@ -1,0 +1,35 @@
+# Standalone optional service. Start only after the product API integration is ready.
+# No host port: only containers on the existing workbench network can reach it.
+services:
+  product-signer:
+    image: ${PRODUCT_SIGNER_IMAGE:?set the tested signer image}
+    pull_policy: never
+    init: true
+    restart: unless-stopped
+    read_only: true
+    environment:
+      PORT: '8787'
+      DOUYIN_SIGNER_BIND_HOST: 0.0.0.0
+      DOUYIN_SIGNER_API_KEY_FILE: /run/secrets/product_signer_api_key
+      DOUYIN_SIGNER_WARM_POOL_SIZE: ${PRODUCT_SIGNER_POOL_SIZE:-5}
+      DOUYIN_SIGNER_QUEUE_TIMEOUT_MS: ${PRODUCT_SIGNER_QUEUE_TIMEOUT_MS:-15000}
+    secrets: [product_signer_api_key]
+    networks: [workbench]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+secrets:
+  product_signer_api_key:
+    file: ${PRODUCT_SIGNER_API_KEY_FILE:?set a protected signer key file}
+networks:
+  workbench:
+    external: true
+    name: ${PRODUCT_WORKBENCH_NETWORK:?set the existing product workbench network}
