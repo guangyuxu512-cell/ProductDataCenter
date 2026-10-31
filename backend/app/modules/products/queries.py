@@ -120,17 +120,24 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
         where.append(f"(p.product_id = {p} OR p.source_product_id = {p})")
     elif options.query:
         p = bind(f"%{options.query}%")
-        source_match = f"""({product_search_sql()} ILIKE {p} AND (
-      p.product_id ILIKE {p}
-      OR p.source_product_id ILIKE {p}
-      OR p.title ILIKE {p}
-      OR p.shop_name ILIKE {p}
-      OR p.category_path ILIKE {p}
+        def source_match(alias: str) -> str:
+            return f"""({product_search_sql(alias)} ILIKE {p} AND (
+      {alias}.product_id ILIKE {p}
+      OR {alias}.source_product_id ILIKE {p}
+      OR {alias}.title ILIKE {p}
+      OR {alias}.shop_name ILIKE {p}
+      OR {alias}.category_path ILIKE {p}
     ))"""
         if include_edits:
-            where.append(f"({source_match} OR p.product_id IN (SELECT product_id FROM product_workbench_edits WHERE display_title ILIKE {p}))")
+            # Keep each GIN search in its own branch. An OR against an edit
+            # subquery caused PostgreSQL 16 to scan every product.
+            where.append(f"""p.product_id IN (
+                SELECT s.product_id FROM products s WHERE {source_match('s')}
+                UNION
+                SELECT product_id FROM product_workbench_edits WHERE display_title ILIKE {p}
+            )""")
         else:
-            where.append(source_match)
+            where.append(source_match('p'))
     if options.source_platform:
         where.append(f"p.source_platform = {bind(options.source_platform)}")
     if options.group_id == "ungrouped":
@@ -165,7 +172,24 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
         ORDER BY pi.sort_order LIMIT 1)"""
     main_image = f"CASE WHEN e.product_id IS NULL THEN {source_image} ELSE e.main_image_url END" if include_edits else source_image
     edits_join = "LEFT JOIN product_workbench_edits e ON e.product_id = p.product_id" if include_edits else ""
-    query = Query(f"""SELECT p.product_id, p.source_platform, p.source_product_id, p.group_id,
+    # Restrict the expensive draft/JSON enrichment to the actual page. Joining
+    # drafts before OFFSET made PostgreSQL visit hundreds of thousands of drafts
+    # for a deep page, even though only 20 rows were returned.
+    page = f"""WITH page AS MATERIALIZED (
+            SELECT p.product_id, p.source_platform, p.source_product_id, p.group_id,
+                   p.title, p.title_status, p.shop_name, p.category_level_4, p.category_path,
+                   p.current_price_min, p.current_price_max, p.sku_count, p.main_image_count,
+                   p.detail_image_count, p.sku_image_count, p.asset_rel_path, p.workbook_rel_path,
+                   p.raw_rel_path, p.captured_at, p.updated_at
+              FROM products p WHERE {filters}
+             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
+             LIMIT {limit} OFFSET {offset}
+        )""" if include_edits else ""
+    source = "page" if include_edits else "products"
+    tail = ("" if include_edits else f"WHERE {filters}") + """\n             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id"""
+    if not include_edits:
+        tail += f"\n             LIMIT {limit} OFFSET {offset}"
+    query = Query(f"""{page} SELECT p.product_id, p.source_platform, p.source_product_id, p.group_id,
                    g.group_name, {title}, p.title_status, p.shop_name,
                    p.category_level_4, p.category_path,
                    {price_min}, {price_max}, {sku_count},
@@ -173,10 +197,8 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
                    {main_image} AS main_image_url,
                    p.asset_rel_path, p.workbook_rel_path, p.raw_rel_path,
                    p.captured_at, p.updated_at
-              FROM products p
+              FROM {source} p
               LEFT JOIN product_groups g ON g.group_id = p.group_id
               {edits_join}
-             WHERE {filters}
-             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
-             LIMIT {limit} OFFSET {offset}""", params)
+             {tail}""", params)
     return query, count

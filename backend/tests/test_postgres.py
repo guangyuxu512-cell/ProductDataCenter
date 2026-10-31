@@ -157,6 +157,11 @@ def test_edit_draft_is_independent_from_collector_and_rpa_original(engine):
     edited_list = products.list(parse_product_list_options({"q": "人工修改"}), include_edits=True)
     assert edited_list["total"] == 1 and edited_list["items"][0]["title"] == "人工修改商品标题"
     assert edited_list["items"][0]["main_image_url"] == "https://fixture.invalid/new.png"
+    # Both original source text and edited title remain searchable; pagination
+    # operates over the filtered products before draft enrichment.
+    assert products.list(parse_product_list_options({"q": "厨房收纳"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "人工%标题"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "人工%标题", "offset": "1"}), include_edits=True)["items"] == []
     assert products.list(parse_product_list_options({"productId": product_id}))["items"][1]["title"] == "厨房收纳盒"
     with pytest.raises(EditConflict):
         editor.save(product_id, SaveDraft(expectedRevision=0, sourceFingerprint=state.sourceFingerprint, draft=state.draft))
