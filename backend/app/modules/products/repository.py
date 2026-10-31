@@ -3,14 +3,15 @@ from __future__ import annotations
 from sqlalchemy import Connection, Engine, text
 
 from .queries import ProductListOptions, build_product_list_queries
+from .errors import DraftStatusUnavailable
 
 
 class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def list(self, options: ProductListOptions) -> dict:
-        listing, count = build_product_list_queries(options)
+    def list(self, options: ProductListOptions, *, include_edits: bool = False) -> dict:
+        listing, count = build_product_list_queries(options, include_edits=include_edits)
         with self.engine.connect().execution_options(
             isolation_level="REPEATABLE READ", postgresql_readonly=True,
         ) as conn, conn.begin():
@@ -80,12 +81,33 @@ class ProductRepository:
             WHERE product_id=ANY(CAST(:ids AS text[])) RETURNING product_id"""),
             {"ids": product_ids, "group_id": group_id}).scalars())
 
-    def export_rows(self, product_ids: list[str]) -> list[dict]:
-        with self.engine.connect() as conn:
-            return [dict(row) for row in conn.execute(text("""SELECT product_id, source_platform, source_product_id,
+    @staticmethod
+    def _export_rows(conn: Connection, product_ids: list[str]) -> list[dict]:
+        return [dict(row) for row in conn.execute(text("""SELECT product_id, source_platform, source_product_id,
                 title, captured_at, uu_rel_path, uu_sha256, uu_json::text AS uu_text FROM products
                 WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL
                 ORDER BY array_position(CAST(:ids AS text[]),product_id)"""), {"ids": product_ids}).mappings()]
+
+    def export_rows(self, product_ids: list[str]) -> list[dict]:
+        with self.engine.connect() as conn:
+            return self._export_rows(conn, product_ids)
+
+    def exportable_rows(self, product_ids: list[str]) -> list[dict]:
+        # Check drafts and read source records in the same snapshot. A draft saved
+        # concurrently becomes visible to the next request, never halfway through this one.
+        with self.engine.connect().execution_options(isolation_level="REPEATABLE READ", postgresql_readonly=True) as conn, conn.begin():
+            status = conn.execute(text("""SELECT to_regclass('public.product_workbench_edits') IS NOT NULL AS present,
+                CASE WHEN to_regclass('public.product_workbench_edits') IS NULL THEN true ELSE
+                has_table_privilege('public.product_workbench_edits', 'SELECT') END AS readable""")).mappings().one()
+            if not status["present"]:
+                return self._export_rows(conn, product_ids)
+            if not status["readable"]:
+                raise DraftStatusUnavailable()
+            if conn.execute(text("""SELECT 1 FROM product_workbench_edits
+                WHERE product_id=ANY(CAST(:ids AS text[])) LIMIT 1"""), {"ids": product_ids}).first():
+                from .errors import ProductDraftPending
+                raise ProductDraftPending()
+            return self._export_rows(conn, product_ids)
 
     def image(self, product_id: str, kind: str, position: int):
         with self.engine.connect() as conn:

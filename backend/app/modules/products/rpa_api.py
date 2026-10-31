@@ -64,7 +64,7 @@ def product_uu(product_id: str, service: Service,
     if expected_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         from .errors import ProductRequestError
         raise ProductRequestError("UU 校验值无效")
-    rows = service.repository.export_rows([product_id])
+    rows = service.repository.exportable_rows([product_id])
     if not rows:
         raise ProductNotFound("商品不存在或没有可用的 UU")
     content, _ = current_uu_bytes(rows[0], service.settings.data_root, service.settings.export_max_bytes)

@@ -123,4 +123,6 @@ class Capabilities(BaseModel):
     groupWrites: bool
     export: bool = True
     productEdit: bool = False
+    manualCreate: bool = False
+    assetUploads: bool = False
     importProducts: bool = False

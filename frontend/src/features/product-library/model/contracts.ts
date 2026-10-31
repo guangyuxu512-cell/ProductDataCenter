@@ -50,7 +50,7 @@ export interface ProductHistory {
 export interface LibraryProduct {
   id: string
   productId: string
-  platform: PlatformCode
+  platform: PlatformCode | null
   title: string
   shopName?: string
   skuCount?: number

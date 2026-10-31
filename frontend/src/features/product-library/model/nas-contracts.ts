@@ -46,7 +46,7 @@ export interface ProductGroup {
 
 export interface ProductFilters {
   query: string
-  platform: '' | 'douyin' | 'pinduoduo'
+  platform: '' | 'douyin' | 'pinduoduo' | 'manual'
   groupId: string
   capturedFrom: string
   capturedTo: string
@@ -58,5 +58,7 @@ export interface Capabilities {
   groupWrites: boolean
   export: boolean
   productEdit: boolean
+  manualCreate?: boolean
+  assetUploads?: boolean
   importProducts: boolean
 }

@@ -18,6 +18,7 @@ import {
   useMessage,
 } from 'naive-ui'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
+import ProductRangeNavigator from './ProductRangeNavigator.vue'
 import { previewImageUrl } from '../model/preview-image-url'
 import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState, StatusTag } from '@/shared/components'
@@ -550,6 +551,9 @@ const allText = computed(() => {
     <template v-else>
       <div class="product-preview__layout" :aria-busy="loading">
         <div v-if="loading" class="product-preview__loading-mask" role="status" aria-label="加载中"><NSpin size="small" /></div>
+        <ProductRangeNavigator :items="navigationItems" :selected-id="product.id" :position-label="positionLabel"
+          :can-previous="canPrevious" :can-next="canNext" :disabled="loading"
+          @navigate="requestNavigate" @navigate-to="requestNavigateTo" />
         <div class="product-preview__content" :inert="loading || undefined">
           <section class="product-preview__summary">
             <div class="product-preview__summary-heading">
@@ -568,7 +572,8 @@ const allText = computed(() => {
                 </NForm>
                 <h3 v-else>{{ product.title }}</h3>
                 <div class="product-preview__summary-meta">
-                  <PlatformDisplay :code="product.platform" />
+                  <PlatformDisplay v-if="product.platform" :code="product.platform" />
+                  <span v-else>手动创建</span>
                   <span>商品 ID {{ product.productId }}</span>
                   <span>
                     当前价格
@@ -616,7 +621,7 @@ const allText = computed(() => {
                     :title="exportable ? undefined : '正式导出尚未接入'"
                     @click="$emit('export', product)"
                   >
-                    导出 UU
+                    导出商品数据包
                   </AppButton>
                 </div>
               </div>
@@ -848,69 +853,6 @@ const allText = computed(() => {
           </AppTabs>
         </div>
 
-        <aside class="product-preview__navigator" :inert="loading || undefined" aria-label="当前范围商品列表">
-          <header class="product-preview__navigator-header">
-            <strong>当前范围商品</strong>
-            <NText v-if="positionLabel" depth="3">{{ positionLabel }}</NText>
-          </header>
-          <div class="product-preview__navigator-list">
-            <AppButton
-              v-for="item in navigationItems"
-              :key="item.id"
-              class="product-preview__navigator-item"
-              :class="{
-                'product-preview__navigator-item--active':
-                  item.id === product.id,
-              }"
-              tone="text"
-              size="small"
-              block
-              :aria-current="item.id === product.id ? 'true' : undefined"
-              @click="requestNavigateTo(item.id)"
-            >
-              <span class="product-preview__navigator-row">
-                <span
-                  class="product-preview__navigator-thumbnail"
-                  aria-hidden="true"
-                >
-                  <DeferredPreviewThumbnail
-                    :src="item.imageUrl"
-                    :title="item.title"
-                  />
-                </span>
-                <span class="product-preview__navigator-copy">
-                  <NTooltip>
-                    <template #trigger>
-                      <span class="product-preview__navigator-title">
-                        {{ item.title }}
-                      </span>
-                    </template>
-                    {{ item.title }}
-                  </NTooltip>
-                  <span class="product-preview__navigator-subtitle">
-                    {{ item.subtitle }}
-                  </span>
-                </span>
-              </span>
-            </AppButton>
-          </div>
-          <nav class="product-preview__navigation" aria-label="翻页商品导航">
-            <AppButton
-              size="small"
-              :disabled="!canPrevious"
-              @click="requestNavigate('previous')"
-            >
-              上一件
-            </AppButton>
-            <AppButton
-              size="small"
-              :disabled="!canNext"
-              @click="requestNavigate('next')"
-            >
-              下一件
-            </AppButton>
-          </nav>
-        </aside>
       </div>
     </template>
   </AppDialog>
@@ -920,7 +862,7 @@ const allText = computed(() => {
 .product-preview__layout {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 22vw, 360px);
+  grid-template-columns: clamp(260px, 20vw, 320px) minmax(0, 1fr);
   align-items: stretch;
   gap: var(--space-4);
   height: 100%;
@@ -967,94 +909,6 @@ const allText = computed(() => {
   display: grid;
   flex: 0 1 360px;
   justify-items: end;
-  gap: var(--space-2);
-}
-.product-preview__navigator {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-card);
-  background: var(--bg-surface);
-}
-.product-preview__navigator-header {
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.product-preview__navigator-list {
-  display: grid;
-  align-content: start;
-  gap: var(--space-1);
-  min-height: 0;
-  padding-right: var(--space-1);
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-}
-.product-preview__navigator-item {
-  min-width: 0;
-  height: auto;
-  min-height: 72px;
-  padding: var(--space-2);
-  border: 1px solid transparent;
-}
-.product-preview__navigator-item--active {
-  border-color: var(--border-default);
-  background: var(--color-primary-soft);
-}
-.product-preview__navigator-row {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
-  align-items: center;
-  width: 100%;
-  min-width: 0;
-  gap: var(--space-3);
-}
-.product-preview__navigator-thumbnail {
-  display: block;
-  width: 48px;
-  height: 48px;
-}
-.product-preview__navigator-thumbnail :deep(.product-image) {
-  --product-image-size: 48px;
-  width: 48px;
-  height: 48px;
-}
-.product-preview__navigator-copy {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  gap: var(--space-1);
-  text-align: left;
-}
-.product-preview__navigator-title,
-.product-preview__navigator-subtitle {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.product-preview__navigator-title {
-  display: -webkit-box;
-  color: var(--text-primary);
-  line-height: var(--line-height-body);
-  text-align: left;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-.product-preview__navigator-subtitle {
-  color: var(--text-secondary);
-  font-size: var(--font-size-secondary);
-  text-align: left;
-  white-space: nowrap;
-}
-.product-preview__navigation {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: var(--space-2);
 }
 .product-preview__copy-actions,
@@ -1193,11 +1047,7 @@ const allText = computed(() => {
 }
 @media (max-width: 820px) {
   .product-preview__layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) 220px;
-  }
-  .product-preview__navigator {
-    height: 220px;
+    grid-template-columns: minmax(160px, 30%) minmax(0, 1fr);
   }
   .product-preview__summary-heading {
     flex-direction: column;
@@ -1211,6 +1061,13 @@ const allText = computed(() => {
   }
   .product-preview__sku {
     grid-template-columns: 64px minmax(140px, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .product-preview__layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 180px minmax(0, 1fr);
   }
 }
 </style>

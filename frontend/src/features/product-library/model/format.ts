@@ -8,6 +8,10 @@ import type { NasDetail, ProductRow } from './nas-contracts'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
+export function productTitleLength(value: string): number {
+  return Array.from(value).reduce((sum, character) => sum + ((character.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0)
+}
+
 export function capturedTime(value: string | null): string {
   return value ? dayjs(value).tz('Asia/Shanghai').format('YYYY-MM-DD HH:mm:ss') : '—'
 }
@@ -27,7 +31,7 @@ export function priceRange(row: ProductRow): string {
 export function detailView(detail: NasDetail): LibraryProduct {
   const row = detail.product
   const platform = platformCode(row.source_platform)
-  if (!platform) throw new Error(`暂不支持该来源平台的详情：${row.source_platform || '未知'}`)
+  if (!platform && row.source_platform !== 'manual') throw new Error(`暂不支持该来源平台的详情：${row.source_platform || '未知'}`)
   const imageUrl = (image: NasDetail['images'][number]) => image.source_url || (
     image.rel_path ? `/api/v1/products/${encodeURIComponent(row.product_id)}/images/${image.image_type}/${image.sort_order}` : ''
   )

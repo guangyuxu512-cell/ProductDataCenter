@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { capturedTime, detailView, platformCode } from './format'
+import { capturedTime, detailView, platformCode, productTitleLength } from './format'
 import { productListParams } from '../api/products'
 import type { NasDetail } from './nas-contracts'
 
 describe('采集字段适配', () => {
+  it('标题计数与已确认的抖店页面一致', () => {
+    expect(productTitleLength('商'.repeat(30))).toBe(60)
+    expect(productTitleLength('商'.repeat(30) + 'A')).toBe(61)
+  })
   it('19 位 ID 保持字符串，精确检索保留分页与秒级参数', () => {
     const params = productListParams({ query: '3760269504500859111', platform: '', groupId: '',
       capturedFrom: '2026-10-26T08:18:34', capturedTo: '2026-10-26T08:18:34', page: 2, pageSize: 20 }, false)

@@ -39,6 +39,19 @@ def test_database_fallback_is_explicit(tmp_path):
         assert archive.read(entry["filename"]) == product["uu_text"].encode()
 
 
+def test_new_export_names_preserve_bytes_and_legacy_manifest(tmp_path):
+    product = row()
+    old_zip, old_name, *_ = export_archive([product], [product["product_id"]], tmp_path, 100000)
+    new_zip, new_name, *_ = export_archive([product], [product["product_id"]], tmp_path, 100000, legacy_names=False)
+    assert old_name.startswith("uu-export-") and new_name.startswith("product-packages-")
+    with ZipFile(io.BytesIO(old_zip)) as old, ZipFile(io.BytesIO(new_zip)) as new:
+        old_entry = json.loads(old.read("manifest.json"))["products"][0]
+        new_entry = json.loads(new.read("manifest.json"))["products"][0]
+        assert old_entry["filename"].startswith("UU/") and "storedUuSha256" in old_entry
+        assert new_entry["filename"].startswith("product-packages/") and "storedSourceSha256" in new_entry
+        assert old.read(old_entry["filename"]) == new.read(new_entry["filename"]) == product["uu_text"].encode()
+
+
 def test_rejects_changed_file_and_oversize(tmp_path):
     (tmp_path / "version.txt").write_text('{}')
     with pytest.raises(ExportUnavailable, match="校验"):
