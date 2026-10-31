@@ -21,6 +21,9 @@ from zipfile import ZipFile
 ROOT = Path(__file__).resolve().parents[1]
 IDENTITY = "3760269504500859111"
 UU = '{\r\n  "goodsInfo": {"productId":"3760269504500859111", "title":"容器验证"}\r\n}\r\n'.encode()
+CATEGORIES = ("id,name,parent_id,level,is_leaf,path_ids,path_names,is_hidden,is_deleted\n"
+              "239,男装,0,1,False,239,男装,0,0\n"
+              "245,衬衫,239,2,True,239 > 245,男装 > 衬衫,0,0\n").encode()
 
 
 def command(*args, stdin=None, check=True, env=None):
@@ -54,6 +57,11 @@ def main():
         media.mkdir(mode=0o755)
         (media / "fixture-uu.txt").write_bytes(UU)
         (media / "fixture-uu.txt").chmod(0o444)
+        category_dir = root / "categories"
+        category_dir.mkdir(mode=0o755)
+        category_file = category_dir / "pdd_categories.csv"
+        category_file.write_bytes(CATEGORIES)
+        category_file.chmod(0o444)
         credentials = root / "credentials"
         credentials.mkdir(mode=0o755)
         (credentials / "database_url").write_text(f"postgresql+psycopg://pdc_reader:{password}@postgres:5432/product_workbench_test")
@@ -83,6 +91,11 @@ def main():
         def synology_compose(*args, **kwargs):
             return command("docker", "compose", "-p", run + "-host", "-f",
                            str(ROOT / "deploy/compose.synology-lan.yaml"), *args, env=env, **kwargs)
+        def synology_category_compose(*args, **kwargs):
+            return command("docker", "compose", "-p", run + "-host", "-f",
+                           str(ROOT / "deploy/compose.synology-lan.yaml"), "-f",
+                           str(ROOT / "deploy/compose.pdd-source-categories.yaml"),
+                           *args, env=env, **kwargs)
         def psql(sql):
             return command("docker", "exec", "-i", postgres, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "pdc_test", "-d", "product_workbench_test", stdin=sql)
         base = f"http://127.0.0.1:{port}"
@@ -217,6 +230,36 @@ def main():
             request("/rpa/v1/product-groups", method="POST", body={"name": "RPA不能写"},
                     auth=False, bearer=rpa_token, status=405)
             print("PASS: Synology host proxy, loopback API, RPA token and UU", flush=True)
+
+            # Optional source dictionary: only a disposable directory and a
+            # synthetic CSV are mounted; verify replacement is visible without
+            # trusting a stale single-file bind mount.
+            env["PDD_CATEGORY_DIRECTORY"] = str(category_dir)
+            env["PDD_CATEGORY_SHA256"] = hashlib.sha256(CATEGORIES).hexdigest()
+            env["BACKEND_ENABLE_SOURCE_CATEGORY_READS"] = "true"
+            synology_category_compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
+                                      "--wait", "--wait-timeout", "100", "product-api")
+            category_path = "/api/v1/source-categories/pinduoduo/245"
+            source = request(category_path, auth=False)
+            assert source["sourcePlatform"] == "pinduoduo"
+            assert [level["name"] for level in source["path"]] == ["男装", "衬衫"]
+            assert source["dictionarySha256"] == hashlib.sha256(CATEGORIES).hexdigest()
+            request(category_path, auth=False, bearer=rpa_token, status=401)
+            category_api = synology_category_compose("ps", "-q", "product-api")
+            assert command("docker", "inspect", "--format",
+                           '{{range .Mounts}}{{if eq .Destination "/pdd-categories"}}{{.RW}}{{end}}{{end}}',
+                           category_api) == "false"
+            newer = CATEGORIES.replace("衬衫".encode(), "新衬衫".encode())
+            replacement = category_dir / "next.csv"
+            replacement.write_bytes(newer)
+            replacement.chmod(0o444)
+            os.replace(replacement, category_file)
+            request(category_path, auth=False, status=503)
+            env["PDD_CATEGORY_SHA256"] = hashlib.sha256(newer).hexdigest()
+            synology_category_compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
+                                      "--wait", "--wait-timeout", "100", "product-api")
+            assert request(category_path, auth=False)["path"][-1]["name"] == "新衬衫"
+            print("PASS: read-only category directory, exact checksum and atomic replacement", flush=True)
         finally:
             synology_compose("down", "--remove-orphans", check=False)
             compose("down", "--remove-orphans", check=False)

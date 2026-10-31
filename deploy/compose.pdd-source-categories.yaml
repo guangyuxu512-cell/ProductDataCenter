@@ -1,0 +1,10 @@
+# Optional overlay for either base Compose variant. Mount the containing
+# directory so an atomic CSV replacement is visible inside the container.
+services:
+  product-api:
+    environment:
+      BACKEND_ENABLE_SOURCE_CATEGORY_READS: ${BACKEND_ENABLE_SOURCE_CATEGORY_READS:-false}
+      BACKEND_PDD_CATEGORY_CSV: /pdd-categories/pdd_categories.csv
+      BACKEND_PDD_CATEGORY_SHA256: ${PDD_CATEGORY_SHA256:?approved category checksum required}
+    volumes:
+      - ${PDD_CATEGORY_DIRECTORY:?existing category directory required}:/pdd-categories:ro
