@@ -156,16 +156,20 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
     matches = ""
     if selective_keyword:
         # Query the two indexes separately, including all platform/group/date
-        # filters in both branches. Carry ordering keys so pagination happens
-        # before fetching product and draft details.
+        # filters in both branches. Without extra filters the edit table's
+        # foreign key already guarantees a product exists, so counting the
+        # matching IDs must not join and scan the entire products table.
         source_filters = filters.replace("p.", "s.")
+        edited_ids = (f"""SELECT e.product_id FROM product_workbench_edits e
+             WHERE e.display_title ILIKE {selective_keyword}""" if filters == "true" else
+            f"""SELECT e.product_id FROM product_workbench_edits e
+              JOIN products p ON p.product_id=e.product_id
+             WHERE e.display_title ILIKE {selective_keyword} AND ({filters})""")
         matches = f"""matches AS MATERIALIZED (
-            SELECT s.product_id, s.captured_at, s.updated_at FROM products s
+            SELECT s.product_id FROM products s
              WHERE {source_match('s')} AND ({source_filters})
             UNION
-            SELECT p.product_id, p.captured_at, p.updated_at FROM product_workbench_edits e
-              JOIN products p ON p.product_id=e.product_id
-             WHERE e.display_title ILIKE {selective_keyword} AND ({filters})
+            {edited_ids}
         )"""
     count_sql = (f"WITH {matches} SELECT count(*)::integer AS total FROM matches" if matches
                  else f"SELECT count(*)::integer AS total FROM products p WHERE {filters}")
@@ -198,8 +202,12 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
                    p.raw_rel_path, p.captured_at, p.updated_at"""
     if matches:
         page = f"""WITH {matches}, page_keys AS MATERIALIZED (
-            SELECT product_id, captured_at, updated_at FROM matches
-             ORDER BY captured_at DESC NULLS LAST, updated_at DESC, product_id
+            SELECT p.product_id, p.captured_at, p.updated_at FROM matches m
+              JOIN LATERAL (
+                SELECT product_id, captured_at, updated_at FROM products
+                 WHERE product_id=m.product_id OFFSET 0
+              ) p ON true
+             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
              LIMIT {limit} OFFSET {offset}
         ), page AS MATERIALIZED (
             SELECT {page_fields} FROM page_keys k JOIN products p ON p.product_id=k.product_id

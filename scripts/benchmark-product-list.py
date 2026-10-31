@@ -121,6 +121,8 @@ async def measure() -> dict:
         ]
         if EDIT_DRAFTS:
             cases.append(('edited_title_four_chars', {'q': '人工编辑'}, 30000))
+            cases.append(('keyword_four_with_platform', {'q': '厨房收纳', 'platform': 'pinduoduo'}, 6000))
+            cases.append(('edited_title_with_group', {'q': '人工编辑', 'groupId': group_id}, 15000))
         results = {}
         async def request(params, expected):
             start = time.perf_counter()
@@ -181,6 +183,7 @@ if EDIT_DRAFTS:
         for name, params in [('keyword_four_chars', {'q': '厨房收纳'}),
                              ('keyword_two_chars', {'q': '厨房'}),
                              ('edited_title_four_chars', {'q': '人工编辑'}),
+                             ('edited_title_with_group', {'q': '人工编辑', 'groupId': group_id}),
                              ('deep_offset_299800', {'offset': '299800', 'includeTotal': 'false'})]:
             listing, count = build_product_list_queries(parse_product_list_options(params), include_edits=True)
             for label, query in [('list', listing), ('count', count)]:
