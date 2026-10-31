@@ -203,10 +203,7 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
     if matches:
         page = f"""WITH {matches}, page_keys AS MATERIALIZED (
             SELECT p.product_id, p.captured_at, p.updated_at FROM matches m
-              JOIN LATERAL (
-                SELECT product_id, captured_at, updated_at FROM products
-                 WHERE product_id=m.product_id OFFSET 0
-              ) p ON true
+              JOIN products p ON p.product_id=m.product_id
              ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
              LIMIT {limit} OFFSET {offset}
         ), page AS MATERIALIZED (
