@@ -7,12 +7,13 @@ import { ProductImage } from '@/entities/product'
 import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
-import { fetchEditor, saveEditor, uploadProductImage } from '../api/editor'
+import { fetchEditor, inspectEditor, saveEditor, uploadProductImage } from '../api/editor'
 import { buildSkuGrid, type SkuCombination } from '../model/sku-grid'
 import { productTitleLength } from '../model/format'
 import type { LibraryProduct } from '../model/contracts'
-import type { EditorDimension, EditorImage, EditorSku, ProductEditorDraft, ProductEditorState } from '../model/editor-contracts'
+import type { DraftInspection, EditorDimension, EditorImage, EditorSku, ProductEditorDraft, ProductEditorState } from '../model/editor-contracts'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
+import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 
 const props = withDefaults(defineProps<{
   show: boolean
@@ -36,6 +37,7 @@ const emit = defineEmits<{
 const message = useMessage(), client = useQueryClient()
 const tab = ref('base'), state = ref<ProductEditorState | null>(null), draft = ref<ProductEditorDraft | null>(null)
 const baseline = ref(''), saving = ref(false), uploading = ref(false), guardOpen = ref(false)
+const inspecting = ref(false), inspection = ref<DraftInspection | null>(null)
 const pendingAction = ref<(() => void) | null>(null)
 const pendingVerb = ref<'切换' | '关闭'>('切换')
 const confirmation = ref<{ title: string; content: string; positive: string; action: () => void } | null>(null)
@@ -52,14 +54,14 @@ const query = useQuery({
   staleTime: 0,
 })
 const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== baseline.value)
-const busy = computed(() => saving.value || uploading.value)
+const busy = computed(() => saving.value || uploading.value || inspecting.value)
 
 function applyState(value: ProductEditorState) {
   state.value = value
   draft.value = clone(value.draft)
   baseline.value = JSON.stringify(draft.value)
 }
-watch(() => props.productId, () => { state.value = null; draft.value = null; baseline.value = ''; tab.value = 'base' }, { flush: 'sync' })
+watch(() => props.productId, () => { state.value = null; draft.value = null; baseline.value = ''; tab.value = 'base'; inspection.value = null }, { flush: 'sync' })
 watch(() => query.data.value, (value) => {
   if (!value || value.productId !== props.productId) return
   if (!state.value || (!dirty.value && (state.value.revision !== value.revision ||
@@ -83,6 +85,23 @@ async function saveCurrent(): Promise<boolean> {
     return true
   } catch (error) { message.error(errorText(error)); return false }
   finally { saving.value = false }
+}
+
+async function inspectCurrent() {
+  if (!props.productId || !state.value || !draft.value || busy.value) return
+  const productId = props.productId, snapshot = JSON.stringify(draft.value)
+  const revision = state.value.revision, fingerprint = state.value.sourceFingerprint
+  inspecting.value = true
+  try {
+    const result = await inspectEditor(productId, revision, fingerprint, JSON.parse(snapshot) as ProductEditorDraft)
+    if (productId !== props.productId || snapshot !== JSON.stringify(draft.value) ||
+        revision !== state.value?.revision || fingerprint !== state.value?.sourceFingerprint) {
+      message.warning('商品已变更，请重新检查')
+      return
+    }
+    inspection.value = result
+  } catch (error) { message.error(errorText(error)) }
+  finally { inspecting.value = false }
 }
 
 function requestAction(action: () => void, verb: '切换' | '关闭' = '切换') {
@@ -109,6 +128,18 @@ function confirmAction() {
 const titleLength = computed(() => productTitleLength(draft.value?.title ?? ''))
 const grid = computed(() => draft.value ? buildSkuGrid(draft.value) : { combinations: [], unmatched: [], tooMany: false })
 const activeImageDimension = computed(() => draft.value?.dimensions.find((item) => item.id === draft.value?.imageDimensionId) ?? null)
+const sourceSkuImages = computed(() => {
+  const seen = new Set<string>()
+  return (draft.value?.skus ?? []).flatMap((sku) => {
+    const url = sku.sourceImageUrl?.trim()
+    if (!url || seen.has(url)) return []
+    seen.add(url)
+    return [{ url, label: sku.sourceLabel || sku.sourceSkuId || 'SKU' }]
+  })
+})
+const placeholderStocks = computed(() => (draft.value?.skus ?? []).filter((sku) => sku.sourceStockPlaceholder && sku.stock === null).length)
+const unconfirmedStocks = computed(() => (draft.value?.skus ?? []).filter((sku) => sku.sourceStockUnconfirmed && sku.stock === null).length)
+const unconfirmedPrices = computed(() => (draft.value?.skus ?? []).filter((sku) => sku.sourcePriceUnconfirmed && sku.price === null).length)
 let idSequence = 0
 function newId(prefix: string) { return `${prefix}-${Date.now().toString(36)}-${++idSequence}` }
 
@@ -195,6 +226,10 @@ function assignImage(target: ImageTarget, url: string) {
   } else imageList(target.kind).push({ id: newId('image'), url })
 }
 function openImagePicker(target: ImageTarget) { imageTarget.value = target; newImageUrl.value = ''; urlDialog.value = true }
+function chooseSourceImage(url: string) {
+  if (imageTarget.value) assignImage(imageTarget.value, url)
+  urlDialog.value = false
+}
 function saveImageUrl() {
   try {
     const parsed = new URL(newImageUrl.value.trim())
@@ -279,6 +314,7 @@ const skuColumns = computed<DataTableColumns<SkuCombination>>(() => [
               <span>分组 {{ currentProduct?.groupName ?? '未分组' }}</span>
             </div>
             <div class="product-editor__actions">
+              <AppButton size="small" :disabled="busy" @click="inspectCurrent">检查商品</AppButton>
               <AppButton size="small" :disabled="!groupable || busy || !productId" @click="productId && emit('group', productId)">移动分组</AppButton>
               <AppButton size="small" disabled>导出商品数据包</AppButton>
             </div>
@@ -325,6 +361,15 @@ const skuColumns = computed<DataTableColumns<SkuCombination>>(() => [
                   </div>
                 </div>
               </article>
+              <article v-if="tab === 'images' && sourceSkuImages.length" class="product-editor__image-group">
+                <header><strong>采集 SKU 图</strong></header>
+                <div class="product-editor__images">
+                  <div v-for="image in sourceSkuImages" :key="image.url" class="product-editor__image">
+                    <DeferredPreviewThumbnail :src="image.url" :title="image.label" />
+                    <NText class="product-editor__image-label">{{ image.label }}</NText>
+                  </div>
+                </div>
+              </article>
             </section>
             <section v-show="tab === 'attributes'" class="product-editor__section">
               <NAlert type="warning">类目属性规则待接入；来源属性仅供核对。</NAlert>
@@ -333,6 +378,14 @@ const skuColumns = computed<DataTableColumns<SkuCombination>>(() => [
                   <AppInput :model-value="attribute.values.map((value) => value.name).join('、')" readonly />
                 </NFormItem>
               </div>
+              <template v-if="draft.sourceAttributes?.length">
+                <strong>来源属性</strong>
+                <div class="product-editor__attributes">
+                  <NFormItem v-for="attribute in draft.sourceAttributes" :key="attribute.id" :label="attribute.name || attribute.id">
+                    <AppInput :model-value="attribute.values.map((value) => value.name).join('、')" readonly />
+                  </NFormItem>
+                </div>
+              </template>
             </section>
             <section v-show="tab === 'sku'" class="product-editor__section">
               <div class="product-editor__section-heading"><strong>销售规格</strong><AppButton size="small" :disabled="draft.dimensions.length >= 3" @click="addDimension">添加规格类型</AppButton></div>
@@ -356,6 +409,9 @@ const skuColumns = computed<DataTableColumns<SkuCombination>>(() => [
                 </div>
               </div>
               <div class="product-editor__section-heading"><strong>价格与库存</strong></div>
+              <NAlert v-if="placeholderStocks" type="warning">{{ placeholderStocks }} 个 SKU 的采集库存为占位值，请填写库存。</NAlert>
+              <NAlert v-if="unconfirmedStocks" type="warning">{{ unconfirmedStocks }} 个 SKU 的采集库存需确认，请填写库存。</NAlert>
+              <NAlert v-if="unconfirmedPrices" type="warning">{{ unconfirmedPrices }} 个 SKU 的采集价格需确认，请填写价格。</NAlert>
               <NAlert v-if="grid.tooMany" type="warning">规格组合超过 1000 项，请减少规格值后编辑。</NAlert>
               <AppTable :columns="skuColumns" :data="grid.combinations" :row-key="(row) => (row as SkuCombination).key"
                 :scroll-x="Math.max(700, draft.dimensions.length * 140 + 630)" bordered />
@@ -383,9 +439,28 @@ const skuColumns = computed<DataTableColumns<SkuCombination>>(() => [
     negative-text="取消" @confirm="confirmAction" @cancel="confirmation = null" @update:show="!$event && (confirmation = null)">
     {{ confirmation?.content }}
   </AppDialog>
+  <AppDialog :show="!!inspection" title="商品检查" positive-text="关闭" :show-negative="false"
+    @confirm="inspection = null" @update:show="!$event && (inspection = null)">
+    <NAlert type="warning">平台类目与属性预检尚未接入，商品数据包暂不能发布。</NAlert>
+    <div v-if="inspection?.issues.length" class="product-editor__issues">
+      <AppButton v-for="(issue, index) in inspection.issues" :key="`${issue.code}-${index}`" tone="link"
+        @click="tab = issue.tab; inspection = null">{{ issue.message }}</AppButton>
+    </div>
+    <NText v-else>本地检查通过。</NText>
+  </AppDialog>
   <AppDialog :show="urlDialog" title="添加图片" positive-text="添加链接" negative-text="取消" :loading="uploading"
     @confirm="saveImageUrl" @cancel="urlDialog = false" @update:show="!$event && (urlDialog = false)">
     <NFormItem label="图片链接"><AppInput v-model="newImageUrl" aria-label="图片链接" /></NFormItem>
+    <div v-if="imageTarget?.kind === 'spec' && sourceSkuImages.length" class="product-editor__source-picker">
+      <strong>采集 SKU 图</strong>
+      <div class="product-editor__images">
+        <AppButton v-for="image in sourceSkuImages" :key="image.url" class="product-editor__source-choice"
+          tone="text" @click="chooseSourceImage(image.url)">
+          <span class="product-editor__source-thumb"><DeferredPreviewThumbnail :src="image.url" :title="image.label" /></span>
+          <span class="product-editor__image-label">{{ image.label }}</span>
+        </AppButton>
+      </div>
+    </div>
     <input ref="fileInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden @change="selectFile" />
     <AppButton :disabled="!assetUploads || uploading" @click="fileInput?.click()">上传本地图片</AppButton>
   </AppDialog>
@@ -408,6 +483,13 @@ const skuColumns = computed<DataTableColumns<SkuCombination>>(() => [
 .product-editor__images { display:flex; gap:var(--space-3); overflow-x:auto; padding-bottom:var(--space-2); }
 .product-editor__image { flex:0 0 128px; min-width:0; padding:var(--space-2); border:1px solid var(--border-subtle); border-radius:var(--radius-card); text-align:center; }
 .product-editor__image :deep(.product-image) { --product-image-size:112px; }
+.product-editor__image :deep(.deferred-preview-thumbnail) { display:block; height:112px; }
+.product-editor__image-label { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.product-editor__source-picker { display:grid; gap:var(--space-2); margin-bottom:var(--space-3); }
+.product-editor__issues { display:grid; justify-items:start; gap:var(--space-1); margin-top:var(--space-3); }
+.product-editor__source-choice { flex:0 0 104px; min-width:0; height:auto; padding:var(--space-2); display:grid; justify-items:center; }
+.product-editor__source-thumb { display:block; width:80px; height:80px; pointer-events:none; }
+.product-editor__source-thumb :deep(.product-image) { --product-image-size:80px; }
 .product-editor__image-actions { display:flex; justify-content:center; gap:var(--space-1); }
 .product-editor__attributes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-3); }
 .product-editor__axis { display:grid; gap:var(--space-3); padding:var(--space-3); background:var(--bg-surface-raised); border:1px solid var(--border-subtle); border-radius:var(--radius-card); }

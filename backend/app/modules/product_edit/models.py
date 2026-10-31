@@ -43,6 +43,12 @@ class SkuDraft(EditModel):
     sourceSkuId: str | None = Field(default=None, max_length=128)
     sourceLabel: str = Field(default="", max_length=500)
     sourceStatusRaw: str | None = Field(default=None, max_length=128)
+    sourceImageUrl: str | None = Field(default=None, max_length=10000)
+    sourcePriceRaw: str | None = Field(default=None, max_length=64)
+    sourcePriceUnconfirmed: bool = False
+    sourceStockRaw: str | None = Field(default=None, max_length=64)
+    sourceStockPlaceholder: bool = False
+    sourceStockUnconfirmed: bool = False
     specValueIds: dict[str, str] = Field(default_factory=dict, max_length=8)
     unmappedSpecIds: list[str] = Field(default_factory=list, max_length=16)
     price: str | None = Field(default=None, max_length=24)
@@ -73,6 +79,8 @@ class ProductAttribute(EditModel):
 
 class ProductDraft(EditModel):
     title: str = Field(default="", max_length=1000)
+    sourceCategoryIds: list[str] = Field(default_factory=list, max_length=4)
+    sourceAttributes: list[ProductAttribute] = Field(default_factory=list, max_length=300)
     categoryIds: list[str] = Field(default_factory=list, max_length=4)
     categoryPath: str = Field(default="", max_length=1000)
     mainImages: list[ImageItem] = Field(default_factory=list, max_length=100)
@@ -109,6 +117,28 @@ class SaveDraft(EditModel):
     def valid_title(self):
         validate_title(self.draft.title)
         return self
+
+
+class InspectDraft(EditModel):
+    expectedRevision: int = Field(strict=True, ge=0)
+    sourceFingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    draft: ProductDraft
+
+
+class InspectionIssue(EditModel):
+    code: str
+    tab: Literal["base", "images", "attributes", "sku"]
+    message: str
+    kind: Literal["local", "rpa"]
+
+
+class DraftInspection(EditModel):
+    localStatus: Literal["passed", "issues"]
+    rpaStatus: Literal["compatible", "blocked"]
+    platformStatus: Literal["not_checked"]
+    canPublish: Literal[False]
+    candidateSha256: str | None
+    issues: list[InspectionIssue]
 
 
 class CreateManualProduct(EditModel):

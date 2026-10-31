@@ -23,6 +23,9 @@ class FakeEditor:
         return EditorState(productId=product_id, revision=0, sourceFingerprint=FINGERPRINT,
                            sourceChanged=False, draft=ProductDraft(title="测试商品"))
 
+    def read_context(self, product_id):
+        return self.read(product_id), "douyin", product_id
+
     def save(self, product_id, body):
         assert body.expectedRevision == 0 and body.sourceFingerprint == FINGERPRINT
         return EditorState(productId=product_id, revision=1, sourceFingerprint=FINGERPRINT,
@@ -78,3 +81,24 @@ def test_missing_schema_or_database_permissions_fail_closed(client):
     assert http.get(f"/api/v1/products/{PRODUCT}/edit-draft", headers=ADMIN).status_code == 503
     editor.manual_ready = False
     assert http.post("/api/v1/products/manual", headers=ADMIN, json={"title": "商品"}).status_code == 503
+
+
+def test_inspect_is_read_only_guarded_and_cannot_claim_platform_precheck(client, monkeypatch):
+    http, editor = client
+    path = f"/api/v1/products/{PRODUCT}/edit-draft/inspect"
+    body = {"expectedRevision": 0, "sourceFingerprint": FINGERPRINT, "draft": {"title": ""}}
+    assert http.post(path, json=body).status_code == 401
+    assert http.post(path, headers=RPA, json=body).status_code == 401
+    result = http.post(path, headers=ADMIN, json=body)
+    assert result.status_code == 200
+    assert result.json()["platformStatus"] == "not_checked"
+    assert result.json()["canPublish"] is False
+    assert {item["code"] for item in result.json()["issues"]} >= {"TITLE_INVALID", "TARGET_CATEGORY_REQUIRED"}
+    assert http.post(path, headers=ADMIN, json={**body, "expectedRevision": 1}).status_code == 409
+    assert http.post(path, headers=ADMIN, json={**body, "sourceFingerprint": "b" * 64}).status_code == 409
+    editor.ready = False
+    assert http.post(path, headers=ADMIN, json=body).status_code == 503
+    editor.ready = True
+    monkeypatch.setenv("BACKEND_ENABLE_PRODUCT_EDITS", "false")
+    get_settings.cache_clear()
+    assert http.post(path, headers=ADMIN, json=body).status_code == 403

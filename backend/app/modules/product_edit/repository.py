@@ -74,9 +74,15 @@ class EditorRepository:
             FROM product_workbench_edits WHERE product_id=:id"""), {"id": product_id}).mappings().first()
 
     def read(self, product_id: str) -> EditorState:
+        state, _, _ = self.read_context(product_id)
+        return state
+
+    def read_context(self, product_id: str) -> tuple[EditorState, str, str | None]:
         with self.engine.connect().execution_options(isolation_level="REPEATABLE READ", postgresql_readonly=True) as conn, conn.begin():
             source = self._source(conn, product_id)
-            return self._state(source, self._saved(conn, product_id))
+            product = source["product"]
+            return (self._state(source, self._saved(conn, product_id)),
+                    product["source_platform"], product["source_product_id"])
 
     def save(self, product_id: str, body: SaveDraft) -> EditorState:
         with self.engine.begin() as conn:

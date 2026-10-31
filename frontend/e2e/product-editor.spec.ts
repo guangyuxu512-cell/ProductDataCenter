@@ -45,6 +45,10 @@ async function fixtures(page: Page) {
     }
     if (pathname === '/api/v1/products/group' && method === 'PATCH') return route.fulfill({ json: { updated: route.request().postDataJSON().productIds, groupId } })
     if (pathname === '/api/v1/products') return route.fulfill({ json: { items: [...states.values()].map((item) => row(item.productId, item.draft.title)), total: states.size, totalIncluded: true, limit: 20, offset: 0 } })
+    if (/^\/api\/v1\/products\/.+\/edit-draft\/inspect$/.test(pathname) && method === 'POST') {
+      return route.fulfill({ json: { localStatus: 'issues', rpaStatus: 'blocked', platformStatus: 'not_checked', canPublish: false,
+        candidateSha256: null, issues: [{ code: 'SKU_STOCK_REQUIRED', tab: 'sku', message: '第 1 个 SKU 缺少库存', kind: 'local' }] } })
+    }
     const edit = pathname.match(/^\/api\/v1\/products\/(.+)\/edit-draft$/)
     if (edit) {
       const id = decodeURIComponent(edit[1]), current = states.get(id)!
@@ -119,4 +123,34 @@ test('超长标题保留原文但不能保存，修改至上限后可以保存',
   await title.fill('商'.repeat(30))
   await page.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => writes.length).toBe(1)
+})
+
+test('商品检查指出问题位置，且不会保存或冒充平台预检', async ({ page }) => {
+  const { writes } = await fixtures(page)
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品' }).first().click()
+  await page.getByRole('button', { name: '检查商品', exact: true }).click()
+  await expect(page.getByText('平台类目与属性预检尚未接入，商品数据包暂不能发布。')).toBeVisible()
+  await page.getByRole('button', { name: '第 1 个 SKU 缺少库存' }).click()
+  await expect(page.getByText('价格与库存', { exact: true })).toBeVisible()
+  expect(writes).toHaveLength(0)
+})
+
+test('保留采集 SKU 图供选择，并提示占位库存', async ({ page }) => {
+  const { states } = await fixtures(page)
+  const draft = states.get(first)!.draft
+  draft.skus[0].sourceImageUrl = photo
+  draft.skus[0].sourceLabel = '来源黑色图'
+  draft.skus[0].sourceStockPlaceholder = true
+  draft.skus[0].stock = null
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品' }).first().click()
+  await page.getByText('图文信息', { exact: true }).click()
+  await expect(page.getByText('采集 SKU 图', { exact: true })).toBeVisible()
+  await page.getByText('规格与 SKU', { exact: true }).click()
+  await expect(page.getByText('1 个 SKU 的采集库存为占位值，请填写库存。')).toBeVisible()
+  await page.getByRole('button', { name: '换图', exact: true }).first().click()
+  await expect(page.getByRole('button', { name: /来源黑色图/ })).toBeVisible()
+  await page.getByRole('button', { name: /来源黑色图/ }).click()
+  await expect(page.getByRole('button', { name: /来源黑色图/ })).not.toBeVisible()
 })
