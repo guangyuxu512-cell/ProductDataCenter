@@ -160,6 +160,9 @@ def test_edit_draft_is_independent_from_collector_and_rpa_original(engine):
     # Both original source text and edited title remain searchable; pagination
     # operates over the filtered products before draft enrichment.
     assert products.list(parse_product_list_options({"q": "厨房收纳"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "厨房"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "人工修改", "platform": "douyin", "groupId": "ungrouped"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "人工修改", "platform": "pinduoduo"}), include_edits=True)["total"] == 0
     assert products.list(parse_product_list_options({"q": "人工%标题"}), include_edits=True)["total"] == 1
     assert products.list(parse_product_list_options({"q": "人工%标题", "offset": "1"}), include_edits=True)["items"] == []
     assert products.list(parse_product_list_options({"productId": product_id}))["items"][1]["title"] == "厨房收纳盒"

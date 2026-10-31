@@ -165,11 +165,37 @@ finally:
         server.kill()
         server.wait()
 
+plans = {}
+if EDIT_DRAFTS:
+    from app.modules.products.queries import build_product_list_queries, parse_product_list_options
+
+    def compact_plan(node):
+        return {key: value for key, value in {
+            'node': node.get('Node Type'), 'index': node.get('Index Name'),
+            'rows': node.get('Actual Rows'), 'time_ms': node.get('Actual Total Time'),
+            'children': [compact_plan(child) for child in node.get('Plans', [])],
+        }.items() if value is not None and value != []}
+
+    plan_engine = create_engine(DATABASE_URL)
+    with plan_engine.connect() as conn:
+        for name, params in [('keyword_four_chars', {'q': '厨房收纳'}),
+                             ('keyword_two_chars', {'q': '厨房'}),
+                             ('edited_title_four_chars', {'q': '人工编辑'}),
+                             ('deep_offset_299800', {'offset': '299800', 'includeTotal': 'false'})]:
+            listing, count = build_product_list_queries(parse_product_list_options(params), include_edits=True)
+            for label, query in [('list', listing), ('count', count)]:
+                if query:
+                    sql, values = query.dbapi()
+                    explain = conn.exec_driver_sql('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' + sql, values).scalar_one()[0]
+                    plans[f'{name}_{label}'] = {'execution_ms': explain['Execution Time'],
+                                                  'plan': compact_plan(explain['Plan'])}
+    plan_engine.dispose()
+
 report = {'environment': 'GitHub Actions isolated PostgreSQL, synthetic data, warm cache, loopback HTTP',
           'postgresql': pg_version, 'counts': counts, 'setup_seconds': setup_seconds,
           'product_edit_enabled': EDIT_DRAFTS, 'synthetic_drafts': 30000 if EDIT_DRAFTS else 0,
           'notes': 'HTTP API only; no frontend render, image download, real NAS or production data.', 'cases': measurements,
-          'rpa_readonly_auth_and_uu': 'pass'}
+          'rpa_readonly_auth_and_uu': 'pass', 'query_plans': plans}
 destination = ROOT / 'benchmark-results.json'
 destination.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print(json.dumps(report, ensure_ascii=False, indent=2))

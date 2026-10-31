@@ -110,6 +110,7 @@ class Query:
 def build_product_list_queries(options: ProductListOptions, *, include_edits: bool = False) -> tuple[Query, Query | None]:
     params: list = []
     where: list[str] = []
+    selective_keyword = None
 
     def bind(value) -> str:
         params.append(value)
@@ -129,13 +130,12 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
       OR {alias}.category_path ILIKE {p}
     ))"""
         if include_edits:
-            # Keep each GIN search in its own branch. An OR against an edit
-            # subquery caused PostgreSQL 16 to scan every product.
-            where.append(f"""p.product_id IN (
-                SELECT s.product_id FROM products s WHERE {source_match('s')}
-                UNION
-                SELECT product_id FROM product_workbench_edits WHERE display_title ILIKE {p}
-            )""")
+            # Short or wildcard-heavy searches can match a large fraction of the
+            # catalogue, for which an ordered scan avoids a costly large union.
+            if any(len(part) >= 3 for part in re.split(r"[%_]+", options.query)):
+                selective_keyword = p
+            else:
+                where.append(f"({source_match('p')} OR p.product_id IN (SELECT product_id FROM product_workbench_edits WHERE display_title ILIKE {p}))")
         else:
             where.append(source_match('p'))
     if options.source_platform:
@@ -153,7 +153,23 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
     elif options.captured_to:
         where.append(f"p.captured_at < (({bind(options.captured_to)}::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')")
     filters = " AND ".join(where) or "true"
-    count = Query(f"SELECT count(*)::integer AS total FROM products p WHERE {filters}", params.copy()) if options.include_total else None
+    matches = ""
+    if selective_keyword:
+        # Query the two indexes separately, including all platform/group/date
+        # filters in both branches. Carry ordering keys so pagination happens
+        # before fetching product and draft details.
+        source_filters = filters.replace("p.", "s.")
+        matches = f"""matches AS MATERIALIZED (
+            SELECT s.product_id, s.captured_at, s.updated_at FROM products s
+             WHERE {source_match('s')} AND ({source_filters})
+            UNION
+            SELECT p.product_id, p.captured_at, p.updated_at FROM product_workbench_edits e
+              JOIN products p ON p.product_id=e.product_id
+             WHERE e.display_title ILIKE {selective_keyword} AND ({filters})
+        )"""
+    count_sql = (f"WITH {matches} SELECT count(*)::integer AS total FROM matches" if matches
+                 else f"SELECT count(*)::integer AS total FROM products p WHERE {filters}")
+    count = Query(count_sql, params.copy()) if options.include_total else None
     limit, offset = bind(options.limit), bind(options.offset)
     title = "COALESCE(e.display_title, p.title) AS title" if include_edits else "p.title"
     price_min = """CASE WHEN e.product_id IS NULL THEN p.current_price_min ELSE
@@ -175,16 +191,28 @@ def build_product_list_queries(options: ProductListOptions, *, include_edits: bo
     # Restrict the expensive draft/JSON enrichment to the actual page. Joining
     # drafts before OFFSET made PostgreSQL visit hundreds of thousands of drafts
     # for a deep page, even though only 20 rows were returned.
-    page = f"""WITH page AS MATERIALIZED (
-            SELECT p.product_id, p.source_platform, p.source_product_id, p.group_id,
+    page_fields = """p.product_id, p.source_platform, p.source_product_id, p.group_id,
                    p.title, p.title_status, p.shop_name, p.category_level_4, p.category_path,
                    p.current_price_min, p.current_price_max, p.sku_count, p.main_image_count,
                    p.detail_image_count, p.sku_image_count, p.asset_rel_path, p.workbook_rel_path,
-                   p.raw_rel_path, p.captured_at, p.updated_at
+                   p.raw_rel_path, p.captured_at, p.updated_at"""
+    if matches:
+        page = f"""WITH {matches}, page_keys AS MATERIALIZED (
+            SELECT product_id, captured_at, updated_at FROM matches
+             ORDER BY captured_at DESC NULLS LAST, updated_at DESC, product_id
+             LIMIT {limit} OFFSET {offset}
+        ), page AS MATERIALIZED (
+            SELECT {page_fields} FROM page_keys k JOIN products p ON p.product_id=k.product_id
+        )"""
+    elif include_edits:
+        page = f"""WITH page AS MATERIALIZED (
+            SELECT {page_fields}
               FROM products p WHERE {filters}
              ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
              LIMIT {limit} OFFSET {offset}
-        )""" if include_edits else ""
+        )"""
+    else:
+        page = ""
     source = "page" if include_edits else "products"
     tail = ("" if include_edits else f"WHERE {filters}") + """\n             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id"""
     if not include_edits:
