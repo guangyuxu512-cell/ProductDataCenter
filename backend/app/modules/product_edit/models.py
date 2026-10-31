@@ -42,6 +42,7 @@ class SkuDraft(EditModel):
     id: str = Field(min_length=1, max_length=128)
     sourceSkuId: str | None = Field(default=None, max_length=128)
     sourceLabel: str = Field(default="", max_length=500)
+    sourceStatusRaw: str | None = Field(default=None, max_length=128)
     specValueIds: dict[str, str] = Field(default_factory=dict, max_length=8)
     unmappedSpecIds: list[str] = Field(default_factory=list, max_length=16)
     price: str | None = Field(default=None, max_length=24)

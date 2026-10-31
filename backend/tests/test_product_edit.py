@@ -29,7 +29,7 @@ def example_payload():
     }
 
 
-def test_normalization_preserves_explicit_sku_states_and_never_invents_missing_combinations():
+def test_normalization_keeps_source_status_without_guessing_and_never_invents_combinations():
     images = [{"image_type": "main", "sort_order": 0, "source_url": "https://example.test/a.jpg", "rel_path": ""}]
     draft = draft_from_source(example_source(), [], images, example_payload())
     assert draft.categoryIds == ["123", "456"]
@@ -38,7 +38,8 @@ def test_normalization_preserves_explicit_sku_states_and_never_invents_missing_c
     assert len(draft.skus) == 3
     assert draft.skus[0].sourceSkuId == "1234567890123456789"
     assert draft.skus[0].specValueIds == {"source-dimension-0": "source-value-0-0", "source-dimension-1": "source-value-1-0"}
-    assert draft.skus[0].state == "active" and draft.skus[1].state == "inactive"
+    assert draft.skus[0].state == "unknown" and draft.skus[1].state == "unknown"
+    assert draft.skus[0].sourceStatusRaw == "true" and draft.skus[1].sourceStatusRaw == "false"
     assert draft.skus[2].state == "unknown" and draft.skus[2].unmappedSpecIds == ["unknown"]
     assert draft.skus[2].stock is None
     assert draft.attributes[0].values[0].name == "塑料"

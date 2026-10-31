@@ -5,6 +5,7 @@ export interface EditorSku {
   id: string
   sourceSkuId: string | null
   sourceLabel: string
+  sourceStatusRaw?: string | null
   specValueIds: Record<string, string>
   unmappedSpecIds: string[]
   price: string | null

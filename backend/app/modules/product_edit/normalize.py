@@ -54,14 +54,6 @@ def _stock(value) -> int | None:
     return number if number <= 2_147_483_647 else None
 
 
-def _state(value) -> str:
-    if value is True or type(value) is int and value == 1 or value in ("1", "true"):
-        return "active"
-    if value is False or type(value) is int and value == 0 or value in ("0", "false"):
-        return "inactive"
-    return "unknown"
-
-
 def draft_from_source(product: dict, skus: list[dict], images: list[dict], payload) -> ProductDraft:
     payload = _dict(payload)
     goods = _dict(payload.get("goodsInfo"))
@@ -114,9 +106,12 @@ def draft_from_source(product: dict, skus: list[dict], images: list[dict], paylo
         draft_skus.append({
             "id": f"source-sku-{index}", "sourceSkuId": _text(sku.get("sku_id")) or None,
             "sourceLabel": _text(sku.get("sku_name")), "specValueIds": mappings,
+            "sourceStatusRaw": json.dumps(sku["sku_status"], ensure_ascii=False)[:128]
+                               if "sku_status" in sku and isinstance(sku["sku_status"], (str, int, float, bool)) else None,
             "unmappedSpecIds": unmapped, "price": _price(sku.get("price")),
             "stock": _stock(_dict(sku.get("stock_info")).get("stock_num")),
-            "state": _state(sku.get("sku_status")),
+            # 来源的状态枚举尚未用真实样本验证，不能猜测 0/1 是在售还是下架。
+            "state": "unknown",
         })
     if not raw_skus:
         # 采集表没有稳定的规格值映射时，只保留原 SKU，不按行号推测规格或图片。
