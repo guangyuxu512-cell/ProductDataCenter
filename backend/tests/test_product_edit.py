@@ -77,6 +77,9 @@ def test_douyin_off_sale_requires_explicit_raw_status_and_placeholder_stock_is_n
     assert draft.skus[1].sourceStockRaw == "999" and draft.skus[1].sourceStockPlaceholder
     payload["goodsInfo"]["skuInfoMap"]["white_short"] = {}
     assert draft_from_source(example_source(), [], [], payload).skus[1].state == "unknown"
+    payload["goodsSkuInfo"]["spec_detail"]["value"][1]["price"] = "0"
+    zero_price = draft_from_source(example_source(), [], [], payload).skus[1]
+    assert zero_price.price is None and zero_price.sourcePriceUnconfirmed and zero_price.sourcePriceRaw == "0"
 
 
 def test_composite_source_spec_ids_are_matched_only_when_unambiguous():

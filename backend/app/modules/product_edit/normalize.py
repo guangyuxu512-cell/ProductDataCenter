@@ -273,6 +273,9 @@ def draft_from_source(product: dict, skus: list[dict], images: list[dict], paylo
         original_status = original_sku.get("sku_status")
         stock = _stock(_dict(sku.get("stock_info")).get("stock_num"))
         stock_placeholder = is_douyin and "skuInfoMap" in goods and stock == 999
+        price = _price(sku.get("price"))
+        # The source converter uses zero if it cannot extract a price.
+        price_unconfirmed = is_douyin and "skuInfoMap" in goods and price is not None and Decimal(price) == 0
         # The collector's normalized false also covers a missing raw status.
         # Only an explicit raw "1" confirms the false/off branch.
         known_off = status is False and type(original_status) in (str, int) and str(original_status) == "1"
@@ -283,7 +286,9 @@ def draft_from_source(product: dict, skus: list[dict], images: list[dict], paylo
                                if "sku_status" in sku and isinstance(sku["sku_status"], (str, int, float, bool)) else None,
             "sourceStockRaw": str(stock) if stock is not None else None,
             "sourceStockPlaceholder": stock_placeholder,
-            "unmappedSpecIds": unmapped, "price": _price(sku.get("price")),
+            "sourcePriceRaw": price,
+            "sourcePriceUnconfirmed": price_unconfirmed,
+            "unmappedSpecIds": unmapped, "price": None if price_unconfirmed else price,
             "stock": None if stock_placeholder else stock,
             "state": ("active" if status is True else "inactive" if known_off else "unknown")
                      if is_douyin else "unknown",
