@@ -29,6 +29,8 @@ def engine():
         assert conn.execute(text("SELECT count(*) FROM pg_tables WHERE schemaname='public'")).scalar_one() == 0, "需要全新的隔离库"
         for path in sorted((Path(__file__).parent / "fixtures/collector").glob("*.sql")):
             conn.exec_driver_sql(path.read_text(encoding="utf-8"))
+        proposal = Path(__file__).parents[2] / "docs/migrations/product-edit-v1-proposal.sql"
+        conn.exec_driver_sql(proposal.read_text(encoding="utf-8"))
         conn.execute(text("""INSERT INTO products(product_id, source_platform, source_product_id, title,
             shop_name, category_path, current_price_min, current_price_max, captured_at, uu_json)
             VALUES ('3760269504500859111', 'douyin', '3760269504500859111', '厨房收纳盒', '测试店铺', '家居/厨房',
@@ -129,3 +131,101 @@ def test_group_crud_preserves_products_skus_uu_and_files(engine, tmp_path):
         indexes = conn.execute(text("SELECT indexname FROM pg_indexes WHERE tablename='products'")).scalars().all()
     assert before == after
     assert "products_search_trgm_idx" in indexes and "products_captured_at_idx" in indexes
+
+
+def test_edit_draft_is_independent_from_collector_and_rpa_original(engine):
+    from app.modules.product_edit.models import ImageItem, SaveDraft
+    from app.modules.product_edit.repository import EditConflict, EditorRepository, SourceChanged
+    from app.modules.products.errors import ProductDraftPending
+
+    product_id = "3760269504500859111"
+    editor, products = EditorRepository(engine), ProductRepository(engine)
+    assert editor.permissions() == (True, True)
+    before = products.export_rows([product_id])[0]
+    state = editor.read(product_id)
+    assert state.revision == 0 and not state.sourceChanged
+    context, platform, source_id = editor.read_context(product_id)
+    assert context.sourceFingerprint == state.sourceFingerprint and platform == "douyin" and source_id == product_id
+    _, platform, source_id = editor.read_context("pdd:3760269504500859111")
+    assert platform == "pinduoduo" and source_id == product_id
+    state.draft.title = "人工修改商品标题"
+    state.draft.mainImages = [ImageItem(id="new-image", url="https://fixture.invalid/new.png")]
+    saved = editor.save(product_id, SaveDraft(expectedRevision=0, sourceFingerprint=state.sourceFingerprint, draft=state.draft))
+    assert saved.revision == 1 and saved.draft.title == "人工修改商品标题"
+    assert products.export_rows([product_id])[0] == before
+    with pytest.raises(ProductDraftPending):
+        products.exportable_rows([product_id])
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT title FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one() == "厨房收纳盒"
+        assert conn.execute(text("SELECT source_url FROM product_images WHERE product_id=:id AND image_type='main'"), {"id": product_id}).scalar_one() == "https://fixture.invalid/main.png"
+    edited_list = products.list(parse_product_list_options({"q": "人工修改"}), include_edits=True)
+    assert edited_list["total"] == 1 and edited_list["items"][0]["title"] == "人工修改商品标题"
+    assert edited_list["items"][0]["main_image_url"] == "https://fixture.invalid/new.png"
+    # Both original source text and edited title remain searchable; pagination
+    # operates over the filtered products before draft enrichment.
+    assert products.list(parse_product_list_options({"q": "厨房收纳"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "厨房"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "人工修改", "platform": "douyin", "groupId": "ungrouped"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "人工修改", "platform": "pinduoduo"}), include_edits=True)["total"] == 0
+    assert products.list(parse_product_list_options({"q": "人工%标题"}), include_edits=True)["total"] == 1
+    assert products.list(parse_product_list_options({"q": "人工%标题", "offset": "1"}), include_edits=True)["items"] == []
+    assert products.list(parse_product_list_options({"productId": product_id}))["items"][1]["title"] == "厨房收纳盒"
+    with pytest.raises(EditConflict):
+        editor.save(product_id, SaveDraft(expectedRevision=0, sourceFingerprint=state.sourceFingerprint, draft=state.draft))
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET title='重采后来源标题' WHERE product_id=:id"), {"id": product_id})
+        with pytest.raises(SourceChanged):
+            editor.save(product_id, SaveDraft(expectedRevision=1, sourceFingerprint=state.sourceFingerprint, draft=state.draft))
+        after_capture = editor.read(product_id)
+        assert after_capture.sourceChanged and after_capture.draft.title == "人工修改商品标题"
+        context, _, _ = editor.read_context(product_id)
+        assert context.sourceChanged and context.revision == 1
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET title='厨房收纳盒' WHERE product_id=:id"), {"id": product_id})
+            conn.execute(text("DELETE FROM product_workbench_edits WHERE product_id=:id"), {"id": product_id})
+
+
+def test_data_package_and_draft_status_share_a_snapshot(engine):
+    from app.modules.products.errors import ProductDraftPending
+    from app.modules.product_edit.models import ProductDraft
+
+    product_id = "3760269504500859111"
+    injected = False
+    def after_cursor(conn, cursor, statement, parameters, context, executemany):
+        nonlocal injected
+        if not injected and "to_regclass('public.product_workbench_edits')" in statement:
+            injected = True
+            with engine.begin() as writer:
+                writer.execute(text("""INSERT INTO product_workbench_edits
+                    (product_id,revision,source_fingerprint,draft)
+                    VALUES (:id,1,:fingerprint,CAST(:draft AS jsonb))"""),
+                    {"id": product_id, "fingerprint": "a" * 64, "draft": ProductDraft(title="测试").model_dump_json()})
+    event.listen(engine, "after_cursor_execute", after_cursor)
+    try:
+        assert ProductRepository(engine).exportable_rows([product_id])[0]["product_id"] == product_id
+        with pytest.raises(ProductDraftPending):
+            ProductRepository(engine).exportable_rows([product_id])
+    finally:
+        event.remove(engine, "after_cursor_execute", after_cursor)
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM product_workbench_edits WHERE product_id=:id"), {"id": product_id})
+
+
+def test_manual_creation_has_cloud_identity_and_no_fabricated_source_id(engine):
+    from app.modules.product_edit.repository import EditorRepository
+
+    editor = EditorRepository(engine)
+    manual = editor.create_manual("手动商品", None)
+    try:
+        assert manual.productId.startswith("manual:") and manual.revision == 1
+        with engine.connect() as conn:
+            product = conn.execute(text("SELECT source_platform, source_product_id, uu_json FROM products WHERE product_id=:id"),
+                                   {"id": manual.productId}).mappings().one()
+        assert product["source_platform"] == "manual" and product["source_product_id"] is None and product["uu_json"] is None
+        result = ProductRepository(engine).list(parse_product_list_options({"productId": manual.productId}), include_edits=True)
+        assert result["items"][0]["title"] == "手动商品"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": manual.productId})

@@ -27,3 +27,15 @@ class GroupNameConflict(AppError):
 class ExportUnavailable(AppError):
     code = "PRODUCT_EXPORT_UNAVAILABLE"
     status_code = 409
+
+
+class ProductDraftPending(AppError):
+    code = "PRODUCT_DRAFT_PENDING"
+    message = "商品有未生成数据包的编辑草稿"
+    status_code = 409
+
+
+class DraftStatusUnavailable(AppError):
+    code = "PRODUCT_DRAFT_STATUS_UNAVAILABLE"
+    message = "商品编辑状态无法读取"
+    status_code = 503

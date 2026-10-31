@@ -1,4 +1,5 @@
 from typing import Annotated, Literal
+import os
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -24,7 +25,15 @@ Service = Annotated[ProductService, Depends(get_service)]
 
 @router.get("/capabilities", response_model=Capabilities)
 def capabilities():
-    return Capabilities(groupWrites=get_settings().enable_group_writes)
+    settings = get_settings()
+    can_edit, can_create = False, False
+    if settings.enable_product_edits:
+        from app.modules.product_edit.repository import EditorRepository
+        can_edit, can_create = EditorRepository(get_database_engine()).permissions()
+    asset_ready = bool(can_edit and settings.product_asset_root and settings.product_asset_root.is_dir()
+                       and os.access(settings.product_asset_root, os.W_OK))
+    return Capabilities(groupWrites=settings.enable_group_writes, productEdit=can_edit,
+                        manualCreate=can_create, assetUploads=asset_ready)
 
 
 @router.get("/products", response_model=ProductPage)
@@ -60,6 +69,16 @@ def move_group(body: AssignGroup, service: Service):
 @router.post("/products/export-uu")
 def export_uu(body: ProductIds, service: Service):
     content, filename, count, missing = service.export(body.productIds)
+    return Response(content=content, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Export-Count": str(count), "X-Export-Missing-Count": str(missing),
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
+@router.post("/products/export-packages")
+def export_packages(body: ProductIds, service: Service):
+    content, filename, count, missing = service.export_packages(body.productIds)
     return Response(content=content, media_type="application/zip", headers={
         "Content-Disposition": f'attachment; filename="{filename}"',
         "X-Export-Count": str(count), "X-Export-Missing-Count": str(missing),

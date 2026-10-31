@@ -34,6 +34,9 @@ class FakeRepository:
             return []
         return [{"product_id": PRODUCT, "uu_rel_path": "", "uu_text": UU.decode()}]
 
+    def exportable_rows(self, ids):
+        return self.export_rows(ids)
+
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
@@ -102,3 +105,19 @@ def test_original_uu_file_bytes_are_not_rewritten(client, tmp_path, monkeypatch)
     response = client.get(f"/rpa/v1/products/{PRODUCT}/uu", headers=AUTH)
     assert response.content == original
     assert response.headers["x-uu-sha256"] == hashlib.sha256(original).hexdigest()
+
+
+def test_saved_draft_cannot_be_silently_served_as_original(client, monkeypatch):
+    from app.modules.products.errors import ProductDraftPending
+
+    def unavailable(self, ids):
+        raise ProductDraftPending()
+
+    monkeypatch.setattr(FakeRepository, "exportable_rows", unavailable)
+    response = client.get(f"/rpa/v1/products/{PRODUCT}/uu", headers=AUTH)
+    assert response.status_code == 409
+    assert response.json()["code"] == "PRODUCT_DRAFT_PENDING"
+    for path in ("/api/v1/products/export-uu", "/api/v1/products/export-packages"):
+        response = client.post(path, headers=ADMIN, json={"productIds": [PRODUCT]})
+        assert response.status_code == 409
+        assert response.json()["code"] == "PRODUCT_DRAFT_PENDING"

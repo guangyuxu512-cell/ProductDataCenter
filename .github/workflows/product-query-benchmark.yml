@@ -1,7 +1,7 @@
 name: Isolated product query benchmark
 on:
   push:
-    branches: ['codex/product-list-thumbnails-v1']
+    branches: ['codex/product-list-thumbnails-v1', 'codex/product-edit-workbench-v1']
   workflow_dispatch:
 
 permissions:
@@ -33,6 +33,7 @@ jobs:
       - run: python scripts/benchmark-product-list.py
         env:
           BACKEND_DATABASE_URL: postgresql+psycopg://pdc_perf:isolated-perf-only@127.0.0.1:5432/product_workbench_perf
+          BENCHMARK_PRODUCT_EDITS: ${{ github.ref_name == 'codex/product-edit-workbench-v1' && '1' || '0' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

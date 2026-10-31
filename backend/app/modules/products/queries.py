@@ -74,7 +74,7 @@ def parse_product_list_options(params: Mapping[str, str]) -> ProductListOptions:
     platform, group_id = value("platform", 64).lower(), value("groupId", 64)
     if product_id and not EXACT_PRODUCT_ID_PATTERN.fullmatch(product_id):
         raise ProductRequestError("商品 ID 精确检索值无效")
-    if platform and platform not in {"douyin", "pinduoduo"}:
+    if platform and platform not in {"douyin", "pinduoduo", "manual"}:
         raise ProductRequestError("商品平台筛选无效")
     if group_id and group_id != "ungrouped" and not UUID_PATTERN.fullmatch(group_id):
         raise ProductRequestError("商品分组筛选无效")
@@ -107,9 +107,10 @@ class Query:
         }
 
 
-def build_product_list_queries(options: ProductListOptions) -> tuple[Query, Query | None]:
+def build_product_list_queries(options: ProductListOptions, *, include_edits: bool = False) -> tuple[Query, Query | None]:
     params: list = []
     where: list[str] = []
+    selective_keyword = None
 
     def bind(value) -> str:
         params.append(value)
@@ -120,13 +121,23 @@ def build_product_list_queries(options: ProductListOptions) -> tuple[Query, Quer
         where.append(f"(p.product_id = {p} OR p.source_product_id = {p})")
     elif options.query:
         p = bind(f"%{options.query}%")
-        where.append(f"""({product_search_sql()} ILIKE {p} AND (
-      p.product_id ILIKE {p}
-      OR p.source_product_id ILIKE {p}
-      OR p.title ILIKE {p}
-      OR p.shop_name ILIKE {p}
-      OR p.category_path ILIKE {p}
-    ))""")
+        def source_match(alias: str) -> str:
+            return f"""({product_search_sql(alias)} ILIKE {p} AND (
+      {alias}.product_id ILIKE {p}
+      OR {alias}.source_product_id ILIKE {p}
+      OR {alias}.title ILIKE {p}
+      OR {alias}.shop_name ILIKE {p}
+      OR {alias}.category_path ILIKE {p}
+    ))"""
+        if include_edits:
+            # Short or wildcard-heavy searches can match a large fraction of the
+            # catalogue, for which an ordered scan avoids a costly large union.
+            if any(len(part) >= 3 for part in re.split(r"[%_]+", options.query)):
+                selective_keyword = p
+            else:
+                where.append(f"({source_match('p')} OR p.product_id IN (SELECT product_id FROM product_workbench_edits WHERE display_title ILIKE {p}))")
+        else:
+            where.append(source_match('p'))
     if options.source_platform:
         where.append(f"p.source_platform = {bind(options.source_platform)}")
     if options.group_id == "ungrouped":
@@ -142,25 +153,85 @@ def build_product_list_queries(options: ProductListOptions) -> tuple[Query, Quer
     elif options.captured_to:
         where.append(f"p.captured_at < (({bind(options.captured_to)}::date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')")
     filters = " AND ".join(where) or "true"
-    count = Query(f"SELECT count(*)::integer AS total FROM products p WHERE {filters}", params.copy()) if options.include_total else None
+    matches = ""
+    if selective_keyword:
+        # Query the two indexes separately, including all platform/group/date
+        # filters in both branches. Without extra filters the edit table's
+        # foreign key already guarantees a product exists, so counting the
+        # matching IDs must not join and scan the entire products table.
+        source_filters = filters.replace("p.", "s.")
+        edited_ids = (f"""SELECT e.product_id FROM product_workbench_edits e
+             WHERE e.display_title ILIKE {selective_keyword}""" if filters == "true" else
+            f"""SELECT e.product_id FROM product_workbench_edits e
+              JOIN products p ON p.product_id=e.product_id
+             WHERE e.display_title ILIKE {selective_keyword} AND ({filters})""")
+        matches = f"""matches AS MATERIALIZED (
+            SELECT s.product_id FROM products s
+             WHERE {source_match('s')} AND ({source_filters})
+            UNION
+            {edited_ids}
+        )"""
+    count_sql = (f"WITH {matches} SELECT count(*)::integer AS total FROM matches" if matches
+                 else f"SELECT count(*)::integer AS total FROM products p WHERE {filters}")
+    count = Query(count_sql, params.copy()) if options.include_total else None
     limit, offset = bind(options.limit), bind(options.offset)
-    query = Query(f"""SELECT p.product_id, p.source_platform, p.source_product_id, p.group_id,
-                   g.group_name, p.title, p.title_status, p.shop_name,
+    title = "COALESCE(e.display_title, p.title) AS title" if include_edits else "p.title"
+    price_min = """CASE WHEN e.product_id IS NULL THEN p.current_price_min ELSE
+        (SELECT min((s->>'price')::numeric) FROM jsonb_array_elements(e.draft->'skus') s WHERE s->>'price' IS NOT NULL) END AS current_price_min""" if include_edits else "p.current_price_min"
+    price_max = """CASE WHEN e.product_id IS NULL THEN p.current_price_max ELSE
+        (SELECT max((s->>'price')::numeric) FROM jsonb_array_elements(e.draft->'skus') s WHERE s->>'price' IS NOT NULL) END AS current_price_max""" if include_edits else "p.current_price_max"
+    sku_count = "COALESCE(e.sku_count, p.sku_count) AS sku_count" if include_edits else "p.sku_count"
+    main_count = "COALESCE(e.main_image_count, p.main_image_count) AS main_image_count" if include_edits else "p.main_image_count"
+    detail_count = "COALESCE(e.detail_image_count, p.detail_image_count) AS detail_image_count" if include_edits else "p.detail_image_count"
+    sku_image_count = """CASE WHEN e.product_id IS NULL THEN p.sku_image_count ELSE
+        (SELECT count(*)::integer FROM jsonb_array_elements(e.draft->'dimensions') d,
+         LATERAL jsonb_array_elements(d->'values') v WHERE d->>'id'=e.draft->>'imageDimensionId'
+         AND COALESCE(v->>'imageUrl','') <> '') END AS sku_image_count""" if include_edits else "p.sku_image_count"
+    source_image = """(SELECT pi.source_url FROM product_images pi
+        WHERE pi.product_id = p.product_id AND pi.image_type = 'main' AND pi.source_url <> ''
+        ORDER BY pi.sort_order LIMIT 1)"""
+    main_image = f"CASE WHEN e.product_id IS NULL THEN {source_image} ELSE e.main_image_url END" if include_edits else source_image
+    edits_join = "LEFT JOIN product_workbench_edits e ON e.product_id = p.product_id" if include_edits else ""
+    # Restrict the expensive draft/JSON enrichment to the actual page. Joining
+    # drafts before OFFSET made PostgreSQL visit hundreds of thousands of drafts
+    # for a deep page, even though only 20 rows were returned.
+    page_fields = """p.product_id, p.source_platform, p.source_product_id, p.group_id,
+                   p.title, p.title_status, p.shop_name, p.category_level_4, p.category_path,
+                   p.current_price_min, p.current_price_max, p.sku_count, p.main_image_count,
+                   p.detail_image_count, p.sku_image_count, p.asset_rel_path, p.workbook_rel_path,
+                   p.raw_rel_path, p.captured_at, p.updated_at"""
+    if matches:
+        page = f"""WITH {matches}, page_keys AS MATERIALIZED (
+            SELECT p.product_id, p.captured_at, p.updated_at FROM matches m
+              JOIN products p ON p.product_id=m.product_id
+             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
+             LIMIT {limit} OFFSET {offset}
+        ), page AS MATERIALIZED (
+            SELECT {page_fields} FROM page_keys k JOIN products p ON p.product_id=k.product_id
+        )"""
+    elif include_edits:
+        page = f"""WITH page AS MATERIALIZED (
+            SELECT {page_fields}
+              FROM products p WHERE {filters}
+             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
+             LIMIT {limit} OFFSET {offset}
+        )"""
+    else:
+        page = ""
+    source = "page" if include_edits else "products"
+    tail = ("" if include_edits else f"WHERE {filters}") + """\n             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id"""
+    if not include_edits:
+        tail += f"\n             LIMIT {limit} OFFSET {offset}"
+    query = Query(f"""{page} SELECT p.product_id, p.source_platform, p.source_product_id, p.group_id,
+                   g.group_name, {title}, p.title_status, p.shop_name,
                    p.category_level_4, p.category_path,
-                   p.current_price_min, p.current_price_max, p.sku_count,
-                   p.main_image_count, p.detail_image_count, p.sku_image_count,
-                   (SELECT pi.source_url
-                      FROM product_images pi
-                     WHERE pi.product_id = p.product_id
-                       AND pi.image_type = 'main'
-                       AND pi.source_url <> ''
-                     ORDER BY pi.sort_order
-                     LIMIT 1) AS main_image_url,
+                   {price_min}, {price_max}, {sku_count},
+                   {main_count}, {detail_count}, {sku_image_count},
+                   {main_image} AS main_image_url,
                    p.asset_rel_path, p.workbook_rel_path, p.raw_rel_path,
                    p.captured_at, p.updated_at
-              FROM products p
+              FROM {source} p
               LEFT JOIN product_groups g ON g.group_id = p.group_id
-             WHERE {filters}
-             ORDER BY p.captured_at DESC NULLS LAST, p.updated_at DESC, p.product_id
-             LIMIT {limit} OFFSET {offset}""", params)
+              {edits_join}
+             {tail}""", params)
     return query, count

@@ -15,7 +15,12 @@ class ProductService:
         self.settings = settings
 
     def list(self, params):
-        return self.repository.list(parse_product_list_options(params))
+        options = parse_product_list_options(params)
+        if self.settings.enable_product_edits:
+            from app.modules.product_edit.repository import EditorRepository
+            if EditorRepository(self.repository.engine).permissions()[0]:
+                return self.repository.list(options, include_edits=True)
+        return self.repository.list(options)
 
     def detail(self, product_id: str):
         detail = self.repository.detail(product_id)
@@ -54,8 +59,12 @@ class ProductService:
             return {"updated": updated, "groupId": group_id}
 
     def export(self, product_ids: list[str]):
-        return export_archive(self.repository.export_rows(product_ids), product_ids,
+        return export_archive(self.repository.exportable_rows(product_ids), product_ids,
                               self.settings.data_root, self.settings.export_max_bytes)
+
+    def export_packages(self, product_ids: list[str]):
+        return export_archive(self.repository.exportable_rows(product_ids), product_ids,
+                              self.settings.data_root, self.settings.export_max_bytes, legacy_names=False)
 
     def image_file(self, product_id: str, kind: str, position: int):
         row = self.repository.image(product_id, kind, position)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref } from 'vue'
+import { useQueryClient } from '@tanstack/vue-query'
 import { NDatePicker, NEllipsis, NFormItem, useMessage, type DataTableColumns } from 'naive-ui'
 import { ProductInfoCell } from '@/entities/product'
 import { PlatformDisplay } from '@/entities/platform'
@@ -7,19 +8,25 @@ import { ContextSwitchBar, DataTable, FilterBar, FilterField, FormDialog,
   ManagementListSection, PaginationBar, TableToolbar } from '@/shared/components'
 import { AppButton, AppInput, AppSelect } from '@/shared/ui'
 import { useProductLibrary } from '../model/useProductLibrary'
-import { capturedTime, platformCode, priceRange } from '../model/format'
+import { capturedTime, platformCode, priceRange, productTitleLength } from '../model/format'
 import { exportProducts, moveProducts } from '../api/products'
+import { createManualProduct } from '../api/editor'
 import type { ProductRow } from '../model/nas-contracts'
 import ProductPreviewDialog from './ProductPreviewDialog.vue'
+import ProductEditorDialog from './ProductEditorDialog.vue'
 import ProductGroupManager from './ProductGroupManager.vue'
 
 const { filters, selected, detailId, list, groups, capabilities, detail, total, refresh, reset } = useProductLibrary()
 const message = useMessage()
+const queryClient = useQueryClient()
 const keyword = ref(''), capturedFrom = ref<string | null>(null), capturedTo = ref<string | null>(null)
 const managerOpen = ref(false), moveOpen = ref(false), moveTarget = ref('ungrouped'), moveIds = ref<string[]>([]), busy = ref(false)
+const manualOpen = ref(false), manualTitle = ref(''), manualGroup = ref('ungrouped')
 const rows = computed(() => list.data.value?.items ?? [])
 const groupItems = computed(() => groups.data.value ?? [])
 const canWriteGroups = computed(() => capabilities.data.value?.groupWrites === true)
+const canEdit = computed(() => capabilities.data.value?.productEdit === true)
+const canCreate = computed(() => capabilities.data.value?.manualCreate === true)
 const preview = computed(() => detailId.value ? detail.data.value ?? null : null)
 const previewIndex = computed(() => rows.value.findIndex((row) => row.product_id === detailId.value))
 function navigatePreview(direction: 'previous' | 'next') {
@@ -30,7 +37,7 @@ const groupOptions = computed(() => [
   { label: '全部分组', value: '' }, { label: '未分组', value: 'ungrouped' },
   ...groupItems.value.map((group) => ({ label: `${group.name}（${group.productCount}）`, value: group.groupId })),
 ])
-const platformOptions = [{ label: '全部平台', value: '' }, { label: '抖音/抖店', value: 'douyin' }, { label: '拼多多', value: 'pinduoduo' }]
+const platformOptions = [{ label: '全部平台', value: '' }, { label: '抖音/抖店', value: 'douyin' }, { label: '拼多多', value: 'pinduoduo' }, { label: '手动创建', value: 'manual' }]
 const viewItems = [{ key: 'all', label: '全部商品' }, { key: 'ungrouped', label: '未分组' }]
 const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败'
 
@@ -49,6 +56,26 @@ function resetFilters() {
 function openMove(ids: string[]) {
   if (!canWriteGroups.value || busy.value || !ids.length) return
   moveIds.value = [...ids]; moveTarget.value = 'ungrouped'; moveOpen.value = true
+}
+
+function openManual() {
+  manualTitle.value = ''
+  manualGroup.value = canWriteGroups.value && filters.groupId && filters.groupId !== 'ungrouped' ? filters.groupId : 'ungrouped'
+  manualOpen.value = true
+}
+
+async function submitManual() {
+  if (!canCreate.value || busy.value || !manualTitle.value.trim()) return
+  if (productTitleLength(manualTitle.value.trim()) > 60) { message.error('商品标题最多 60 个计数单位'); return }
+  busy.value = true
+  try {
+    const created = await createManualProduct(manualTitle.value, manualGroup.value === 'ungrouped' ? null : manualGroup.value)
+    queryClient.setQueryData(['product-editor', created.productId], created)
+    manualOpen.value = false; detailId.value = created.productId
+    message.success('商品草稿已创建')
+    await refresh()
+  } catch (error) { message.error(errorText(error)) }
+  finally { busy.value = false }
 }
 
 async function submitMove() {
@@ -71,7 +98,7 @@ async function download(ids: string[]) {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = result.filename
     document.body.append(anchor); anchor.click(); anchor.remove()
     setTimeout(() => URL.revokeObjectURL(url), 10_000)
-    if (result.missing) message.warning(`已导出 ${result.exported} 个商品，${result.missing} 个缺少 UU`)
+    if (result.missing) message.warning(`已导出 ${result.exported} 个商品，${result.missing} 个缺少商品数据包`)
     else message.success(`已导出 ${result.exported} 个商品`)
   } catch (error) { message.error(errorText(error)) }
   finally { busy.value = false }
@@ -91,7 +118,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   }) },
   { title: '来源平台', key: 'source_platform', width: 110, align: 'center', render: (row) => {
     const code = platformCode(row.source_platform)
-    return code ? h(PlatformDisplay, { code }) : (row.source_platform || '—')
+    return code ? h(PlatformDisplay, { code }) : (row.source_platform === 'manual' ? '手动创建' : (row.source_platform || '—'))
   } },
   { title: '分组', key: 'group_name', width: 130, align: 'center', render: (row) => row.group_name || '未分组' },
   { title: '店铺', key: 'shop_name', width: 140, align: 'center', ellipsis: { tooltip: true } },
@@ -101,7 +128,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   { title: '采集时间', key: 'captured_at', width: 176, align: 'center', render: (row) => capturedTime(row.captured_at) },
   { title: '操作', key: 'actions', width: 170, fixed: 'right', align: 'center', render: (row) => h('div', { class: 'product-library-actions' }, [
     h(AppButton, { tone: 'link', size: 'small', onClick: () => { detailId.value = row.product_id } }, () => '查看商品'),
-    h(AppButton, { size: 'small', disabled: busy.value, onClick: () => download([row.product_id]) }, () => '导出 UU'),
+    h(AppButton, { size: 'small', disabled: busy.value, onClick: () => download([row.product_id]) }, () => '导出商品数据包'),
   ]) },
 ])
 </script>
@@ -128,13 +155,13 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
           @update:formatted-value="capturedTo = typeof $event === 'string' ? $event : null" />
       </FilterField>
       <template #actions><AppButton @click="resetFilters">重置</AppButton><AppButton @click="search">查询</AppButton></template>
-      <template #primary-action><AppButton @click="managerOpen = true">分组管理</AppButton></template>
+      <template #primary-action><AppButton v-if="canCreate" :disabled="busy" @click="openManual">手动创建商品</AppButton><AppButton @click="managerOpen = true">分组管理</AppButton></template>
     </FilterBar>
     <ManagementListSection density="compact">
       <TableToolbar density="compact">
         <span v-if="selected.length">已选 {{ selected.length }} 项</span>
         <template #actions>
-          <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出 UU</AppButton>
+          <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出商品数据包</AppButton>
           <AppButton size="small" :disabled="!selected.length || busy || !canWriteGroups" @click="openMove(selected)">移动分组</AppButton>
           <AppButton size="small" :disabled="busy" @click="refresh">刷新</AppButton>
         </template>
@@ -147,7 +174,15 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       <PaginationBar :inert="list.isFetching.value || undefined" :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
         @update:page="filters.page = $event" @update:page-size="filters.pageSize = $event; filters.page = 1" />
     </ManagementListSection>
-    <ProductPreviewDialog :show="!!detailId" :product="preview" :editable="false" :exportable="!busy"
+    <ProductEditorDialog v-if="canEdit" :show="!!detailId" :product-id="detailId" :product="preview"
+      :can-previous="previewIndex > 0 && !detail.isFetching.value"
+      :can-next="previewIndex >= 0 && previewIndex < rows.length - 1 && !detail.isFetching.value"
+      :groupable="canWriteGroups" :asset-uploads="capabilities.data.value?.assetUploads === true"
+      :navigation-items="rows.map((row) => ({ id: row.product_id, title: row.title,
+        subtitle: row.source_product_id || row.product_id, imageUrl: row.main_image_url }))"
+      @update:show="!$event && (detailId = null)" @navigate-to="detailId = $event" @navigate="navigatePreview"
+      @group="openMove([$event])" @saved="refresh" />
+    <ProductPreviewDialog v-else :show="!!detailId" :product="preview" :editable="false" :exportable="!busy"
       :loading="detail.isFetching.value" :error="detail.error.value ? errorText(detail.error.value) : null"
       :can-previous="previewIndex > 0 && !detail.isFetching.value"
       :can-next="previewIndex >= 0 && previewIndex < rows.length - 1 && !detail.isFetching.value"
@@ -159,6 +194,10 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
     <ProductGroupManager v-model:show="managerOpen" :groups="groupItems" :writable="canWriteGroups" @changed="groupsChanged" />
     <FormDialog v-model:show="moveOpen" title="移动商品分组" :submitting="busy" :submit-disabled="!canWriteGroups" @submit="submitMove">
       <NFormItem label="目标分组"><AppSelect v-model="moveTarget" :options="groupOptions.filter((item) => item.value !== '')" /></NFormItem>
+    </FormDialog>
+    <FormDialog v-model:show="manualOpen" title="手动创建商品" :submitting="busy" :submit-disabled="!canCreate || !manualTitle.trim()" @submit="submitManual">
+      <NFormItem label="商品标题" required><AppInput v-model="manualTitle" aria-label="新商品标题" /></NFormItem>
+      <NFormItem v-if="canWriteGroups" label="分组"><AppSelect v-model="manualGroup" :options="groupOptions.filter((item) => item.value !== '')" /></NFormItem>
     </FormDialog>
   </div>
 </template>

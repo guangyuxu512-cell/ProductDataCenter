@@ -46,8 +46,8 @@ export async function fetchDetail(id: string, signal?: AbortSignal) {
 
 export async function exportProducts(productIds: string[]) {
   try {
-    const response = await http.post<Blob>('/products/export-uu', { productIds }, { responseType: 'blob', timeout: 120_000 })
-    const filename = String(response.headers['content-disposition'] ?? '').match(/filename="([^"]+)"/)?.[1] ?? 'uu-export.zip'
+    const response = await http.post<Blob>('/products/export-packages', { productIds }, { responseType: 'blob', timeout: 120_000 })
+    const filename = String(response.headers['content-disposition'] ?? '').match(/filename="([^"]+)"/)?.[1] ?? 'product-packages.zip'
     return { blob: response.data, filename, exported: Number(response.headers['x-export-count'] ?? 0), missing: Number(response.headers['x-export-missing-count'] ?? 0) }
   } catch (error) {
     const response = (error as { response?: { data?: Blob } }).response
