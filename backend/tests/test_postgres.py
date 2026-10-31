@@ -144,6 +144,10 @@ def test_edit_draft_is_independent_from_collector_and_rpa_original(engine):
     before = products.export_rows([product_id])[0]
     state = editor.read(product_id)
     assert state.revision == 0 and not state.sourceChanged
+    context, platform, source_id = editor.read_context(product_id)
+    assert context.sourceFingerprint == state.sourceFingerprint and platform == "douyin" and source_id == product_id
+    _, platform, source_id = editor.read_context("pdd:3760269504500859111")
+    assert platform == "pinduoduo" and source_id == product_id
     state.draft.title = "人工修改商品标题"
     state.draft.mainImages = [ImageItem(id="new-image", url="https://fixture.invalid/new.png")]
     saved = editor.save(product_id, SaveDraft(expectedRevision=0, sourceFingerprint=state.sourceFingerprint, draft=state.draft))
@@ -175,6 +179,8 @@ def test_edit_draft_is_independent_from_collector_and_rpa_original(engine):
             editor.save(product_id, SaveDraft(expectedRevision=1, sourceFingerprint=state.sourceFingerprint, draft=state.draft))
         after_capture = editor.read(product_id)
         assert after_capture.sourceChanged and after_capture.draft.title == "人工修改商品标题"
+        context, _, _ = editor.read_context(product_id)
+        assert context.sourceChanged and context.revision == 1
     finally:
         with engine.begin() as conn:
             conn.execute(text("UPDATE products SET title='厨房收纳盒' WHERE product_id=:id"), {"id": product_id})

@@ -15,13 +15,14 @@ RPA = {"Authorization": "Bearer rpa-test-token"}
 class FakeEditor:
     ready = True
     manual_ready = True
+    changed = False
 
     def permissions(self):
         return self.ready, self.manual_ready
 
     def read(self, product_id):
         return EditorState(productId=product_id, revision=0, sourceFingerprint=FINGERPRINT,
-                           sourceChanged=False, draft=ProductDraft(title="测试商品"))
+                           sourceChanged=self.changed, draft=ProductDraft(title="测试商品"))
 
     def read_context(self, product_id):
         return self.read(product_id), "douyin", product_id
@@ -96,6 +97,9 @@ def test_inspect_is_read_only_guarded_and_cannot_claim_platform_precheck(client,
     assert {item["code"] for item in result.json()["issues"]} >= {"TITLE_INVALID", "TARGET_CATEGORY_REQUIRED"}
     assert http.post(path, headers=ADMIN, json={**body, "expectedRevision": 1}).status_code == 409
     assert http.post(path, headers=ADMIN, json={**body, "sourceFingerprint": "b" * 64}).status_code == 409
+    editor.changed = True
+    assert "SOURCE_CHANGED" in {item["code"] for item in http.post(path, headers=ADMIN, json=body).json()["issues"]}
+    editor.changed = False
     editor.ready = False
     assert http.post(path, headers=ADMIN, json=body).status_code == 503
     editor.ready = True
