@@ -16,8 +16,11 @@ class Settings(BaseSettings):
     rpa_api_token_file: Path | None = None
     data_root: Path = Path("/data")
     product_asset_root: Path | None = None
+    pdd_category_csv: Path | None = None
+    pdd_category_sha256: str | None = None
     enable_group_writes: bool = False
     enable_product_edits: bool = False
+    enable_source_category_reads: bool = False
     export_max_bytes: int = Field(default=128 * 1024 * 1024, ge=1024)
 
     @model_validator(mode="after")
