@@ -46,7 +46,7 @@ def wait_for(check, label):
 def main():
     run = "pdc-smoke-" + secrets.token_hex(6)
     postgres = run + "-postgres"
-    password, token, web_password, rpa_token = (secrets.token_urlsafe(32) for _ in range(4))
+    password, token, web_password, rpa_token, central_token = (secrets.token_urlsafe(32) for _ in range(5))
     with tempfile.TemporaryDirectory(prefix=run) as directory:
         root = Path(directory)
         root.chmod(0o755)
@@ -59,6 +59,7 @@ def main():
         (credentials / "database_url").write_text(f"postgresql+psycopg://pdc_reader:{password}@postgres:5432/product_workbench_test")
         (credentials / "api_token").write_text(token)
         (credentials / "rpa_token").write_text(rpa_token)
+        (credentials / "central_token").write_text(central_token)
         hashed = command("openssl", "passwd", "-6", "-stdin", stdin=web_password + "\n")
         (credentials / "htpasswd").write_text("reviewer:" + hashed + "\n")
         with socket.socket() as sock:
@@ -76,13 +77,19 @@ def main():
                    NAS_DATA_ROOT=str(media), NAS_NETWORK=run, WEB_BIND_ADDRESS="127.0.0.1", WEB_PORT=str(port),
                    BACKEND_ENABLE_GROUP_WRITES="false", RPA_TOKEN_FILE=str(credentials / "rpa_token"),
                    PRODUCT_API_IMAGE=f"product-data-center-api:{run}",
-                   PRODUCT_WEB_IMAGE=f"product-data-center-web:{run}", LOCAL_API_PORT=str(local_api_port))
+                   PRODUCT_WEB_IMAGE=f"product-data-center-web:{run}", LOCAL_API_PORT=str(local_api_port),
+                   CENTRAL_APPLICATION_BASE_URL="https://control-center.invalid",
+                   CENTRAL_APPLICATION_TOKEN_FILE=str(credentials / "central_token"))
         def compose(*args, **kwargs):
             return command("docker", "compose", "-p", run, "-f", str(ROOT / "deploy/compose.yaml"),
                            "-f", str(ROOT / "deploy/compose.rpa.yaml"), *args, env=env, **kwargs)
         def synology_compose(*args, **kwargs):
             return command("docker", "compose", "-p", run + "-host", "-f",
                            str(ROOT / "deploy/compose.synology-lan.yaml"), *args, env=env, **kwargs)
+        def central_compose(*args, **kwargs):
+            return command("docker", "compose", "-p", run, "-f", str(ROOT / "deploy/compose.yaml"),
+                           "-f", str(ROOT / "deploy/compose.rpa.yaml"), "-f",
+                           str(ROOT / "deploy/compose.central.yaml"), *args, env=env, **kwargs)
         def psql(sql):
             return command("docker", "exec", "-i", postgres, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "pdc_test", "-d", "product_workbench_test", stdin=sql)
         base = f"http://127.0.0.1:{port}"
@@ -197,6 +204,19 @@ def main():
             request("/rpa/v1/product-groups", auth=False, status=401)
             request("/rpa/v1/product-groups", auth=False, bearer="wrong", status=401)
             print("PASS: anonymous trusted network, denied other network, unchanged RPA credentials", flush=True)
+
+            # Adding the optional central connection must retain existing RPA,
+            # product and database settings. The endpoint is intentionally
+            # unreachable and uses only a synthetic credential.
+            central_compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
+                            "--wait", "--wait-timeout", "100", "product-api")
+            wait_for(lambda: request("/api/v1/capabilities", auth=False)["groupWrites"], "central overlay product API")
+            status = request("/api/v1/central/status", auth=False)
+            assert status["state"] == "unavailable" and status["reason"] == "upstream_unavailable"
+            assert request("/api/v1/products", auth=False)["total"] == 1
+            assert request("/rpa/v1/product-groups", auth=False, bearer=rpa_token)["groups"] == []
+            request("/rpa/v1/product-groups", auth=False, status=401)
+            print("PASS: central overlay fails safely and preserves product/RPA access", flush=True)
 
             # The Synology variant preserves source IP on host networking and
             # proxies to a separate API container via host loopback. Use the

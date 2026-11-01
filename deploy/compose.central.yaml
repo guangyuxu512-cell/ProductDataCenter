@@ -1,0 +1,14 @@
+# Optional overlay, applied only after the central API and its grant are ready.
+# It does not change the product DB, RPA credential, web service, or signer.
+services:
+  product-api:
+    environment:
+      BACKEND_CENTRAL_APPLICATION_ENABLED: 'true'
+      BACKEND_CENTRAL_APPLICATION_BASE_URL: ${CENTRAL_APPLICATION_BASE_URL:?verified HTTPS origin required}
+      BACKEND_CENTRAL_APPLICATION_ID: ${CENTRAL_APPLICATION_ID:-product-library}
+      BACKEND_CENTRAL_APPLICATION_TOKEN_FILE: /run/secrets/central_application_token
+    secrets: [central_application_token]
+
+secrets:
+  central_application_token:
+    file: ${CENTRAL_APPLICATION_TOKEN_FILE:?protected token file required}
