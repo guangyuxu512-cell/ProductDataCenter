@@ -91,6 +91,8 @@ class DouyinCategoryClient:
         signer_url, signer_key = self._signer()
         cookies = httpx.Cookies()
         fp = ""
+        csrf = ""
+        ms_token = ""
         for item in session.cookies:
             domain = (item.domain or "").lstrip(".").lower()
             if domain != "jinritemai.com" and not domain.endswith(".jinritemai.com"):
@@ -99,12 +101,25 @@ class DouyinCategoryClient:
             cookies.set(item.name, value, domain=item.domain or "", path=item.path or "/")
             if item.name == "s_v_web_id":
                 fp = value
+            elif item.name == "csrf_session_id":
+                csrf = value
+            elif item.name == "msToken":
+                ms_token = value
         params = {"appid": 1, "_bid": "ffa_goods", "_lid": lid, **extra}
         if fp:
             params.update({"verifyFp": fp, "fp": fp})
+        if ms_token:
+            params["msToken"] = ms_token
         headers = {"accept": "application/json, text/plain, */*", "accept-language": "zh-CN,zh;q=0.9",
                    "user-agent": USER_AGENT, "referer": REFERER, "origin": BASE,
-                   "x-tt-from-end": "PC", "x-tt-from-appid": "ffa-goods"}
+                   "cache-control": "no-cache", "pragma": "no-cache",
+                   "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"',
+                   "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"',
+                   "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "sec-fetch-site": "same-origin",
+                   "x-tt-from-end": "PC", "x-tt-from-appid": "ffa-goods", "x-tt-from-page": REFERER,
+                   "x-tt-from-version": "1.0.1.3675"}
+        if csrf:
+            headers["x-secsdk-csrf-token"] = csrf
         content = None if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()
         if content is not None:
             headers["content-type"] = "application/json;charset=UTF-8"

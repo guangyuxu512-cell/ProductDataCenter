@@ -34,6 +34,7 @@ def settings(tmp_path):
 def make_session(shop_id=None):
     return CentralShopSession(shop_id=shop_id or uuid4(), platform="douyin", session_version=1,
                               cookies=(CentralCookie(name="sessionid", value=COOKIE, domain=".jinritemai.com"),
+                                       CentralCookie(name="csrf_session_id", value="synthetic-csrf", domain=".jinritemai.com"),
                                        CentralCookie(name="bad", value="dont-send", domain="other.example")))
 
 
@@ -53,6 +54,8 @@ def test_signed_search_and_schema_do_not_require_token_and_return_safe_fields(se
         assert request.url.params["a_bogus"] == "synthetic-signature"
         assert request.url.params["msToken"] == "generated"
         assert "__token" not in request.url.params and COOKIE in request.headers["cookie"]
+        assert request.headers["x-secsdk-csrf-token"] == "synthetic-csrf"
+        assert request.headers["x-tt-from-page"] == "https://fxg.jinritemai.com/ffa/g/create"
         calls.append(("platform", request.method, request.url.path))
         if request.method == "GET":
             assert request.url.params["key"] == "勺子"
@@ -81,6 +84,25 @@ def test_lookup_rejects_redirect_and_does_not_expose_sensitive_exception(setting
         client.search(make_session(), "勺子")
     assert str(error.value) == "platform_unavailable"
     assert COOKIE not in str(error.value) and SIGNER_KEY not in str(error.value)
+
+
+def test_search_reuses_session_ms_token_when_present(settings):
+    session = make_session().model_copy(update={"cookies": (
+        CentralCookie(name="sessionid", value=COOKIE, domain=".jinritemai.com"),
+        CentralCookie(name="msToken", value="synthetic-ms-token", domain=".jinritemai.com"),
+    )})
+    calls = []
+    def handler(request):
+        if request.url.host != "fxg.jinritemai.com":
+            data = json.loads(request.content)
+            assert data["ms_token"] == "synthetic-ms-token"
+            calls.append("sign")
+            return httpx.Response(200, json={"ok": True, "a_bogus": "signature"})
+        assert request.url.params["msToken"] == "synthetic-ms-token"
+        calls.append("platform")
+        return httpx.Response(200, json={"code": 0, "data": []})
+    assert DouyinCategoryClient(settings, transport=httpx.MockTransport(handler)).search(session, "勺子") == []
+    assert calls == ["sign", "platform"]
 
 
 def test_httpx_info_log_does_not_expose_signed_query(settings, caplog):
