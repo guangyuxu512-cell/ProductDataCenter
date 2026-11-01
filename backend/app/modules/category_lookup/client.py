@@ -168,8 +168,8 @@ def normalize_candidates(value) -> list[dict]:
     """Extract explicit category ids/names without choosing a candidate."""
     result, seen = [], set()
     path_keys = ("category_list", "categoryList", "category_path_list", "categoryPathList", "path_list", "pathList", "paths", "breadcrumb")
-    id_keys = ("category_leaf_id", "leaf_cid", "leafCid", "leaf_category_id", "leafCategoryId",
-               "third_cid", "thirdCid", "category_id", "categoryId", "cid", "id", "value")
+    id_keys = ("category_leaf_id", "categoryLeafId", "leaf_cid", "leafCid", "leaf_category_id", "leafCategoryId",
+               "fourth_cid", "fourthCid", "third_cid", "thirdCid", "category_id", "categoryId", "cid", "id", "value")
     name_keys = ("category_name", "categoryName", "name", "label", "title", "third_cname", "thirdCname", "leaf_cname", "leafCname")
     path_names = ("category_path", "categoryPath", "category_path_name", "categoryPathName", "full_path", "fullPath", "path", "full_name", "fullName", "category_full_name", "categoryFullName", "category_name_path", "categoryNamePath")
     level_names = (("first_cname", "firstCname", "first_name", "firstName"),

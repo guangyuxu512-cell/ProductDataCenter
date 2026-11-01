@@ -102,7 +102,7 @@ def test_candidates_never_guess_unrelated_ids_or_return_raw_fields():
 
 
 def test_platform_level_names_and_integer_required_are_preserved():
-    assert normalize_candidates({"list": [{"category_id": 11, "third_cname": "汤勺",
+    assert normalize_candidates({"list": [{"categoryLeafId": 11, "third_cname": "汤勺",
                                             "first_cname": "餐饮厨具", "second_cname": "餐具"}]}) == [
         {"id": "11", "name": "汤勺", "path": "餐饮厨具 > 餐具 > 汤勺"}]
     assert normalize_fields([{"id": 12, "label": "材质", "required": 1}])[0]["required"] is True
