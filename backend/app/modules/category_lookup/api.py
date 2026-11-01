@@ -95,6 +95,7 @@ def _fail(error: LookupError):
     messages = {"not_configured": "类目查询尚未启用", "invalid_configuration": "类目查询配置不可用",
                 "session_unavailable": "店铺登录状态不可用", "signer_unavailable": "签名服务不可用",
                 "platform_unavailable": "抖店接口暂不可用", "platform_rejected": "抖店未接受类目请求",
+                "product_session_unavailable": "已授权店铺的商品页会话未通过抖店验证，请检查中控店铺登录状态",
                 "invalid_schema": "抖店属性返回格式不支持", "invalid_response": "抖店类目返回格式不支持"}
     suffix = f"（代码 {error.platform_code}）" if error.platform_code is not None else ""
     raise HTTPException(503 if error.reason in {"not_configured", "invalid_configuration"} else 502,
@@ -113,15 +114,22 @@ def search(body: SearchBody, response: Response,
         raise HTTPException(503, "没有可用的抖店登录状态")
     global _next
     with _lock:
-        shop = shops[_next % len(shops)]
+        start = _next % len(shops)
         _next += 1
-    with _limit(shop.shop_id):
-        session = _session(central, shop.shop_id)
-        try:
-            candidates = lookup.search(session, body.keyword)
-        except LookupError as error:
-            _fail(error)
-    return SearchResponse(shopId=shop.shop_id, candidates=candidates)
+    # A shop can be valid for Compass but not yet have a usable product-page
+    # session. Try each authorized shop at most once on the observed login
+    # rejection; do not retry signing, network, or other platform failures.
+    for shop in shops[start:] + shops[:start]:
+        with _limit(shop.shop_id):
+            session = _session(central, shop.shop_id)
+            try:
+                candidates = lookup.search(session, body.keyword)
+            except LookupError as error:
+                if error.reason == "platform_rejected" and error.platform_code == 10008:
+                    continue
+                _fail(error)
+        return SearchResponse(shopId=shop.shop_id, candidates=candidates)
+    _fail(LookupError("product_session_unavailable", 10008))
 
 
 @router.post("/schema", response_model=SchemaResponse)

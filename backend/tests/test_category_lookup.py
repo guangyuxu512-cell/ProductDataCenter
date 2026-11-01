@@ -172,6 +172,68 @@ def test_api_auto_assigns_shops_and_preserves_rpa_boundary(settings, monkeypatch
     get_settings.cache_clear()
 
 
+def test_search_skips_only_product_session_rejection_and_uses_next_shop(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
+    monkeypatch.setattr("app.modules.category_lookup.api._next", 0)
+    get_settings.cache_clear()
+    ids = sorted([uuid4(), uuid4()], key=str)
+    attempted = []
+
+    class PartlyReadyLookup(FakeLookup):
+        def search(self, session, keyword):
+            attempted.append(session.shop_id)
+            if session.shop_id == ids[0]:
+                raise LookupError("platform_rejected", 10008)
+            return super().search(session, keyword)
+
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: FakeCentral(ids)
+    app.dependency_overrides[get_lookup] = lambda: PartlyReadyLookup(settings)
+    with TestClient(app) as client:
+        response = client.post('/api/v1/category-lookup/search', json={"keyword": "勺子"},
+                               headers={"Authorization": "Bearer " + PRODUCT_KEY})
+    assert response.status_code == 200
+    assert attempted == ids
+    assert response.json()['shopId'] == str(ids[1])
+    get_settings.cache_clear()
+
+
+def test_search_stops_after_each_shop_once_and_does_not_retry_other_failures(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
+    monkeypatch.setattr("app.modules.category_lookup.api._next", 0)
+    get_settings.cache_clear()
+    ids = sorted([uuid4(), uuid4(), uuid4()], key=str)
+    attempted = []
+
+    class FailingLookup(FakeLookup):
+        reason = "platform_rejected"
+        code = 10008
+
+        def search(self, session, keyword):
+            attempted.append(session.shop_id)
+            raise LookupError(self.reason, self.code)
+
+    failure = FailingLookup(settings)
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: FakeCentral(ids)
+    app.dependency_overrides[get_lookup] = lambda: failure
+    with TestClient(app) as client:
+        auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+        response = client.post('/api/v1/category-lookup/search', json={"keyword": "勺子"}, headers=auth)
+        assert response.status_code == 502
+        assert "商品页会话未通过抖店验证" in response.json()['detail']
+        assert attempted == ids
+        attempted.clear()
+        failure.reason, failure.code = "signer_unavailable", None
+        response = client.post('/api/v1/category-lookup/search', json={"keyword": "勺子"}, headers=auth)
+        assert response.status_code == 502
+        assert "签名服务不可用" in response.json()['detail']
+        assert len(attempted) == 1
+    get_settings.cache_clear()
+
+
 def test_concurrent_products_are_evenly_distributed_and_bounded_per_shop(settings, monkeypatch):
     monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
     monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
