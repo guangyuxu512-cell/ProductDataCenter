@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     central_application_base_url: str | None = Field(default=None, repr=False)
     central_application_id: str = "product-library"
     central_application_token_file: Path | None = Field(default=None, repr=False)
+    # Read-only category/schema lookup; disabled independently of product/RPA APIs.
+    douyin_category_lookup_enabled: bool = False
+    douyin_signer_url: str = "http://product-cloud-signer-v1-product-signer-1:8787"
+    douyin_signer_key_file: Path | None = Field(default=None, repr=False)
 
     @field_validator("central_application_enabled", mode="before")
     @classmethod

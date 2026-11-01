@@ -124,3 +124,4 @@ class Capabilities(BaseModel):
     export: bool = True
     productEdit: bool = False
     importProducts: bool = False
+    categoryLookup: bool = False

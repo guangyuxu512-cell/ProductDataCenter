@@ -1,0 +1,14 @@
+# Optional read-only category lookup. Use with the central connection overlay.
+# Signer must already be reachable on the workbench network. Keep disabled until
+# a real signed lookup is verified; do not expose this key to the web or RPA.
+services:
+  product-api:
+    environment:
+      BACKEND_DOUYIN_CATEGORY_LOOKUP_ENABLED: 'true'
+      BACKEND_DOUYIN_SIGNER_URL: http://product-cloud-signer-v1-product-signer-1:8787
+      BACKEND_DOUYIN_SIGNER_KEY_FILE: /run/secrets/product_signer_api_key
+    secrets: [product_signer_api_key]
+
+secrets:
+  product_signer_api_key:
+    file: ${PRODUCT_SIGNER_API_KEY_FILE:?protected API-readable signer key file required}

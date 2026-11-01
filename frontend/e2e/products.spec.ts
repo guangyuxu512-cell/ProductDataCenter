@@ -510,3 +510,30 @@ test('拼多多无参数图片使用小图，失败回退原图，放大仍是�
   await images.first().click()
   await expect.poll(() => requested.includes(original(0))).toBe(true)
 })
+
+test('类目候选与属性只读查看，切换商品后不沿用上一件的结果', async ({ page }) => {
+  await fixtures(page)
+  const shop = '00000000-0000-4000-8000-000000000111'
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: false, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route('**/api/v1/category-lookup/search', (route) => route.fulfill({ json: {
+    shopId: shop, candidates: [{ id: '1000010075', name: '汤勺', path: '餐具 > 汤勺' }],
+  } }))
+  await page.route('**/api/v1/category-lookup/schema', (route) => route.fulfill({ json: {
+    categoryId: '1000010075', attributes: [{ id: '12', label: '材质', required: true, options: [] }],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: '查找类目' }).click()
+  await dialog.locator('[aria-label="抖店类目"]').click()
+  await page.getByText('餐具 > 汤勺', { exact: true }).last().click()
+  await expect(dialog.getByText('当前类目和属性仅供查看，尚未保存')).toBeVisible()
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect(dialog.getByText('材质', { exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
+  await dialog.getByRole('button', { name: '下一件' }).click()
+  await expect(dialog.getByText('商品 ID ' + String(BigInt(firstId) + 1n))).toBeVisible()
+  await expect(dialog.getByText('材质', { exact: true })).toHaveCount(0)
+})
