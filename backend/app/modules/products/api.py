@@ -24,7 +24,9 @@ Service = Annotated[ProductService, Depends(get_service)]
 
 @router.get("/capabilities", response_model=Capabilities)
 def capabilities():
-    return Capabilities(groupWrites=get_settings().enable_group_writes)
+    settings = get_settings()
+    return Capabilities(groupWrites=settings.enable_group_writes,
+                        categoryLookup=settings.douyin_category_lookup_enabled)
 
 
 @router.get("/products", response_model=ProductPage)

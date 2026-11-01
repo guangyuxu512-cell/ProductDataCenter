@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
 import {
-  NDropdown, NFormItem, NImage, NSpin, NSwitch, NTab, NText,
+  NDropdown, NFormItem, NImage, NSelect, NSpin, NSwitch, NTab, NText,
   type DataTableColumns, useMessage,
 } from 'naive-ui'
 import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
+import { fetchCategoryAttributes, searchCategoryCandidates,
+  type CategoryAttribute, type CategoryCandidate } from '../api/category-lookup'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
@@ -24,10 +26,11 @@ const props = withDefaults(defineProps<{
   positionLabel?: string
   exportable?: boolean
   groupable?: boolean
+  categoryLookupEnabled?: boolean
   navigationItems?: ReadonlyArray<{ id: string; title: string; subtitle: string; imageUrl: string | null }>
 }>(), {
   loading: false, error: null, canPrevious: false, canNext: false,
-  positionLabel: '', exportable: true, groupable: true, navigationItems: () => [],
+  positionLabel: '', exportable: true, groupable: true, categoryLookupEnabled: false, navigationItems: () => [],
 })
 const emit = defineEmits<{
   'update:show': [value: boolean]
@@ -42,9 +45,19 @@ const message = useMessage()
 const tab = ref('base')
 const imageRetries = ref<Record<string, number>>({})
 const imageFallbacks = ref<Record<string, boolean>>({})
+const categoryBusy = ref(false)
+const categoryCandidates = ref<CategoryCandidate[]>([])
+const selectedCategory = ref<string | null>(null)
+const categoryShop = ref<string | null>(null)
+const categoryAttributes = ref<CategoryAttribute[]>([])
+const categorySchemaLoaded = ref(false)
+let categoryRequest = 0
 watch(() => props.product?.id, () => {
   imageRetries.value = {}
   imageFallbacks.value = {}
+  categoryRequest += 1
+  categoryCandidates.value = []; selectedCategory.value = null; categoryShop.value = null
+  categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryBusy.value = false
 })
 watch(() => props.show, (show) => { if (!show) tab.value = 'base' })
 
@@ -60,6 +73,35 @@ async function copy(value: string, label: string) {
 function copyFromMenu(key: string) {
   if (key === 'title' && props.product) void copy(props.product.title, '商品标题')
   if (key === 'basic') void copy(basicText.value, '基础信息')
+}
+
+async function findCategories() {
+  const product = props.product
+  if (!product || categoryBusy.value || !props.categoryLookupEnabled) return
+  const request = ++categoryRequest
+  const keyword = (product.category?.split(/\s*(?:→|>|》|\/|\|)\s*/).filter(Boolean).at(-1) || product.title).slice(0, 120)
+  categoryBusy.value = true; selectedCategory.value = null; categoryShop.value = null
+  categoryCandidates.value = []; categoryAttributes.value = []; categorySchemaLoaded.value = false
+  try {
+    const result = await searchCategoryCandidates(keyword)
+    if (request !== categoryRequest) return
+    categoryCandidates.value = result.candidates; categoryShop.value = result.shopId
+    if (!result.candidates.length) message.warning('没有找到类目候选')
+  } catch { if (request === categoryRequest) message.error('类目查询失败，请稍后重试') }
+  finally { if (request === categoryRequest) categoryBusy.value = false }
+}
+
+async function selectCategory(value: string | null) {
+  const request = ++categoryRequest
+  selectedCategory.value = value; categoryAttributes.value = []; categorySchemaLoaded.value = false
+  const product = props.product, shop = categoryShop.value
+  if (!value || !product || !shop) { categoryBusy.value = false; return }
+  categoryBusy.value = true
+  try {
+    const result = await fetchCategoryAttributes(shop, value, product.title.slice(0, 120))
+    if (request === categoryRequest) { categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true }
+  } catch { if (request === categoryRequest) message.error('属性读取失败，请重新选择类目') }
+  finally { if (request === categoryRequest) categoryBusy.value = false }
 }
 
 const imageSections = computed(() => {
@@ -170,9 +212,19 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               <AppButton size="small" disabled>AI 优化</AppButton>
             </NFormItem>
             <NFormItem label="抖店类目" required>
-              <AppInput model-value="" aria-label="抖店类目" disabled />
-              <AppButton size="small" disabled>更换类目</AppButton>
+              <template v-if="categoryLookupEnabled">
+                <NSelect :value="selectedCategory" aria-label="抖店类目" filterable clearable
+                  :disabled="categoryBusy || !categoryCandidates.length"
+                  :options="categoryCandidates.map((item) => ({ label: item.path || item.name, value: item.id }))"
+                  @update:value="selectCategory" />
+                <AppButton size="small" :loading="categoryBusy" @click="findCategories">查找类目</AppButton>
+              </template>
+              <template v-else>
+                <AppInput model-value="" aria-label="抖店类目" disabled />
+                <AppButton size="small" disabled>更换类目</AppButton>
+              </template>
             </NFormItem>
+            <NText v-if="selectedCategory" depth="3">当前类目和属性仅供查看，尚未保存</NText>
             <NText v-if="product.category" depth="3">来源类目：{{ product.category }}</NText>
           </section>
           <section v-if="tab === 'images'" class="product-preview__image-workspace">
@@ -207,8 +259,14 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             </article>
           </section>
           <section v-if="tab === 'attributes'" class="product-preview__section">
+            <NText v-if="categoryLookupEnabled && !selectedCategory" depth="3">请先查找并选择抖店类目</NText>
+            <NText v-else-if="categorySchemaLoaded && !categoryAttributes.length" depth="3">当前类目没有可显示的属性</NText>
+            <NText v-else-if="categorySchemaLoaded" depth="3">同名属性显示来源值，尚未校验或保存</NText>
             <div class="product-preview__attributes">
-              <NFormItem v-for="item in product.attributes" :key="item.name" :label="item.name">
+              <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required">
+                <AppInput :model-value="product.attributes.find((source) => source.name === item.label)?.value ?? ''" readonly />
+              </NFormItem>
+              <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
               </NFormItem>
             </div>
