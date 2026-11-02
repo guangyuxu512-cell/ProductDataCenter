@@ -239,8 +239,8 @@ def main():
             request("/rpa/v1/product-groups", auth=False, status=401)
             request("/rpa/v1/product-groups", auth=False, bearer="wrong", status=401)
             assert request("/rpa/v1/product-groups", auth=False, bearer=rpa_token)["groups"] == []
-            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
-                           auth=False, bearer=rpa_token) == json.loads(UU)
+            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(db_package).hexdigest(),
+                           auth=False, bearer=rpa_token) == json.loads(db_package)
             request("/api/v1/product-groups", method="POST", body={"name": "RPA不能写"},
                     auth=False, bearer=rpa_token, status=401)
             request("/rpa/v1/product-groups", method="POST", body={"name": "RPA不能写"},
@@ -256,8 +256,8 @@ def main():
                                       "--wait", "--wait-timeout", "100", "product-api")
             api_id = synology_category_compose("ps", "-q", "product-api")
             command("docker", "exec", api_id, "python", "-c", "from pathlib import Path; from app.modules.category_lookup.cache import CategoryCache; c=CategoryCache(Path('/var/lib/product-category-cache/categories.sqlite3')); assert c.get('tree','fixture','0')==[{'id':'100'}]")
-            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
-                           auth=False, bearer=rpa_token) == json.loads(UU)
+            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(db_package).hexdigest(),
+                           auth=False, bearer=rpa_token) == json.loads(db_package)
             print("PASS: Synology category-cache volume persists and RPA remains unchanged", flush=True)
         finally:
             synology_category_compose("down", "--remove-orphans", "--volumes", check=False)
