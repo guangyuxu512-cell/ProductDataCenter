@@ -537,3 +537,66 @@ test('类目候选与属性只读查看，切换商品后不沿用上一件的�
   await expect(dialog.getByText('商品 ID ' + String(BigInt(firstId) + 1n))).toBeVisible()
   await expect(dialog.getByText('材质', { exact: true })).toHaveCount(0)
 })
+
+test('抖音原类目直接取属性，切换商品时不使用旧响应', async ({ page }) => {
+  await fixtures(page)
+  const secondId = String(BigInt(firstId) + 1n)
+  const title = '完整商品标题'.repeat(30)
+  const calls: Array<{ path: string; body: Record<string, string> }> = []
+  let releaseFirst!: () => void
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: false, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route('**/api/v1/products/*', (route) => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-1)!)
+    return route.fulfill({ json: { product: { ...product(id), title },
+      sourceCategoryId: id === firstId ? '1000010075' : '1000010078', skus: [], images: [] } })
+  })
+  await page.route('**/api/v1/category-lookup/**', async (route) => {
+    const path = new URL(route.request().url()).pathname
+    const body = route.request().postDataJSON() as Record<string, string>
+    calls.push({ path, body })
+    if (body.categoryId === '1000010075') await firstGate
+    await route.fulfill({ json: { shopId: '00000000-0000-4000-8000-000000000111', categoryId: body.categoryId,
+      attributes: [{ id: '12', label: body.categoryId === '1000010075' ? '材质' : '品牌', required: true, options: [] }] } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  expect(calls).toHaveLength(0)
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect.poll(() => calls.length).toBe(1)
+  await dialog.getByRole('button', { name: '下一件' }).click()
+  await expect(dialog.getByText('商品 ID ' + secondId)).toBeVisible()
+  await expect(dialog.getByText('品牌', { exact: true })).toBeVisible()
+  releaseFirst()
+  await expect(dialog.getByText('材质', { exact: true })).toHaveCount(0)
+  expect(calls.map((item) => item.path)).toEqual([
+    '/api/v1/category-lookup/schema/auto', '/api/v1/category-lookup/schema/auto',
+  ])
+  expect(calls.map((item) => item.body.categoryId)).toEqual(['1000010075', '1000010078'])
+  expect(calls.every((item) => item.body.title === title)).toBe(true)
+})
+
+test('非抖音来源不会把原平台类目当作抖店类目', async ({ page }) => {
+  await fixtures(page)
+  const calls: string[] = []
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: false, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => route.fulfill({ json: {
+    product: product(firstId, 'pinduoduo'), sourceCategoryId: '999999', skus: [], images: [],
+  } }))
+  await page.route('**/api/v1/category-lookup/**', (route) => {
+    calls.push(new URL(route.request().url()).pathname)
+    return route.fulfill({ status: 500 })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('平台推荐类目尚未接通，可手动查找类目')).toBeVisible()
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect(dialog.getByText('请先查找并选择抖店类目')).toBeVisible()
+  expect(calls).toEqual([])
+})

@@ -37,6 +37,7 @@ export function detailView(detail: NasDetail): LibraryProduct {
     platform, title: row.title, shopName: row.shop_name, skuCount: row.sku_count,
     mainImageCount: row.main_image_count, detailImageCount: row.detail_image_count, skuImageCount: row.sku_image_count,
     groupId: row.group_id, groupName: row.group_name, category: row.category_path || null,
+    sourceCategoryId: platform === 'douyin' ? detail.sourceCategoryId ?? null : null,
     currentPrice: row.current_price_min === null && row.current_price_max === null ? null : priceRange(row),
     currency: 'CNY', collectedAt: capturedTime(row.captured_at), sourceUrl: null,
     mainImageUrl: images('main')[0] || row.main_image_url, previewMainImageUrls: images('main'),

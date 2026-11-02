@@ -32,9 +32,9 @@ def engine():
         conn.execute(text("""INSERT INTO products(product_id, source_platform, source_product_id, title,
             shop_name, category_path, current_price_min, current_price_max, captured_at, uu_json)
             VALUES ('3760269504500859111', 'douyin', '3760269504500859111', '厨房收纳盒', '测试店铺', '家居/厨房',
-            19.99, 29.99, '2026-10-26T08:18:34.999999+08', '{"goodsInfo":{"productId":"3760269504500859111"}}'),
+            19.99, 29.99, '2026-10-26T08:18:34.999999+08', '{"goodsInfo":{"productId":"3760269504500859111","catId1":"100","catId2":"200","catId3":"300","catId4":"0"}}'),
             ('pdd:3760269504500859111', 'pinduoduo', '3760269504500859111', '桌面收纳盒', '测试店铺', '家居/桌面',
-            9.99, 9.99, '2026-10-26T08:18:35+08', '{"goodsInfo":{"productId":"3760269504500859111"}}')"""))
+            9.99, 9.99, '2026-10-26T08:18:35+08', '{"goodsInfo":{"productId":"3760269504500859111","catId3":"999"}}')"""))
         conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
             VALUES ('3760269504500859111','main',0,'','https://fixture.invalid/main.png')"""))
         conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,sort_order)
@@ -54,6 +54,8 @@ def test_exact_id_and_second_precision(engine):
     assert repo.list(parse_product_list_options({"includeTotal": "false"}))["total"] is None
     detail = repo.detail("3760269504500859111")
     assert detail["product"]["source_platform"] == "douyin" and len(detail["skus"]) == 1
+    assert detail["sourceCategoryId"] == "300"
+    assert repo.detail("pdd:3760269504500859111")["sourceCategoryId"] is None
     assert "uu_json" not in detail["product"]
 
 

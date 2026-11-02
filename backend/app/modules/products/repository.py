@@ -1,8 +1,25 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import Connection, Engine, text
 
 from .queries import ProductListOptions, build_product_list_queries
+
+
+def _original_category_id(levels) -> str | None:
+    """Use the deepest ID present in a Douyin source package, without guessing."""
+    for value in levels:
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str):
+            return None
+        if value.isascii() and value.isdigit() and not value.strip("0"):
+            continue
+        if not re.fullmatch(r"[0-9]{1,20}", value):
+            return None
+        return value
+    return None
 
 
 class ProductRepository:
@@ -30,11 +47,21 @@ class ProductRepository:
             product = conn.exec_driver_sql(*Query(sql, listing.params).dbapi()).mappings().first()
             if product is None:
                 return None
+            source_category_id = None
+            if product["source_platform"] == "douyin":
+                # Read only the four original package fields for this exact product;
+                # the paginated product list must not load package JSON.
+                levels = conn.execute(text("""SELECT uu_json #>> '{goodsInfo,catId4}',
+                    uu_json #>> '{goodsInfo,catId3}', uu_json #>> '{goodsInfo,catId2}',
+                    uu_json #>> '{goodsInfo,catId1}' FROM products WHERE product_id=:id"""),
+                    {"id": product_id}).one()
+                source_category_id = _original_category_id(levels)
             skus = conn.execute(text("""SELECT sku_id, sku_name, current_price, image_rel_path, sort_order
                 FROM product_skus WHERE product_id=:id ORDER BY sort_order, sku_id"""), {"id": product_id}).mappings().all()
             images = conn.execute(text("""SELECT image_type, sort_order, rel_path, source_url
                 FROM product_images WHERE product_id=:id ORDER BY image_type, sort_order"""), {"id": product_id}).mappings().all()
-            return {"product": product, "skus": skus, "images": images}
+            return {"product": product, "skus": skus, "images": images,
+                    "sourceCategoryId": source_category_id}
 
     def groups(self) -> list[dict]:
         with self.engine.connect() as conn:

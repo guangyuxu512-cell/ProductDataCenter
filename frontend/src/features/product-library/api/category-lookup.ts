@@ -19,3 +19,9 @@ export async function fetchCategoryAttributes(shopId: string, categoryId: string
     '/category-lookup/schema', { shopId, categoryId, title },
   )).data
 }
+
+export async function fetchOriginalCategoryAttributes(categoryId: string, title: string) {
+  return (await http.post<{ shopId: string; categoryId: string; attributes: CategoryAttribute[] }>(
+    '/category-lookup/schema/auto', { categoryId, title },
+  )).data
+}

@@ -60,6 +60,8 @@ export interface LibraryProduct {
   groupId: string | null
   groupName: string | null
   category: string | null
+  /** Original Douyin category from the source package; absent for other platforms. */
+  sourceCategoryId?: string | null
   currentPrice: string | null
   currency?: string | null
   collectedAt: string

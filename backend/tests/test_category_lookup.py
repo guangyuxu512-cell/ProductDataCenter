@@ -172,6 +172,42 @@ def test_api_auto_assigns_shops_and_preserves_rpa_boundary(settings, monkeypatch
     get_settings.cache_clear()
 
 
+def test_original_category_schema_never_searches_and_retries_only_login_rejection(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
+    monkeypatch.setattr("app.modules.category_lookup.api._next", 0)
+    get_settings.cache_clear()
+    ids = sorted([uuid4(), uuid4()], key=str)
+    attempted = []
+    title = "完整商品标题" * 30
+
+    class OriginalLookup(FakeLookup):
+        def search(self, session, keyword):
+            pytest.fail("原类目不应触发类目搜索")
+
+        def schema(self, session, category_id, sent_title):
+            attempted.append((session.shop_id, category_id, sent_title))
+            if session.shop_id == ids[0]:
+                raise LookupError("platform_rejected", 10008)
+            return super().schema(session, category_id, sent_title)
+
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: FakeCentral(ids)
+    app.dependency_overrides[get_lookup] = lambda: OriginalLookup(settings)
+    with TestClient(app) as client:
+        path = '/api/v1/category-lookup/schema/auto'
+        auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+        assert client.post(path, json={"categoryId": "0"}, headers=auth).status_code == 422
+        assert client.post(path, json={"categoryId": "1000010075"}, headers={"Authorization": "Bearer " + RPA_KEY}).status_code == 401
+        response = client.post(path, json={"categoryId": "1000010075", "title": title}, headers=auth)
+        assert response.status_code == 200
+        assert response.json()['shopId'] == str(ids[1])
+        assert response.json()['attributes'][0]['required']
+        assert response.headers['cache-control'] == 'no-store' and COOKIE not in response.text
+        assert attempted == [(ids[0], "1000010075", title), (ids[1], "1000010075", title)]
+    get_settings.cache_clear()
+
+
 def test_search_skips_only_product_session_rejection_and_uses_next_shop(settings, monkeypatch):
     monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
     monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
