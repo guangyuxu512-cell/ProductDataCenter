@@ -631,6 +631,7 @@ test('抖音原类目回显原包属性，切换类目后不错误沿用', async
   await dialog.getByRole('tab', { name: '基本信息' }).click()
   await dialog.getByRole('textbox', { name: '抖店类目' }).click()
   await page.getByRole('button', { name: '新类目', exact: true }).click()
+  await page.getByRole('dialog', { name: '选择抖店类目' }).getByRole('button', { name: '确认' }).click()
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   await expect(material).toHaveValue('')
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
