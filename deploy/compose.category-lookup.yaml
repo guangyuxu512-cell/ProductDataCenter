@@ -7,8 +7,14 @@ services:
       BACKEND_DOUYIN_CATEGORY_LOOKUP_ENABLED: 'true'
       BACKEND_DOUYIN_SIGNER_URL: http://product-cloud-signer-v1-product-signer-1:8787
       BACKEND_DOUYIN_SIGNER_KEY_FILE: /run/secrets/product_signer_api_key
+      BACKEND_CATEGORY_CACHE_FILE: /var/lib/product-category-cache/categories.sqlite3
     secrets: [product_signer_api_key]
+    volumes:
+      - product-category-cache:/var/lib/product-category-cache
 
 secrets:
   product_signer_api_key:
     file: ${PRODUCT_SIGNER_API_KEY_FILE:?protected API-readable signer key file required}
+
+volumes:
+  product-category-cache:

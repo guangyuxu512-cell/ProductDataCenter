@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     douyin_category_lookup_enabled: bool = False
     douyin_signer_url: str = "http://product-cloud-signer-v1-product-signer-1:8787"
     douyin_signer_key_file: Path | None = Field(default=None, repr=False)
+    # A separate persistent NAS cache; never stores Sessions or product data.
+    category_cache_file: Path | None = None
 
     @field_validator("central_application_enabled", mode="before")
     @classmethod
