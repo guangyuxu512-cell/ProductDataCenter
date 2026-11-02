@@ -45,7 +45,7 @@ export function detailView(detail: NasDetail): LibraryProduct {
     detailImageUrls: images('detail'), specDimensions: [],
     attributes: platform === 'douyin' ? (detail.sourceAttributes ?? []).map((attribute) => ({
       id: attribute.id, name: attribute.name, value: attribute.values.join('、'),
-    })) : [], mockEditedAt: null,
+    })) : [], mockEditedAt: null, edited: (row.title_status ?? '').endsWith('商品库已修改'),
     skus: detail.skus.map((sku) => {
       // An image's position is not an association with a SKU row. Use only an explicit path match.
       const linkedImage = sku.image_rel_path && detail.images.find((image) =>

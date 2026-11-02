@@ -6,11 +6,11 @@ from fastapi.responses import FileResponse
 
 from app.core.config import get_settings
 from app.core.database.session import get_database_engine
-from app.core.security.access import require_api_access, require_group_writes
+from app.core.security.access import require_api_access, require_group_writes, require_product_writes
 from .repository import ProductRepository
 from .service import ProductService
 from .schemas import (AssignGroup, AssignGroupResponse, Capabilities, DeleteGroupResponse,
-                      GroupName, GroupResponse, GroupsRead, ProductDetail, ProductIds, ProductPage)
+                      GroupName, GroupResponse, GroupsRead, ProductDetail, ProductEdit, ProductIds, ProductPage)
 
 router = APIRouter(prefix="/api/v1", tags=["product-library"], dependencies=[Depends(require_api_access)])
 
@@ -25,7 +25,7 @@ Service = Annotated[ProductService, Depends(get_service)]
 @router.get("/capabilities", response_model=Capabilities)
 def capabilities():
     settings = get_settings()
-    return Capabilities(groupWrites=settings.enable_group_writes,
+    return Capabilities(groupWrites=settings.enable_group_writes, productEdit=settings.enable_product_writes,
                         categoryLookup=settings.douyin_category_lookup_enabled)
 
 
@@ -72,6 +72,17 @@ def export_uu(body: ProductIds, service: Service):
 @router.get("/products/{product_id}", response_model=ProductDetail)
 def detail(product_id: str, service: Service):
     return service.detail(product_id)
+
+
+@router.get("/products/{product_id}/edit", dependencies=[Depends(require_product_writes)])
+def edit_snapshot(product_id: str, response: Response, service: Service):
+    response.headers["Cache-Control"] = "no-store"
+    return service.edit_snapshot(product_id)
+
+
+@router.patch("/products/{product_id}", dependencies=[Depends(require_product_writes)])
+def save_product(product_id: str, body: ProductEdit, service: Service):
+    return service.save_edit(product_id, body)
 
 
 @router.get("/products/{product_id}/images/{kind}/{position}")

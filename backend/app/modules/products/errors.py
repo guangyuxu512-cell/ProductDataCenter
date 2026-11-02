@@ -27,3 +27,9 @@ class GroupNameConflict(AppError):
 class ExportUnavailable(AppError):
     code = "PRODUCT_EXPORT_UNAVAILABLE"
     status_code = 409
+
+
+class ProductEditConflict(AppError):
+    code = "PRODUCT_EDIT_CONFLICT"
+    message = "商品已被修改或重新采集，请刷新后重试"
+    status_code = 409

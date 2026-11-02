@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h, ref, watch } from 'vue'
 import {
-  NDropdown, NFormItem, NImage, NSpin, NSwitch, NTab, NText,
+  NAutoComplete, NDropdown, NFormItem, NImage, NSpin, NSwitch, NTab, NText,
   type DataTableColumns, useMessage,
 } from 'naive-ui'
 import { PlatformDisplay } from '@/entities/platform'
@@ -9,7 +9,8 @@ import { ErrorState, LoadingState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
 import { fetchCategoryAttributes, fetchOriginalCategoryAttributes,
-  type CategoryAttribute } from '../api/category-lookup'
+  type CategoryAttribute, type CategoryTreeItem } from '../api/category-lookup'
+import { fetchEditSnapshot, saveProduct, type ProductPatch, type SpecImage } from '../api/products'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
@@ -29,10 +30,11 @@ const props = withDefaults(defineProps<{
   exportable?: boolean
   groupable?: boolean
   categoryLookupEnabled?: boolean
+  editable?: boolean
   navigationItems?: ReadonlyArray<{ id: string; title: string; subtitle: string; imageUrl: string | null }>
 }>(), {
   loading: false, error: null, canPrevious: false, canNext: false,
-  positionLabel: '', exportable: true, groupable: true, categoryLookupEnabled: false, navigationItems: () => [],
+  positionLabel: '', exportable: true, groupable: true, categoryLookupEnabled: false, editable: false, navigationItems: () => [],
 })
 const emit = defineEmits<{
   'update:show': [value: boolean]
@@ -41,6 +43,7 @@ const emit = defineEmits<{
   retry: []
   navigate: [direction: 'previous' | 'next']
   'navigate-to': [id: string]
+  saved: []
 }>()
 
 const message = useMessage()
@@ -54,6 +57,169 @@ const categoryShop = ref<string | null>(null)
 const categoryAttributes = ref<CategoryAttribute[]>([])
 const categorySchemaLoaded = ref(false)
 const categoryError = ref(false)
+const editVersion = ref('')
+const editBusy = ref(false)
+const saving = ref(false)
+const draftTitle = ref('')
+const initialTitle = ref('')
+const draftMain = ref<string[]>([])
+const draftDetail = ref<string[]>([])
+const initialMain = ref<string[]>([])
+const initialDetail = ref<string[]>([])
+const specImages = ref<SpecImage[]>([])
+const initialSpecImages = ref<SpecImage[]>([])
+const specImageGroup = ref('')
+type SkuDraft = { skuId: string; specIds: string[]; price: string; stock: string; enabled: boolean | null; merchantCode: string; deleted: boolean }
+const skuDrafts = ref<SkuDraft[]>([])
+const initialSkuDrafts = ref<SkuDraft[]>([])
+const selectedParts = ref<CategoryTreeItem[] | null>(null)
+const attributeInputs = ref<Record<string, string>>({})
+const touchedAttributes = ref<string[]>([])
+let editRequest = 0
+const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value)
+const dirty = computed(() => !!props.product && (
+  draftTitle.value !== initialTitle.value || selectedParts.value !== null || touchedAttributes.value.length > 0 ||
+  JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value) ||
+  JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value) ||
+  JSON.stringify(specImages.value) !== JSON.stringify(initialSpecImages.value) ||
+  JSON.stringify(skuDrafts.value) !== JSON.stringify(initialSkuDrafts.value)))
+
+watch(() => [props.show, props.editable, props.product?.id] as const, () => {
+  const request = ++editRequest
+  const product = props.product
+  editVersion.value = ''; editBusy.value = false; saving.value = false
+  selectedParts.value = null; attributeInputs.value = {}; touchedAttributes.value = []
+  specImages.value = []; initialSpecImages.value = []; specImageGroup.value = ''
+  skuDrafts.value = []; initialSkuDrafts.value = []
+  if (!props.show || !product) return
+  draftTitle.value = product.title; initialTitle.value = product.title
+  draftMain.value = [...(product.previewMainImageUrls ?? (product.mainImageUrl ? [product.mainImageUrl] : []))]
+  draftDetail.value = [...product.detailImageUrls]
+  initialMain.value = [...draftMain.value]; initialDetail.value = [...draftDetail.value]
+  if (!props.editable) return
+  editBusy.value = true
+  void fetchEditSnapshot(product.id).then((result) => {
+    if (request !== editRequest) return
+    editVersion.value = result.version; specImageGroup.value = result.specImageGroup
+    specImages.value = result.specImages.map((item) => ({ ...item }))
+    initialSpecImages.value = result.specImages.map((item) => ({ ...item }))
+    skuDrafts.value = (result.skus ?? []).map((item) => ({ ...item, specIds: [...item.specIds],
+      stock: item.stock === null ? '' : String(item.stock), deleted: false }))
+    initialSkuDrafts.value = skuDrafts.value.map((item) => ({ ...item, specIds: [...item.specIds] }))
+  }).catch(() => { if (request === editRequest) message.error('读取编辑数据失败，请刷新商品后重试') })
+    .finally(() => { if (request === editRequest) editBusy.value = false })
+}, { immediate: true })
+
+function allowLeave() { return !dirty.value || window.confirm('当前商品有未保存的修改，确定放弃吗？') }
+function closeEditor() { if (!saving.value && allowLeave()) emit('update:show', false) }
+function navigateEditor(direction: 'previous' | 'next') { if (!saving.value && allowLeave()) emit('navigate', direction) }
+function navigateTo(id: string) { if (!saving.value && allowLeave()) emit('navigate-to', id) }
+
+function setAttribute(item: CategoryAttribute, value: string) {
+  attributeInputs.value[item.id] = value
+  if (!touchedAttributes.value.includes(item.id)) touchedAttributes.value.push(item.id)
+}
+function attributeValue(item: CategoryAttribute) {
+  if (Object.hasOwn(attributeInputs.value, item.id)) return attributeInputs.value[item.id]
+  return props.product ? originalAttributeValue(item, categoryAttributes.value, props.product, selectedCategory.value) : ''
+}
+const missingRequired = computed(() => categoryAttributes.value.filter((item) => item.required && !attributeValue(item).trim()).length)
+function validImageUrl(value: string) {
+  try { return ['http:', 'https:'].includes(new URL(value).protocol) } catch { return false }
+}
+function specImageIndex(name: string) { return specImages.value.findIndex((item) => item.name === name) }
+function skuDraft(row: ProductSku) { return skuDrafts.value.find((item) => item.skuId === row.sourceSkuId) }
+function deleteSku(row: ProductSku) {
+  const draft = skuDraft(row)
+  if (canEdit.value && draft && window.confirm('确定删除这个 SKU 组合吗？保存后会同步修改商品数据包。')) draft.deleted = true
+}
+function restoreDeletedSkus() { for (const [index, sku] of skuDrafts.value.entries()) if (!initialSkuDrafts.value[index]?.deleted) sku.deleted = false }
+const visibleSkus = computed(() => (props.product?.skus ?? []).filter((row) => !skuDraft(row)?.deleted))
+const deletedSkus = computed(() => skuDrafts.value.filter((row, index) => row.deleted && !initialSkuDrafts.value[index]?.deleted).length)
+function changeImage(kind: 'main' | 'detail' | 'sku', index?: number) {
+  if (!canEdit.value) return
+  const images = kind === 'main' ? draftMain.value : kind === 'detail' ? draftDetail.value : null
+  const original = kind === 'sku' ? specImages.value[index ?? -1]?.url : images?.[index ?? -1]
+  const result = window.prompt('请输入图片链接', original ?? '')
+  if (result === null) return
+  const url = result.trim()
+  if (!validImageUrl(url)) { message.error('请输入有效的 HTTP 或 HTTPS 图片链接'); return }
+  if (kind === 'sku' && index !== undefined && specImages.value[index]) specImages.value[index].url = url
+  else if (images && index === undefined) images.push(url)
+  else if (images && index !== undefined) images[index] = url
+}
+function removeImage(kind: 'main' | 'detail' | 'sku', index: number) {
+  if (!canEdit.value) return
+  if (kind === 'sku') { if (specImages.value[index]) specImages.value[index].url = ''; return }
+  ;(kind === 'main' ? draftMain.value : draftDetail.value).splice(index, 1)
+}
+function moveImage(kind: 'main' | 'detail', index: number, offset: number) {
+  const images = kind === 'main' ? draftMain.value : draftDetail.value
+  const next = index + offset
+  if (!canEdit.value || next < 0 || next >= images.length) return
+  ;[images[index], images[next]] = [images[next], images[index]]
+}
+
+async function submitEdit() {
+  const product = props.product
+  if (!product || !canEdit.value || !dirty.value) return
+  if (draftTitle.value !== initialTitle.value && (titleLength.value > 60 || !draftTitle.value.trim())) {
+    message.error('商品标题不能为空，长度不能超过 60'); tab.value = 'base'; return
+  }
+  const patch: ProductPatch = { expectedVersion: editVersion.value }
+  if (draftTitle.value !== initialTitle.value) patch.title = draftTitle.value
+  if (selectedParts.value) patch.category = selectedParts.value.map(({ id, name }) => ({ id, name }))
+  if (JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value)) patch.mainImages = [...draftMain.value]
+  if (JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value)) patch.detailImages = [...draftDetail.value]
+  if (JSON.stringify(specImages.value) !== JSON.stringify(initialSpecImages.value)) patch.specImages = specImages.value
+    .filter((item, index) => item.url !== initialSpecImages.value[index]?.url)
+    .map((item) => ({ specId: item.id, url: item.url }))
+  const changedSkus: NonNullable<ProductPatch['skus']> = []
+  for (const [index, item] of skuDrafts.value.entries()) {
+    const previous = initialSkuDrafts.value[index]
+    if (!previous || JSON.stringify(item) === JSON.stringify(previous)) continue
+    const change: NonNullable<ProductPatch['skus']>[number] = { specIds: [...item.specIds] }
+    if (item.deleted) change.delete = true
+    else {
+      if (item.price !== previous.price) {
+        if (!/^\d+(?:\.\d{1,2})?$/.test(item.price) || Number(item.price) <= 0 || Number(item.price) > 9999999999) {
+          message.error('SKU 价格必须大于 0，最多两位小数'); tab.value = 'sku'; return
+        }
+        change.price = item.price
+      }
+      if (item.stock !== previous.stock) {
+        if (!/^\d+$/.test(item.stock) || Number(item.stock) > 2147483647) {
+          message.error('SKU 库存必须是非负整数'); tab.value = 'sku'; return
+        }
+        change.stock = Number(item.stock)
+      }
+      if (item.merchantCode !== previous.merchantCode) change.merchantCode = item.merchantCode
+      if (item.enabled !== previous.enabled && item.enabled !== null) change.enabled = item.enabled
+    }
+    changedSkus.push(change)
+  }
+  if (changedSkus.length) patch.skus = changedSkus
+  if (touchedAttributes.value.length) patch.attributes = touchedAttributes.value.flatMap((id) => {
+    const field = categoryAttributes.value.find((item) => item.id === id)
+    if (!field) return []
+    const values = (attributeInputs.value[id] ?? '').split('、').map((value) => value.trim()).filter(Boolean)
+    return [{ id, name: field.label, values: values.map((name) => ({
+      name, valueId: field.options.find((option) => option.label === name)?.value ?? '0',
+    })) }]
+  })
+  saving.value = true
+  try {
+    const result = await saveProduct(product.id, patch)
+    editVersion.value = result.version; initialTitle.value = draftTitle.value
+    message.success('商品已保存')
+    selectedParts.value = null; touchedAttributes.value = []
+    initialMain.value = [...draftMain.value]; initialDetail.value = [...draftDetail.value]
+    initialSpecImages.value = specImages.value.map((item) => ({ ...item }))
+    initialSkuDrafts.value = skuDrafts.value.map((item) => ({ ...item, specIds: [...item.specIds] }))
+    emit('saved')
+  } catch (error) { message.error(error instanceof Error ? error.message : '保存失败，请重试') }
+  finally { saving.value = false }
+}
 let categoryRequest = 0
 watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.product?.id,
   props.product?.sourceCategoryId] as const, () => {
@@ -109,24 +275,34 @@ async function loadAttributes(refresh = false) {
   finally { if (request === categoryRequest) categoryBusy.value = false }
 }
 
-function selectCategory(value: { id: string; path: string; shopId: string }) {
+function selectCategory(value: { id: string; path: string; shopId: string; levels: CategoryTreeItem[] }) {
   categoryRequest += 1
   selectedCategory.value = value.id; categoryLabel.value = value.path; categoryShop.value = value.shopId
   categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryError.value = false; categoryBusy.value = false
+  if (props.editable && canEdit.value) {
+    selectedParts.value = value.id === props.product?.sourceCategoryId ? null : value.levels
+    attributeInputs.value = {}; touchedAttributes.value = []
+  }
 }
 
 const imageSections = computed(() => {
   const product = props.product
   if (!product) return []
   return [
-    { key: 'main', label: '主图', images: (product.previewMainImageUrls ??
-      (product.mainImageUrl ? [product.mainImageUrl] : [])).map((src, index) => ({
+    { key: 'main' as const, label: '主图', images: (props.editable ? draftMain.value : (product.previewMainImageUrls ??
+      (product.mainImageUrl ? [product.mainImageUrl] : []))).map((src, index) => ({
         src, label: `主图 ${index + 1}`, caption: '', skuKey: undefined,
       })) },
-    { key: 'detail', label: '详情图', images: product.detailImageUrls.map((src, index) => ({
+    { key: 'detail' as const, label: '详情图', images: (props.editable ? draftDetail.value : product.detailImageUrls).map((src, index) => ({
       src, label: `详情图 ${index + 1}`, caption: '', skuKey: undefined,
     })) },
-    { key: 'sku', label: '规格图', images: (product.previewSkuImageUrls ??
+    { key: 'sku' as const, label: '规格图', images: props.editable && specImages.value.length
+      ? [...specImages.value.map((item) => ({ src: item.url, label: item.name || specImageGroup.value,
+        caption: '', skuKey: item.id })), ...(product.previewSkuImageUrls ?? [])
+        .filter((url) => !initialSpecImages.value.some((item) => item.url === url) &&
+          !specImages.value.some((item) => item.url === url))
+        .map((src, index) => ({ src, label: `其他规格图 ${index + 1}`, caption: '', skuKey: undefined }))]
+      : (product.previewSkuImageUrls ??
       product.skus.flatMap((sku) => sku.imageUrl ? [sku.imageUrl] : [])).map((src, index) => ({
       src, label: `规格图 ${index + 1}`, caption: '', skuKey: undefined,
     })) },
@@ -150,7 +326,7 @@ const allText = computed(() => {
   return item ? [basicText.value, '', 'SKU：', skuText.value, '', '属性：',
     ...item.attributes.map((attribute) => `${attribute.name}：${attribute.value}`)].join('\n') : ''
 })
-const titleLength = computed(() => Array.from(props.product?.title ?? '')
+const titleLength = computed(() => Array.from(props.editable ? draftTitle.value : (props.product?.title ?? ''))
   .reduce((sum, character) => sum + ((character.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0))
 const specLayout = computed(() => sourceSpecLayout(props.product?.skus ?? []))
 const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
@@ -164,19 +340,30 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
       ]) }]
   return [
     ...specColumns,
-    { title: '价格', key: 'price', width: 130, render: (row) => h(AppInput, {
-      modelValue: row.currentPrice === null ? '' : `¥${row.currentPrice}`, disabled: true, ariaLabel: 'SKU 价格',
-    }) },
-    { title: '库存', key: 'stock', width: 120, render: (row) => h(AppInput, {
-      modelValue: row.stockLabel ?? '', disabled: true, ariaLabel: 'SKU 库存',
-    }) },
+    { title: '价格', key: 'price', width: 130, render: (row) => {
+      const draft = skuDraft(row)
+      return h(AppInput, { modelValue: draft?.price ?? (row.currentPrice === null ? '' : `¥${row.currentPrice}`),
+        disabled: !canEdit.value || !draft, ariaLabel: 'SKU 价格',
+        'onUpdate:modelValue': (value: string) => { if (draft) draft.price = value } })
+    } },
+    { title: '库存', key: 'stock', width: 120, render: (row) => {
+      const draft = skuDraft(row)
+      return h(AppInput, { modelValue: draft?.stock ?? row.stockLabel ?? '', disabled: !canEdit.value || !draft,
+        ariaLabel: 'SKU 库存', 'onUpdate:modelValue': (value: string) => { if (draft) draft.stock = value } })
+    } },
     { title: 'SKU ID', key: 'skuId', minWidth: 170, render: (row) => row.sourceSkuId ?? '—' },
-    { title: '商家编码', key: 'merchantCode', width: 150, render: () => h(AppInput, {
-      modelValue: '', disabled: true, ariaLabel: 'SKU 商家编码',
-    }) },
-    { title: 'SKU 状态', key: 'skuStatus', width: 110, render: () => '—' },
-    { title: '操作', key: 'actions', width: 80, render: () => h(AppButton, {
-      tone: 'link', size: 'small', disabled: true,
+    { title: '商家编码', key: 'merchantCode', width: 150, render: (row) => {
+      const draft = skuDraft(row)
+      return h(AppInput, { modelValue: draft?.merchantCode ?? '', disabled: !canEdit.value || !draft,
+        ariaLabel: 'SKU 商家编码', 'onUpdate:modelValue': (value: string) => { if (draft) draft.merchantCode = value } })
+    } },
+    { title: 'SKU 状态', key: 'skuStatus', width: 110, render: (row) => {
+      const draft = skuDraft(row)
+      return draft?.enabled === null || !draft ? '—' : h(NSwitch, { value: draft.enabled, disabled: !canEdit.value,
+        'aria-label': 'SKU 上架状态', 'onUpdate:value': (value: boolean) => { draft.enabled = value } })
+    } },
+    { title: '操作', key: 'actions', width: 80, render: (row) => h(AppButton, {
+      tone: 'link', size: 'small', disabled: !canEdit.value || !skuDraft(row), onClick: () => deleteSku(row),
     }, () => '删除') },
   ]
 })
@@ -184,15 +371,16 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 
 <template>
   <AppDialog :show="show" title="编辑商品" size="workspace" :content-scrollable="false"
-    positive-text="保存" negative-text="关闭" :positive-disabled="true" positive-disabled-reason="商品编辑尚未接入"
-    @update:show="!$event && emit('update:show', false)">
+    positive-text="保存" negative-text="关闭" :loading="saving" :positive-disabled="!canEdit || !dirty"
+    :positive-disabled-reason="!editable ? '商品编辑尚未启用' : null"
+    @confirm="submitEdit" @update:show="!$event && closeEditor()">
     <ErrorState v-if="error" :description="error" retryable @retry="emit('retry')" />
     <LoadingState v-else-if="!product" />
     <div v-else class="product-preview__layout" :aria-busy="loading">
       <div v-if="loading" class="product-preview__loading-mask" role="status" aria-label="加载中"><NSpin size="small" /></div>
       <ProductRangeNavigator :items="navigationItems" :selected-id="product.id" :position-label="positionLabel"
         :can-previous="canPrevious" :can-next="canNext" :disabled="loading"
-        @navigate="emit('navigate', $event)" @navigate-to="emit('navigate-to', $event)" />
+        @navigate="navigateEditor" @navigate-to="navigateTo" />
       <section class="product-preview__main" :inert="loading || undefined">
         <header class="product-preview__header">
           <div class="product-preview__meta">
@@ -200,6 +388,8 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <span>商品 ID {{ product.productId }}</span>
             <span v-if="product.shopName">来源店铺 {{ product.shopName }}</span>
             <span>分组 {{ product.groupName ?? '未分组' }}</span>
+            <NText v-if="product.edited" type="warning">已修改</NText>
+            <NText v-if="editable && dirty" type="warning">有未保存的修改</NText>
           </div>
           <div class="product-preview__actions">
             <NDropdown trigger="click" :options="[{ label: '复制标题', key: 'title' }, { label: '复制基础信息', key: 'basic' }]" @select="copyFromMenu">
@@ -218,29 +408,32 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
         <div class="product-preview__content" :inert="loading || undefined">
           <section v-if="tab === 'base'" class="product-preview__section">
             <NFormItem label="商品标题" required>
-              <AppInput :model-value="product.title" aria-label="商品标题" readonly />
+              <AppInput :model-value="editable ? draftTitle : product.title" aria-label="商品标题"
+                :readonly="!canEdit" @update:model-value="draftTitle = $event" />
               <span class="product-preview__count">{{ titleLength }}/60</span>
               <AppButton size="small" disabled>AI 优化</AppButton>
             </NFormItem>
             <NFormItem label="抖店类目" required>
               <template v-if="categoryLookupEnabled">
-                <CategoryPicker :key="product.id" :label="categoryLabel" :disabled="categoryBusy" @select="selectCategory" />
+                <CategoryPicker :key="product.id" :label="categoryLabel"
+                  :disabled="categoryBusy || (editable && (!canEdit || product.platform !== 'douyin'))" @select="selectCategory" />
               </template>
               <template v-else>
                 <AppInput model-value="" aria-label="抖店类目" disabled />
                 <AppButton size="small" disabled>更换类目</AppButton>
               </template>
             </NFormItem>
-            <NText v-if="selectedCategory" depth="3">当前类目和属性仅供查看，尚未保存</NText>
+            <NText v-if="selectedCategory && !editable" depth="3">当前类目和属性仅供查看，尚未保存</NText>
             <NText v-if="product.category" depth="3">来源类目：{{ product.category }}</NText>
-            <NText v-if="categoryLookupEnabled && product.platform !== 'douyin'" depth="3">平台推荐类目尚未接通，可手动选择类目</NText>
+            <NText v-if="categoryLookupEnabled && product.platform !== 'douyin'" depth="3">{{ editable ? '该来源的抖店类目转换尚未接通' : '平台推荐类目尚未接通，可手动选择类目' }}</NText>
           </section>
           <section v-if="tab === 'images'" class="product-preview__image-workspace">
             <article v-for="section in imageSections" :key="section.key" class="product-preview__image-section">
               <header class="product-preview__image-section-header">
                 <strong>{{ section.label }}</strong>
                 <div v-if="section.key !== 'sku'" class="product-preview__actions">
-                  <AppButton size="small" disabled>AI 创作</AppButton><AppButton size="small" disabled>添加图片</AppButton>
+                  <AppButton size="small" disabled title="AI 改图尚未接入">AI 创作</AppButton>
+                  <AppButton size="small" :disabled="!canEdit" @click="changeImage(section.key)">添加图片链接</AppButton>
                 </div>
                 <AppButton v-else tone="link" size="small" @click="tab = 'sku'">在规格与 SKU 中设置</AppButton>
               </header>
@@ -257,11 +450,18 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                     <NText v-else depth="3">—</NText>
                   </div>
                   <div v-if="section.key !== 'sku'" class="product-preview__image-actions">
-                    <AppButton tone="link" size="small" disabled>上移</AppButton>
-                    <AppButton tone="link" size="small" disabled>下移</AppButton>
-                    <AppButton tone="link" size="small" disabled>删除</AppButton>
+                    <AppButton tone="link" size="small" :disabled="!canEdit || index === 0" @click="moveImage(section.key, index, -1)">上移</AppButton>
+                    <AppButton tone="link" size="small" :disabled="!canEdit || index === section.images.length - 1" @click="moveImage(section.key, index, 1)">下移</AppButton>
+                    <AppButton tone="link" size="small" :disabled="!canEdit" @click="removeImage(section.key, index)">删除</AppButton>
                   </div>
-                  <NText v-else class="product-preview__image-caption">{{ image.label }}</NText>
+                  <template v-else>
+                    <NText class="product-preview__image-caption">{{ image.label }}</NText>
+                    <div class="product-preview__image-actions">
+                      <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey" @click="changeImage('sku', index)">更换</AppButton>
+                      <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey || !image.src" @click="removeImage('sku', index)">删除</AppButton>
+                      <AppButton tone="link" size="small" disabled title="AI 改图尚未接入">AI 改图</AppButton>
+                    </div>
+                  </template>
                 </div>
               </div>
             </article>
@@ -275,11 +475,16 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <NText v-else-if="categoryBusy" depth="3">正在读取类目属性…</NText>
             <div v-else-if="categoryError"><NText depth="3">类目属性读取失败</NText><AppButton size="small" @click="loadAttributes()">重试</AppButton></div>
             <NText v-else-if="categorySchemaLoaded && !categoryAttributes.length" depth="3">当前类目没有可显示的属性</NText>
-            <NText v-else-if="categorySchemaLoaded && product.platform === 'douyin' && selectedCategory === product.sourceCategoryId" depth="3">已显示原包中可对应的属性，尚未校验或保存</NText>
+            <NText v-else-if="categorySchemaLoaded && product.platform === 'douyin' && selectedCategory === product.sourceCategoryId" depth="3">{{ editable ? '已显示原包中可对应的属性，请核对后保存' : '已显示原包中可对应的属性，尚未校验或保存' }}</NText>
             <NText v-else-if="categorySchemaLoaded" depth="3">当前类目的属性尚未从原包自动对应</NText>
+            <NText v-if="editable && categorySchemaLoaded && missingRequired" type="warning">还有 {{ missingRequired }} 项必填属性未填写</NText>
             <div class="product-preview__attributes">
               <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required">
-                <AppInput :model-value="originalAttributeValue(item, categoryAttributes, product, selectedCategory)" readonly />
+                <NAutoComplete v-if="editable && item.options.length" :value="attributeValue(item)"
+                  :options="item.options.map((option) => ({ label: option.label, value: option.label }))"
+                  :disabled="!canEdit || product.platform !== 'douyin'" placeholder="请选择或输入"
+                  @update:value="setAttribute(item, $event)" />
+                <AppInput v-else :model-value="attributeValue(item)" :readonly="!canEdit || product.platform !== 'douyin'" @update:model-value="setAttribute(item, $event)" />
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
@@ -290,7 +495,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <div class="product-preview__section-heading"><strong>销售规格</strong>
               <AppButton size="small" disabled>添加规格类型</AppButton>
             </div>
-            <div v-for="axis in specLayout?.axes ?? []" :key="axis.name" class="product-preview__axis">
+            <div v-for="(axis, axisIndex) in specLayout?.axes ?? []" :key="axis.name" class="product-preview__axis">
               <div class="product-preview__axis-heading">
                 <AppInput :model-value="axis.name" aria-label="规格类型" readonly />
                 <span class="product-preview__status"><NSwitch :value="false" disabled />添加规格图</span>
@@ -301,6 +506,12 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               </div>
               <div class="product-preview__values">
                 <div v-for="value in axis.values" :key="value" class="product-preview__value">
+                  <button v-if="editable && axisIndex === 0 && axis.name === specImageGroup && specImageIndex(value) >= 0"
+                    type="button" class="product-preview__spec-image" :disabled="!canEdit"
+                    :aria-label="`更换${value}规格图片`" @click="changeImage('sku', specImageIndex(value))">
+                    <img v-if="specImages[specImageIndex(value)]?.url" :src="specImages[specImageIndex(value)].url" :alt="`${value}规格图片`" />
+                    <span v-else>＋</span>
+                  </button>
                   <AppInput :model-value="value" :aria-label="`${axis.name}规格值`" readonly />
                   <AppButton tone="link" size="small" disabled>删除</AppButton>
                 </div>
@@ -311,7 +522,10 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               <div class="product-preview__actions"><AppButton size="small" @click="copy(skuText, 'SKU 信息')">复制 SKU</AppButton>
                 <AppButton size="small" @click="copy(allText, '全部商品信息')">复制全部信息</AppButton></div>
             </div>
-            <AppTable :columns="skuColumns" :data="product.skus" :row-key="(row) => row.draftKey" :scroll-x="1000" bordered />
+            <div v-if="deletedSkus" class="product-preview__status">已删除 {{ deletedSkus }} 个 SKU，保存后生效
+              <AppButton tone="link" size="small" @click="restoreDeletedSkus">撤销删除</AppButton>
+            </div>
+            <AppTable :columns="skuColumns" :data="visibleSkus" :row-key="(row) => row.draftKey" :scroll-x="1000" bordered />
           </section>
         </div>
       </section>
@@ -346,6 +560,8 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 .product-preview__axis-heading > :first-child { width:150px; }
 .product-preview__axis-heading > .product-preview__actions { margin-left:auto; }
 .product-preview__value > :deep(.n-input) { width:140px; }
+.product-preview__spec-image { width:40px; height:40px; padding:0; border:1px dashed var(--border-subtle); border-radius:var(--radius-card); background:transparent; cursor:pointer; }
+.product-preview__spec-image img { width:100%; height:100%; object-fit:contain; }
 .product-preview__status { display:flex; align-items:center; gap:var(--space-2); color:var(--text-secondary); }
 .product-preview__content :deep(.product-preview__sku) { display:flex; align-items:center; gap:var(--space-3); }
 .product-preview__content :deep(.product-preview__sku .deferred-preview-thumbnail) { width:64px; height:64px; flex:0 0 64px; }

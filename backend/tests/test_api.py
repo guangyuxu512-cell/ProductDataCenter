@@ -61,6 +61,10 @@ def test_invalid_date_returns_meaningful_error(client):
 
 def test_group_writes_default_off_and_detail_not_found(client):
     assert client.get("/api/v1/capabilities", headers=AUTH).json()["groupWrites"] is False
+    assert client.get("/api/v1/capabilities", headers=AUTH).json()["productEdit"] is False
+    assert client.get("/api/v1/products/3760269504500859111/edit", headers=AUTH).status_code == 403
+    assert client.patch("/api/v1/products/3760269504500859111", headers=AUTH,
+                        json={"expectedVersion": "a" * 64, "title": "商品"}).status_code == 403
     assert client.post("/api/v1/product-groups", json={"name": "test"}, headers=AUTH).status_code == 403
     response = client.get("/api/v1/products/3760269504500859111", headers=AUTH)
     assert response.status_code == 404

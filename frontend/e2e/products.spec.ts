@@ -658,3 +658,50 @@ test('非抖音来源不会把原平台类目当作抖店类目', async ({ page 
   await expect(dialog.getByText('请先选择抖店类目')).toBeVisible()
   expect(calls).toEqual([])
 })
+
+test('编辑商品保存原包字段，规格图在两个页签共用', async ({ page }) => {
+  await fixtures(page)
+  let title = '原商品标题', edited = false
+  let payload: Record<string, unknown> | null = null
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '颜色',
+    specImages: [{ id: '9007199254740993123', name: '白色', url: 'https://example.test/white.jpg' }],
+    skus: [{ skuId: 'sku-1', specIds: ['11', '22'], price: '19.99', stock: 999, enabled: true, merchantCode: '' }],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON() as Record<string, unknown>
+      title = String(payload.title ?? title); edited = true
+      return route.fulfill({ json: { version: 'b'.repeat(64) } })
+    }
+    return route.fulfill({ json: { product: { ...product(firstId), title, title_status: edited ? '完整UU | 商品库已修改' : '' },
+      sourceCategoryId: '100', sourceAttributes: [],
+      skus: [{ sku_id: 'sku-1', sku_name: '颜色: 白色 / 尺码: 均码', current_price: '19.99', image_rel_path: '', sort_order: 0 }],
+      images: [{ image_type: 'main', sort_order: 0, rel_path: '', source_url: 'https://example.test/main.jpg' }] } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  const titleInput = dialog.getByRole('textbox', { name: '商品标题' })
+  await expect(titleInput).toBeEditable()
+  await titleInput.fill('修改后的商品')
+  await dialog.getByRole('tab', { name: '图文信息' }).click()
+  page.once('dialog', (prompt) => prompt.accept('https://example.test/new-white.jpg'))
+  await dialog.getByRole('button', { name: '更换', exact: true }).click()
+  await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  const skuImage = dialog.getByRole('button', { name: '更换白色规格图片' }).locator('img')
+  await expect(skuImage).toHaveAttribute('src', 'https://example.test/new-white.jpg')
+  await dialog.getByRole('textbox', { name: 'SKU 价格' }).fill('25.50')
+  await dialog.getByRole('textbox', { name: 'SKU 库存' }).fill('8')
+  await dialog.getByRole('textbox', { name: 'SKU 商家编码' }).fill('sku-001')
+  await dialog.getByRole('switch', { name: 'SKU 上架状态' }).click()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).not.toBeNull()
+  expect(payload).toMatchObject({ expectedVersion: 'a'.repeat(64), title: '修改后的商品',
+    specImages: [{ specId: '9007199254740993123', url: 'https://example.test/new-white.jpg' }],
+    skus: [{ specIds: ['11', '22'], price: '25.50', stock: 8, merchantCode: 'sku-001', enabled: false }] })
+  await expect(dialog.getByText('已修改', { exact: true })).toBeVisible()
+})

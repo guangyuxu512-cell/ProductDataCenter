@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 from sqlalchemy import Connection, Engine, text
 
 from .queries import ProductListOptions, build_product_list_queries
 from .source_attributes import source_attributes
+from .editing import apply_edit
+from .errors import ProductEditConflict, ProductNotFound, ProductRequestError
 
 
 def _original_category_id(levels) -> str | None:
@@ -117,6 +121,142 @@ class ProductRepository:
                 title, captured_at, uu_rel_path, uu_sha256, uu_json::text AS uu_text FROM products
                 WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL
                 ORDER BY array_position(CAST(:ids AS text[]),product_id)"""), {"ids": product_ids}).mappings()]
+
+    def edit_snapshot(self, product_id: str) -> dict:
+        with self.engine.connect() as conn:
+            row = conn.execute(text("SELECT uu_json::text AS package FROM products WHERE product_id=:id"),
+                               {"id": product_id}).mappings().first()
+        if row is None:
+            raise ProductNotFound()
+        if not row["package"]:
+            raise ProductRequestError("商品数据包缺失，无法编辑")
+        package = json.loads(row["package"])
+        spec_block = package.get("spec_detail_value") if isinstance(package, dict) else None
+        groups = spec_block.get("value", []) if isinstance(spec_block, dict) else []
+        first = groups[0] if isinstance(groups, list) and groups and isinstance(groups[0], dict) else {}
+        items = first.get("spec_values", []) if isinstance(first.get("spec_values", []), list) else []
+        spec_images = [{"id": str(item.get("id", "")), "name": str(item.get("name", "")),
+                        "url": str(item.get("img_url") or "")} for item in items if isinstance(item, dict) and item.get("id") is not None]
+        sku_block = package.get("goodsSkuInfo") if isinstance(package, dict) else None
+        detail = sku_block.get("spec_detail") if isinstance(sku_block, dict) else None
+        rows = detail.get("value", []) if isinstance(detail, dict) else []
+        goods = package.get("goodsInfo") if isinstance(package, dict) else None
+        sku_map = goods.get("skuInfoMap", {}) if isinstance(goods, dict) else {}
+        sku_rows = []
+        if isinstance(rows, list) and isinstance(sku_map, dict):
+            for item in rows:
+                if not isinstance(item, dict) or not isinstance(item.get("spec_detail_ids"), list):
+                    continue
+                ids = [str(value) for value in item["spec_detail_ids"]]
+                key = "_".join(ids)
+                source = sku_map.get(key)
+                if not ids or not isinstance(source, dict):
+                    continue
+                source_id = source.get("sku_id") or source.get("skuId") or source.get("id") or key
+                stock = item.get("stock_info")
+                sku_rows.append({"skuId": str(source_id), "specIds": ids, "price": str(item.get("price") or ""),
+                    "stock": stock.get("stock_num") if isinstance(stock, dict) else None,
+                    "enabled": item.get("sku_status") if isinstance(item.get("sku_status"), bool) else None,
+                    "merchantCode": str(item.get("merchant_code") or "")})
+        return {"version": hashlib.sha256(row["package"].encode("utf-8")).hexdigest(),
+                "specImageGroup": str(first.get("name") or ""), "specImages": spec_images, "skus": sku_rows}
+
+    def save_edit(self, product_id: str, edit) -> dict:
+        with self.engine.begin() as conn:
+            row = conn.execute(text("""SELECT source_platform, uu_json::text AS package, title_status
+                FROM products WHERE product_id=:id FOR UPDATE"""), {"id": product_id}).mappings().first()
+            if row is None:
+                raise ProductNotFound()
+            if not row["package"]:
+                raise ProductRequestError("商品数据包缺失，无法编辑")
+            version = hashlib.sha256(row["package"].encode("utf-8")).hexdigest()
+            if version != edit.expectedVersion:
+                raise ProductEditConflict()
+            original_package = json.loads(row["package"])
+            package = apply_edit(original_package, row["source_platform"], edit)
+            status = row["title_status"] or ""
+            if not status.endswith("商品库已修改"):
+                status = f"{status} | 商品库已修改" if status else "商品库已修改"
+            params = {"id": product_id, "package": json.dumps(package, ensure_ascii=False, separators=(",", ":")),
+                      "title": edit.title, "status": status}
+            sql = "UPDATE products SET uu_json=CAST(:package AS jsonb), title_status=:status"
+            if edit.title is not None:
+                sql += ", title=:title"
+            if edit.category is not None:
+                for index in range(1, 5):
+                    params[f"level{index}"] = edit.category[index - 1].name if index <= len(edit.category) else ""
+                    sql += f", category_level_{index}=:level{index}"
+                params["path"] = " → ".join(item.name for item in edit.category)
+                params["leaf"] = edit.category[-1].id
+                sql += ", category_path=:path, category_leaf_id=:leaf"
+            for kind, urls in (("main", edit.mainImages), ("detail", edit.detailImages)):
+                if urls is None:
+                    continue
+                old = conn.execute(text("""SELECT source_url, rel_path FROM product_images
+                    WHERE product_id=:id AND image_type=:kind"""), {"id": product_id, "kind": kind}).mappings()
+                paths = {item["source_url"]: item["rel_path"] for item in old if item["source_url"] and item["rel_path"]}
+                conn.execute(text("DELETE FROM product_images WHERE product_id=:id AND image_type=:kind"),
+                             {"id": product_id, "kind": kind})
+                for index, url in enumerate(urls):
+                    conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+                        VALUES (:id,:kind,:position,:path,:url)"""),
+                        {"id": product_id, "kind": kind, "position": index, "path": paths.get(url, ""), "url": url})
+                params[f"{kind}_count"] = len(urls)
+                sql += f", {kind}_image_count=:{kind}_count"
+            if edit.specImages is not None:
+                groups = package["spec_detail_value"]["value"]
+                sku_urls = list(dict.fromkeys(str(item.get("img_url")) for group in groups if isinstance(group, dict)
+                    for item in group.get("spec_values", []) if isinstance(item, dict) and item.get("img_url")
+                    and str(item.get("img_url")).startswith(("http://", "https://"))))
+                old = conn.execute(text("""SELECT source_url, rel_path FROM product_images
+                    WHERE product_id=:id AND image_type='sku'"""), {"id": product_id}).mappings()
+                paths = {item["source_url"]: item["rel_path"] for item in old if item["source_url"] and item["rel_path"]}
+                conn.execute(text("DELETE FROM product_images WHERE product_id=:id AND image_type='sku'"), {"id": product_id})
+                for index, url in enumerate(sku_urls):
+                    conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+                        VALUES (:id,'sku',:position,:path,:url)"""),
+                        {"id": product_id, "position": index, "path": paths.get(url, ""), "url": url})
+                params["sku_count_images"] = len(sku_urls)
+                sql += ", sku_image_count=:sku_count_images"
+                spec_to_url = {item.specId: item.url for item in edit.specImages}
+                sku_map = package.get("goodsInfo", {}).get("skuInfoMap", {})
+                for sku_row in package.get("goodsSkuInfo", {}).get("spec_detail", {}).get("value", []):
+                    if not isinstance(sku_row, dict) or not isinstance(sku_row.get("spec_detail_ids"), list):
+                        continue
+                    ids = [str(value) for value in sku_row["spec_detail_ids"]]
+                    changed = next((spec_to_url[value] for value in ids if value in spec_to_url), None)
+                    source = sku_map.get("_".join(ids), {}) if isinstance(sku_map, dict) else {}
+                    source_id = source.get("sku_id") or source.get("skuId") or source.get("id") if isinstance(source, dict) else None
+                    if changed is not None and source_id is not None:
+                        conn.execute(text("UPDATE product_skus SET image_rel_path=:path WHERE product_id=:id AND sku_id=:sku_id"),
+                                     {"id": product_id, "sku_id": str(source_id), "path": paths.get(changed, "")})
+            if edit.skus is not None:
+                params["sku_count"] = len(package["goodsSkuInfo"]["spec_detail"]["value"])
+                sql += ", sku_count=:sku_count"
+                if not package["goodsInfo"]["skuInfoMap"]:
+                    sql += ", current_price_min=NULL, current_price_max=NULL"
+            sql += " WHERE product_id=:id RETURNING uu_json::text"
+            saved = conn.execute(text(sql), params).scalar_one()
+            if edit.skus is not None:
+                source_map = original_package["goodsInfo"]["skuInfoMap"]
+                ids = [str(value.get("sku_id") or value.get("skuId") or value.get("id") or key)
+                       for key, value in source_map.items() if isinstance(value, dict)]
+                for change in edit.skus:
+                    key = "_".join(change.specIds)
+                    source = source_map[key]
+                    source_id = str(source.get("sku_id") or source.get("skuId") or source.get("id") or key)
+                    if ids.count(source_id) != 1:
+                        raise ProductRequestError("SKU 来源标识不唯一，无法安全保存")
+                    if change.delete:
+                        conn.execute(text("DELETE FROM product_skus WHERE product_id=:id AND sku_id=:sku_id"),
+                                     {"id": product_id, "sku_id": source_id})
+                    elif change.price is not None:
+                        conn.execute(text("UPDATE product_skus SET current_price=:price WHERE product_id=:id AND sku_id=:sku_id"),
+                                     {"id": product_id, "sku_id": source_id, "price": change.price})
+            saved_version = hashlib.sha256(saved.encode("utf-8")).hexdigest()
+            conn.execute(text("UPDATE products SET uu_sha256=:version WHERE product_id=:id"),
+                         {"id": product_id, "version": saved_version})
+            return {"version": saved_version}
 
     def image(self, product_id: str, kind: str, position: int):
         with self.engine.connect() as conn:

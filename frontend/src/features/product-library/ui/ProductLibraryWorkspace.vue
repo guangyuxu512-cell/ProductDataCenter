@@ -148,6 +148,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
         @update:page="filters.page = $event" @update:page-size="filters.pageSize = $event; filters.page = 1" />
     </ManagementListSection>
     <ProductPreviewDialog :show="!!detailId" :product="preview" :exportable="!busy"
+      :editable="capabilities.data.value?.productEdit === true" @saved="refresh"
       :category-lookup-enabled="capabilities.data.value?.categoryLookup === true"
       :loading="detail.isFetching.value" :error="detail.error.value ? errorText(detail.error.value) : null"
       :can-previous="previewIndex > 0 && !detail.isFetching.value"

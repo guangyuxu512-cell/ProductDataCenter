@@ -3,6 +3,28 @@ import type { Capabilities, NasDetail, ProductFilters, ProductGroup, ProductList
 
 const EXACT_PRODUCT_ID = /^(?:\d{8,}|[a-z][a-z0-9_-]{1,63}:\d{8,})$/i
 
+export interface SpecImage { id: string; name: string; url: string }
+export interface EditableSku { skuId: string; specIds: string[]; price: string; stock: number | null; enabled: boolean | null; merchantCode: string }
+export interface EditSnapshot { version: string; specImageGroup: string; specImages: SpecImage[]; skus: EditableSku[] }
+export interface ProductPatch {
+  expectedVersion: string
+  title?: string
+  category?: Array<{ id: string; name: string }>
+  attributes?: Array<{ id: string; name: string; values: Array<{ valueId: string; name: string }> }>
+  mainImages?: string[]
+  detailImages?: string[]
+  specImages?: Array<{ specId: string; url: string }>
+  skus?: Array<{ specIds: string[]; price?: string; stock?: number; merchantCode?: string; enabled?: boolean; delete?: boolean }>
+}
+
+export async function fetchEditSnapshot(id: string) {
+  return (await http.get<EditSnapshot>(`/products/${encodeURIComponent(id)}/edit`)).data
+}
+
+export async function saveProduct(id: string, patch: ProductPatch) {
+  return (await http.patch<{ version: string }>(`/products/${encodeURIComponent(id)}`, patch)).data
+}
+
 export function productListParams(filters: ProductFilters, includeTotal: boolean) {
   return {
     q: filters.query.trim(),
