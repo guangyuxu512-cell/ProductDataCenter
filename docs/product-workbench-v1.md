@@ -48,7 +48,7 @@ backend/app/
 | PATCH `/api/v1/products/group` | 批量移入分组或未分组 |
 | POST `/api/v1/products/export-uu` | 最多 200 个商品的 UU ZIP |
 
-分组写接口还检查 `BACKEND_ENABLE_GROUP_WRITES`，默认 false。UU 导出优先读取已存在版本文件，验证 JSON 和已保存 SHA-256；没有文件时使用数据库中的 UU，并在 manifest 明确来源。目录只读挂载，文件读取限制在数据根目录内。V1 不自动拉取图片二进制。
+分组写接口还检查 `BACKEND_ENABLE_GROUP_WRITES`，默认 false。商品包导出只读取 PostgreSQL 当前 JSON，在 manifest 中标明来源及实际输出内容的 SHA-256。数据目录仍可只读访问已有图片，路径必须位于数据根目录内。V1 不自动拉取图片二进制。
 
 ## 权限与页面
 

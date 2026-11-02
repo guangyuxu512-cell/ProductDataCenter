@@ -156,10 +156,13 @@ def main():
             with ZipFile(io.BytesIO(archive)) as zipped:
                 manifest = json.loads(zipped.read("manifest.json"))
                 record = manifest["products"][0]
-                assert record["source"] == "version_file" and zipped.read(record["filename"]) == UU
+                db_package = zipped.read(record["filename"])
+                assert record["source"] == "database"
+                assert json.loads(db_package) == {"goodsInfo": {"productId": IDENTITY}}
+                assert db_package != UU
             api_id = compose("ps", "-q", "product-api")
             command("docker", "exec", api_id, "python", "-c", "import os,httpx; assert os.getuid()==1026; assert httpx.get('http://127.0.0.1:8180/api/v1/products').status_code==401; assert httpx.get('http://127.0.0.1:8180/api/v1/products',headers={'Authorization':'Bearer wrong'}).status_code==401")
-            print("PASS: production Compose, UID 1026, secret files, Basic/Bearer auth, list/detail, original UU bytes", flush=True)
+            print("PASS: production Compose, UID 1026, secret files, Basic/Bearer auth, list/detail, database package", flush=True)
             psql("GRANT INSERT,UPDATE,DELETE ON product_groups TO pdc_reader; GRANT UPDATE(group_id) ON products TO pdc_reader;")
             env["BACKEND_ENABLE_GROUP_WRITES"] = "true"
             compose("up", "-d", "--no-build", "--force-recreate", "--wait", "--wait-timeout", "100")
@@ -172,9 +175,9 @@ def main():
             assert any(item["groupId"] == group and item["productCount"] == 1 for item in groups["groups"])
             page = request("/rpa/v1/product-groups/" + group + "/products", auth=False, bearer=rpa_token)
             assert page["items"][0]["product_id"] == IDENTITY
-            rpa_uu = request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
+            rpa_uu = request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(db_package).hexdigest(),
                              auth=False, bearer=rpa_token)
-            assert rpa_uu == json.loads(UU)
+            assert rpa_uu == json.loads(db_package)
             request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + "0" * 64,
                     auth=False, bearer=rpa_token, status=409)
             request("/api/v1/product-groups", method="POST", body={"name": "RPA不能写"},
@@ -236,8 +239,8 @@ def main():
             request("/rpa/v1/product-groups", auth=False, status=401)
             request("/rpa/v1/product-groups", auth=False, bearer="wrong", status=401)
             assert request("/rpa/v1/product-groups", auth=False, bearer=rpa_token)["groups"] == []
-            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
-                           auth=False, bearer=rpa_token) == json.loads(UU)
+            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(db_package).hexdigest(),
+                           auth=False, bearer=rpa_token) == json.loads(db_package)
             request("/api/v1/product-groups", method="POST", body={"name": "RPA不能写"},
                     auth=False, bearer=rpa_token, status=401)
             request("/rpa/v1/product-groups", method="POST", body={"name": "RPA不能写"},
@@ -253,8 +256,8 @@ def main():
                                       "--wait", "--wait-timeout", "100", "product-api")
             api_id = synology_category_compose("ps", "-q", "product-api")
             command("docker", "exec", api_id, "python", "-c", "from pathlib import Path; from app.modules.category_lookup.cache import CategoryCache; c=CategoryCache(Path('/var/lib/product-category-cache/categories.sqlite3')); assert c.get('tree','fixture','0')==[{'id':'100'}]")
-            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
-                           auth=False, bearer=rpa_token) == json.loads(UU)
+            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(db_package).hexdigest(),
+                           auth=False, bearer=rpa_token) == json.loads(db_package)
             print("PASS: Synology category-cache volume persists and RPA remains unchanged", flush=True)
         finally:
             synology_category_compose("down", "--remove-orphans", "--volumes", check=False)
