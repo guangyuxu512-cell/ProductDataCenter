@@ -33,7 +33,19 @@ class SearchBody(BaseModel):
 class SchemaBody(BaseModel):
     shopId: UUID
     categoryId: str = Field(pattern=r"^[0-9]{1,20}$")
-    title: str = Field(default="商品", max_length=120)
+    title: str = Field(default="商品", max_length=10000)
+
+
+class AutoSchemaBody(BaseModel):
+    categoryId: str = Field(pattern=r"^[0-9]{1,20}$")
+    title: str = Field(default="商品", max_length=10000)
+
+    @field_validator("categoryId")
+    @classmethod
+    def valid_category(cls, value: str) -> str:
+        if not int(value):
+            raise ValueError("缺少原类目 ID")
+        return value
 
 
 class Candidate(BaseModel):
@@ -62,6 +74,10 @@ class SearchResponse(BaseModel):
 class SchemaResponse(BaseModel):
     categoryId: str
     attributes: list[Attribute]
+
+
+class AutoSchemaResponse(SchemaResponse):
+    shopId: UUID
 
 
 def get_central(settings: Annotated[Settings, Depends(get_settings)]) -> CentralApplicationClient:
@@ -102,11 +118,7 @@ def _fail(error: LookupError):
                         messages.get(error.reason, "类目查询失败") + suffix) from None
 
 
-@router.post("/search", response_model=SearchResponse)
-def search(body: SearchBody, response: Response,
-           central: Annotated[CentralApplicationClient, Depends(get_central)],
-           lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)]):
-    response.headers["Cache-Control"] = "no-store"
+def _auto_shop(central: CentralApplicationClient, lookup: DouyinCategoryClient, operation):
     if not lookup.settings.douyin_category_lookup_enabled:
         _fail(LookupError("not_configured"))
     shops = _shops(central)
@@ -123,13 +135,33 @@ def search(body: SearchBody, response: Response,
         with _limit(shop.shop_id):
             session = _session(central, shop.shop_id)
             try:
-                candidates = lookup.search(session, body.keyword)
+                result = operation(session)
             except LookupError as error:
                 if error.reason == "platform_rejected" and error.platform_code == 10008:
                     continue
                 _fail(error)
-        return SearchResponse(shopId=shop.shop_id, candidates=candidates)
+        return shop.shop_id, result
     _fail(LookupError("product_session_unavailable", 10008))
+
+
+@router.post("/search", response_model=SearchResponse)
+def search(body: SearchBody, response: Response,
+           central: Annotated[CentralApplicationClient, Depends(get_central)],
+           lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)]):
+    response.headers["Cache-Control"] = "no-store"
+    shop_id, candidates = _auto_shop(central, lookup, lambda session: lookup.search(session, body.keyword))
+    return SearchResponse(shopId=shop_id, candidates=candidates)
+
+
+@router.post("/schema/auto", response_model=AutoSchemaResponse)
+def schema_auto(body: AutoSchemaBody, response: Response,
+                central: Annotated[CentralApplicationClient, Depends(get_central)],
+                lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)]):
+    response.headers["Cache-Control"] = "no-store"
+    shop_id, attributes = _auto_shop(
+        central, lookup, lambda session: lookup.schema(session, body.categoryId, body.title),
+    )
+    return AutoSchemaResponse(shopId=shop_id, categoryId=body.categoryId, attributes=attributes)
 
 
 @router.post("/schema", response_model=SchemaResponse)

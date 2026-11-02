@@ -58,6 +58,7 @@ class ProductDetail(BaseModel):
     product: ProductRead
     skus: list[SkuRead]
     images: list[ImageRead]
+    sourceCategoryId: str | None = None
 
 
 class GroupRead(BaseModel):

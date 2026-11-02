@@ -40,4 +40,17 @@ describe('采集字段适配', () => {
     expect(view.skus[0].imageUrl).toBeNull()
     expect(view.skus[1].imageUrl).toBe('https://example.test/white.jpg')
   })
+  it('只有抖音来源可把原类目用于抖店属性', () => {
+    const detail = {
+      product: { product_id: '1', source_platform: 'douyin', source_product_id: '1', title: '商品',
+        group_id: null, group_name: null, category_path: '', current_price_min: null, current_price_max: null,
+        main_image_url: null, captured_at: null, updated_at: null, title_status: '', shop_name: '',
+        category_level_4: '', sku_count: 0, main_image_count: 0, detail_image_count: 0, sku_image_count: 0,
+        asset_rel_path: '', workbook_rel_path: '', raw_rel_path: '' },
+      sourceCategoryId: '1000010075', skus: [], images: [],
+    } as NasDetail
+    expect(detailView(detail).sourceCategoryId).toBe('1000010075')
+    detail.product.source_platform = 'pinduoduo'
+    expect(detailView(detail).sourceCategoryId).toBeNull()
+  })
 })

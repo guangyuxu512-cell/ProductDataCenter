@@ -8,7 +8,7 @@ import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
-import { fetchCategoryAttributes, searchCategoryCandidates,
+import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, searchCategoryCandidates,
   type CategoryAttribute, type CategoryCandidate } from '../api/category-lookup'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
@@ -51,15 +51,25 @@ const selectedCategory = ref<string | null>(null)
 const categoryShop = ref<string | null>(null)
 const categoryAttributes = ref<CategoryAttribute[]>([])
 const categorySchemaLoaded = ref(false)
+const categoryError = ref(false)
 let categoryRequest = 0
-watch(() => props.product?.id, () => {
+watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.product?.id,
+  props.product?.sourceCategoryId] as const, () => {
   imageRetries.value = {}
   imageFallbacks.value = {}
   categoryRequest += 1
   categoryCandidates.value = []; selectedCategory.value = null; categoryShop.value = null
-  categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryBusy.value = false
-})
+  categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryBusy.value = false; categoryError.value = false
+  const product = props.product
+  if (!props.show || props.loading || !props.categoryLookupEnabled || !product ||
+      product.platform !== 'douyin' || !product.sourceCategoryId) return
+  const label = product.category || `原类目 ${product.sourceCategoryId}`
+  selectedCategory.value = product.sourceCategoryId
+  categoryCandidates.value = [{ id: product.sourceCategoryId, name: label, path: label }]
+  if (tab.value === 'attributes') void loadOriginalAttributes()
+}, { immediate: true })
 watch(() => props.show, (show) => { if (!show) tab.value = 'base' })
+watch(tab, (value) => { if (value === 'attributes') void loadOriginalAttributes() })
 
 function retryImage(key: string) { imageRetries.value[key] = (imageRetries.value[key] ?? 0) + 1 }
 function imageSource(key: string, source: string) { return imageFallbacks.value[key] ? source : previewImageUrl(source) }
@@ -81,7 +91,7 @@ async function findCategories() {
   const request = ++categoryRequest
   const keyword = (product.category?.split(/\s*(?:→|>|》|\/|\|)\s*/).filter(Boolean).at(-1) || product.title).slice(0, 120)
   categoryBusy.value = true; selectedCategory.value = null; categoryShop.value = null
-  categoryCandidates.value = []; categoryAttributes.value = []; categorySchemaLoaded.value = false
+  categoryCandidates.value = []; categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryError.value = false
   try {
     const result = await searchCategoryCandidates(keyword)
     if (request !== categoryRequest) return
@@ -91,14 +101,30 @@ async function findCategories() {
   finally { if (request === categoryRequest) categoryBusy.value = false }
 }
 
+async function loadOriginalAttributes() {
+  const product = props.product
+  const categoryId = product?.sourceCategoryId
+  if (!props.show || props.loading || !props.categoryLookupEnabled || product?.platform !== 'douyin' ||
+      !categoryId || selectedCategory.value !== categoryId || categoryShop.value ||
+      categoryBusy.value || categorySchemaLoaded.value) return
+  const request = ++categoryRequest
+  categoryBusy.value = true; categoryError.value = false
+  try {
+    const result = await fetchOriginalCategoryAttributes(categoryId, product.title)
+    if (request !== categoryRequest) return
+    categoryShop.value = result.shopId; categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true
+  } catch { if (request === categoryRequest) categoryError.value = true }
+  finally { if (request === categoryRequest) categoryBusy.value = false }
+}
+
 async function selectCategory(value: string | null) {
   const request = ++categoryRequest
-  selectedCategory.value = value; categoryAttributes.value = []; categorySchemaLoaded.value = false
+  selectedCategory.value = value; categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryError.value = false
   const product = props.product, shop = categoryShop.value
   if (!value || !product || !shop) { categoryBusy.value = false; return }
   categoryBusy.value = true
   try {
-    const result = await fetchCategoryAttributes(shop, value, product.title.slice(0, 120))
+    const result = await fetchCategoryAttributes(shop, value, product.title)
     if (request === categoryRequest) { categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true }
   } catch { if (request === categoryRequest) message.error('属性读取失败，请重新选择类目') }
   finally { if (request === categoryRequest) categoryBusy.value = false }
@@ -226,6 +252,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             </NFormItem>
             <NText v-if="selectedCategory" depth="3">当前类目和属性仅供查看，尚未保存</NText>
             <NText v-if="product.category" depth="3">来源类目：{{ product.category }}</NText>
+            <NText v-if="categoryLookupEnabled && product.platform !== 'douyin'" depth="3">平台推荐类目尚未接通，可手动查找类目</NText>
           </section>
           <section v-if="tab === 'images'" class="product-preview__image-workspace">
             <article v-for="section in imageSections" :key="section.key" class="product-preview__image-section">
@@ -259,7 +286,10 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             </article>
           </section>
           <section v-if="tab === 'attributes'" class="product-preview__section">
-            <NText v-if="categoryLookupEnabled && !selectedCategory" depth="3">请先查找并选择抖店类目</NText>
+            <NText v-if="categoryLookupEnabled && product.platform === 'douyin' && !product.sourceCategoryId && !selectedCategory" depth="3">原数据包缺少抖店类目 ID，请手动查找并选择类目</NText>
+            <NText v-else-if="categoryLookupEnabled && !selectedCategory" depth="3">请先查找并选择抖店类目</NText>
+            <NText v-else-if="categoryBusy" depth="3">正在读取类目属性…</NText>
+            <div v-else-if="categoryError"><NText depth="3">原类目属性读取失败</NText><AppButton size="small" @click="loadOriginalAttributes">重试</AppButton></div>
             <NText v-else-if="categorySchemaLoaded && !categoryAttributes.length" depth="3">当前类目没有可显示的属性</NText>
             <NText v-else-if="categorySchemaLoaded" depth="3">同名属性显示来源值，尚未校验或保存</NText>
             <div class="product-preview__attributes">
