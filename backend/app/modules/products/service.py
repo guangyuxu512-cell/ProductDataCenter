@@ -23,6 +23,12 @@ class ProductService:
             raise ProductNotFound()
         return detail
 
+    def edit_snapshot(self, product_id: str):
+        return self.repository.edit_snapshot(product_id)
+
+    def save_edit(self, product_id: str, edit):
+        return self.repository.save_edit(product_id, edit)
+
     def groups(self):
         return {"groups": self.repository.groups()}
 

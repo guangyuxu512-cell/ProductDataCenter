@@ -144,3 +144,88 @@ def test_group_crud_preserves_products_skus_uu_and_files(engine, tmp_path):
         indexes = conn.execute(text("SELECT indexname FROM pg_indexes WHERE tablename='products'")).scalars().all()
     assert before == after
     assert "products_search_trgm_idx" in indexes and "products_captured_at_idx" in indexes
+
+
+def test_edit_updates_same_database_package_rpa_reads_and_rejects_stale_version(engine):
+    from app.modules.products.errors import ProductEditConflict
+    from app.modules.products.export import current_uu_bytes
+    from app.modules.products.schemas import ProductEdit
+
+    identity = "9999999999999999911"
+    package = {"goodsId": identity, "goodsInfo": {"goodsName": "旧标题", "catId1": "1", "catId2": "0",
+               "catId3": "0", "catId4": "0", "goodsImageList": ["https://example.test/a", "https://example.test/b"]},
+               "goodsDetailInfo": {"detail_imgs": [], "detail_imgs_new": []},
+               "goodsSkuInfo": {"spec_detail": {"value": [{"sku_status": False}]}}}
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO products(product_id,source_platform,source_product_id,title,uu_json)
+            VALUES (:id,'douyin',:id,'旧标题',CAST(:package AS jsonb))"""), {"id": identity, "package": json.dumps(package)})
+        for index, url in enumerate(package["goodsInfo"]["goodsImageList"]):
+            conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+                VALUES (:id,'main',:position,'',:url)"""), {"id": identity, "position": index, "url": url})
+    try:
+        repo = ProductRepository(engine)
+        version = repo.edit_snapshot(identity)["version"]
+        edit = ProductEdit(expectedVersion=version, title="新的商品", mainImages=["https://example.test/b"])
+        new_version = repo.save_edit(identity, edit)["version"]
+        with pytest.raises(ProductEditConflict):
+            repo.save_edit(identity, edit)
+        exported, source = current_uu_bytes(repo.export_rows([identity])[0], 1_000_000)
+        saved = json.loads(exported)
+        assert source == "database" and new_version != version
+        assert saved["goodsInfo"]["goodsName"] == "新的商品"
+        assert saved["goodsInfo"]["goodsImageList"] == ["https://example.test/b"]
+        assert saved["goodsSkuInfo"] == package["goodsSkuInfo"]
+        detail = repo.detail(identity)
+        assert detail["product"]["title"] == "新的商品"
+        assert [image["source_url"] for image in detail["images"]] == ["https://example.test/b"]
+        assert detail["product"]["main_image_count"] == 1
+        assert "商品库已修改" in detail["product"]["title_status"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
+
+
+def test_sku_changes_and_image_are_consistent_in_database_package_and_projections(engine):
+    from app.modules.products.export import current_uu_bytes
+    from app.modules.products.schemas import ProductEdit
+
+    identity = "9999999999999999912"
+    package = {"goodsId": identity, "goodsInfo": {"goodsName": "SKU 测试", "skuInfoMap": {
+        "11_21": {"sku_id": "1001", "extra_business_info": '{"first_price":{"left_price_num":1200}}'},
+        "12_22": {"sku_id": "1002", "extra_business_info": '{"first_price":{"left_price_num":1600}}'}}},
+        "goodsSkuInfo": {"sku_detail": [{"name": "颜色", "spec_item_list": [
+            {"spec_item_id": "11", "name": "黑色", "big_pic": "https://example.test/old"},
+            {"spec_item_id": "12", "name": "白色", "big_pic": ""}]}],
+            "spec_detail": {"value": [
+                {"spec_detail_ids": ["11", "21"], "price": "12", "sku_status": True, "stock_info": {"stock_num": 5}},
+                {"spec_detail_ids": ["12", "22"], "price": "16", "sku_status": False, "stock_info": {"stock_num": 0}}]}},
+        "spec_detail_value": {"value": [{"name": "颜色", "spec_values": [
+            {"id": "11", "name": "黑色", "img_url": "https://example.test/old"},
+            {"id": "12", "name": "白色", "img_url": ""}]}]}}
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO products(product_id,source_platform,source_product_id,title,uu_json,sku_count)
+            VALUES (:id,'douyin',:id,'SKU 测试',CAST(:package AS jsonb),2)"""), {"id": identity, "package": json.dumps(package)})
+        conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,sort_order)
+            VALUES (:id,'1001','黑色',12,0),(:id,'1002','白色',16,1)"""), {"id": identity})
+    try:
+        repo = ProductRepository(engine)
+        snapshot = repo.edit_snapshot(identity)
+        assert snapshot["skus"][1]["enabled"] is False
+        edit = ProductEdit(expectedVersion=snapshot["version"],
+            skus=[{"specIds": ["11", "21"], "price": "19.90", "stock": 7},
+                  {"specIds": ["12", "22"], "delete": True}],
+            specImages=[{"specId": "11", "url": "https://example.test/new"}])
+        repo.save_edit(identity, edit)
+        body, _ = current_uu_bytes(repo.export_rows([identity])[0], 1_000_000)
+        saved = json.loads(body)
+        assert saved["goodsSkuInfo"]["spec_detail"]["value"] == [
+            {"price": "19.90", "sku_status": True, "stock_info": {"stock_num": 7}, "spec_detail_ids": ["11", "21"]}]
+        assert saved["goodsSkuInfo"]["sku_detail"][0]["spec_item_list"][0]["big_pic"] == "https://example.test/new"
+        assert set(saved["goodsInfo"]["skuInfoMap"]) == {"11_21"}
+        detail = repo.detail(identity)
+        assert detail["product"]["sku_count"] == 1
+        assert str(detail["skus"][0]["current_price"]) == "19.90" and len(detail["skus"]) == 1
+        assert [image["source_url"] for image in detail["images"]] == ["https://example.test/new"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})

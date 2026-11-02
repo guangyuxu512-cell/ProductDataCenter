@@ -24,6 +24,11 @@ def require_group_writes() -> None:
         raise HTTPException(403, "当前商品服务未启用分组写入")
 
 
+def require_product_writes() -> None:
+    if not get_settings().enable_product_writes:
+        raise HTTPException(403, "当前商品服务未启用商品编辑")
+
+
 def require_rpa_access(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> None:

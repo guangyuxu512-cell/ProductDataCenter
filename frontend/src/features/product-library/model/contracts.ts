@@ -77,6 +77,7 @@ export interface LibraryProduct {
   skus: ProductSku[]
   attributes: Array<{ id?: string | null; name: string; value: string }>
   mockEditedAt: string | null
+  edited?: boolean
   packageFiles: Array<{ name: string; kind: 'txt' | 'origin-txt' | 'image' }>
   history: ProductHistory[]
   latestCollectionState?: string | null

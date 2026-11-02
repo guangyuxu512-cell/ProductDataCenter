@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     rpa_api_token_file: Path | None = None
     data_root: Path = Path("/data")
     enable_group_writes: bool = False
+    enable_product_writes: bool = False
     export_max_bytes: int = Field(default=128 * 1024 * 1024, ge=1024)
     # Optional service-to-service access. Invalid or missing connection details
     # fail only this integration, not the existing product and RPA services.

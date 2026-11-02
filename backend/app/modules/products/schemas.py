@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ProductRead(BaseModel):
@@ -133,3 +133,102 @@ class Capabilities(BaseModel):
     productEdit: bool = False
     importProducts: bool = False
     categoryLookup: bool = False
+
+
+class CategoryPart(BaseModel):
+    id: str = Field(pattern=r"^[0-9]{1,20}$")
+    name: str = Field(min_length=1, max_length=200)
+
+
+class AttributeValueEdit(BaseModel):
+    valueId: str = Field(default="0", max_length=200)
+    name: str = Field(min_length=1, max_length=2000)
+
+
+class AttributeEdit(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    values: list[AttributeValueEdit] = Field(max_length=30)
+
+
+class SpecImageEdit(BaseModel):
+    specId: str = Field(min_length=1, max_length=200)
+    url: str = Field(default="", max_length=10000)
+
+    @field_validator("url")
+    @classmethod
+    def valid_url(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+        if value:
+            parsed = urlsplit(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("规格图片地址无效")
+        return value
+
+
+class SkuEdit(BaseModel):
+    specIds: list[str] = Field(min_length=1, max_length=3)
+    price: Decimal | None = Field(default=None, gt=0, le=9999999999, decimal_places=2)
+    stock: int | None = Field(default=None, ge=0, le=2147483647)
+    merchantCode: str | None = Field(default=None, max_length=200)
+    enabled: bool | None = None
+    delete: bool = False
+
+    @field_validator("specIds")
+    @classmethod
+    def valid_spec_ids(cls, values: list[str]) -> list[str]:
+        if any(not value or len(value) > 200 or "_" in value for value in values) or len(values) != len(set(values)):
+            raise ValueError("SKU 规格标识无效")
+        return values
+
+    @model_validator(mode="after")
+    def has_change(self):
+        if not self.delete and all(value is None for value in (self.price, self.stock, self.merchantCode, self.enabled)):
+            raise ValueError("SKU 没有需要保存的修改")
+        return self
+
+
+class ProductEdit(BaseModel):
+    expectedVersion: str = Field(pattern=r"^[a-f0-9]{64}$")
+    title: str | None = Field(default=None, min_length=1, max_length=10000)
+    category: list[CategoryPart] | None = Field(default=None, min_length=1, max_length=4)
+    attributes: list[AttributeEdit] | None = Field(default=None, max_length=300)
+    mainImages: list[str] | None = Field(default=None, max_length=100)
+    detailImages: list[str] | None = Field(default=None, max_length=100)
+    specImages: list[SpecImageEdit] | None = Field(default=None, max_length=500)
+    skus: list[SkuEdit] | None = Field(default=None, max_length=2000)
+
+    @field_validator("title")
+    @classmethod
+    def valid_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        # Match the existing editor's platform counter (non-ASCII characters count twice).
+        if not value or sum(2 if ord(character) > 127 else 1 for character in value) > 60:
+            raise ValueError("商品标题不能为空，长度不能超过 60")
+        return value
+
+    @field_validator("mainImages", "detailImages")
+    @classmethod
+    def valid_images(cls, values: list[str] | None) -> list[str] | None:
+        from urllib.parse import urlsplit
+        if values is None:
+            return None
+        for value in values:
+            parsed = urlsplit(value)
+            if len(value) > 10000 or parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("图片地址必须是有效的 HTTP 或 HTTPS 地址")
+        return values
+
+    @model_validator(mode="after")
+    def valid_edit(self):
+        if all(value is None for value in (self.title, self.category, self.attributes, self.mainImages, self.detailImages, self.specImages, self.skus)):
+            raise ValueError("没有需要保存的修改")
+        if self.attributes is not None and len({item.id for item in self.attributes}) != len(self.attributes):
+            raise ValueError("属性 ID 不能重复")
+        if self.specImages is not None and len({item.specId for item in self.specImages}) != len(self.specImages):
+            raise ValueError("规格 ID 不能重复")
+        if self.skus is not None and len({tuple(item.specIds) for item in self.skus}) != len(self.skus):
+            raise ValueError("SKU 规格组合不能重复")
+        return self
