@@ -75,7 +75,7 @@ export interface LibraryProduct {
   /** Frontend/Mock editing draft only; this is not a Backend DTO field. */
   specDimensions: ProductSpecDimension[]
   skus: ProductSku[]
-  attributes: Array<{ name: string; value: string }>
+  attributes: Array<{ id?: string | null; name: string; value: string }>
   mockEditedAt: string | null
   packageFiles: Array<{ name: string; kind: 'txt' | 'origin-txt' | 'image' }>
   history: ProductHistory[]

@@ -13,6 +13,7 @@ import { fetchCategoryAttributes, fetchOriginalCategoryAttributes,
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
+import { originalAttributeValue } from '../model/source-attributes'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
@@ -274,10 +275,11 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <NText v-else-if="categoryBusy" depth="3">正在读取类目属性…</NText>
             <div v-else-if="categoryError"><NText depth="3">类目属性读取失败</NText><AppButton size="small" @click="loadAttributes()">重试</AppButton></div>
             <NText v-else-if="categorySchemaLoaded && !categoryAttributes.length" depth="3">当前类目没有可显示的属性</NText>
-            <NText v-else-if="categorySchemaLoaded" depth="3">同名属性显示来源值，尚未校验或保存</NText>
+            <NText v-else-if="categorySchemaLoaded && product.platform === 'douyin' && selectedCategory === product.sourceCategoryId" depth="3">已显示原包中可对应的属性，尚未校验或保存</NText>
+            <NText v-else-if="categorySchemaLoaded" depth="3">当前类目的属性尚未从原包自动对应</NText>
             <div class="product-preview__attributes">
               <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required">
-                <AppInput :model-value="product.attributes.find((source) => source.name === item.label)?.value ?? ''" readonly />
+                <AppInput :model-value="originalAttributeValue(item, categoryAttributes, product, selectedCategory)" readonly />
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
