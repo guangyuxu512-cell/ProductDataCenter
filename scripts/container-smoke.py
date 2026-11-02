@@ -60,6 +60,7 @@ def main():
         (credentials / "api_token").write_text(token)
         (credentials / "rpa_token").write_text(rpa_token)
         (credentials / "central_token").write_text(central_token)
+        (credentials / "signer_token").write_text(secrets.token_urlsafe(32))
         hashed = command("openssl", "passwd", "-6", "-stdin", stdin=web_password + "\n")
         (credentials / "htpasswd").write_text("reviewer:" + hashed + "\n")
         with socket.socket() as sock:
@@ -79,13 +80,18 @@ def main():
                    PRODUCT_API_IMAGE=f"product-data-center-api:{run}",
                    PRODUCT_WEB_IMAGE=f"product-data-center-web:{run}", LOCAL_API_PORT=str(local_api_port),
                    CENTRAL_APPLICATION_BASE_URL="https://control-center.invalid",
-                   CENTRAL_APPLICATION_TOKEN_FILE=str(credentials / "central_token"))
+                   CENTRAL_APPLICATION_TOKEN_FILE=str(credentials / "central_token"),
+                   PRODUCT_SIGNER_API_KEY_FILE=str(credentials / "signer_token"))
         def compose(*args, **kwargs):
             return command("docker", "compose", "-p", run, "-f", str(ROOT / "deploy/compose.yaml"),
                            "-f", str(ROOT / "deploy/compose.rpa.yaml"), *args, env=env, **kwargs)
         def synology_compose(*args, **kwargs):
             return command("docker", "compose", "-p", run + "-host", "-f",
                            str(ROOT / "deploy/compose.synology-lan.yaml"), *args, env=env, **kwargs)
+        def synology_category_compose(*args, **kwargs):
+            return command("docker", "compose", "-p", run + "-host", "-f",
+                           str(ROOT / "deploy/compose.synology-lan.yaml"), "-f",
+                           str(ROOT / "deploy/compose.category-lookup.yaml"), *args, env=env, **kwargs)
         def central_compose(*args, **kwargs):
             return command("docker", "compose", "-p", run, "-f", str(ROOT / "deploy/compose.yaml"),
                            "-f", str(ROOT / "deploy/compose.rpa.yaml"), "-f",
@@ -237,7 +243,21 @@ def main():
             request("/rpa/v1/product-groups", method="POST", body={"name": "RPA不能写"},
                     auth=False, bearer=rpa_token, status=405)
             print("PASS: Synology host proxy, loopback API, RPA token and UU", flush=True)
+            # The independent category cache must be writable by the normal
+            # API user and survive a container replacement, with no NAS data.
+            synology_category_compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
+                                      "--wait", "--wait-timeout", "100", "product-api")
+            api_id = synology_category_compose("ps", "-q", "product-api")
+            command("docker", "exec", api_id, "python", "-c", "from pathlib import Path; from app.modules.category_lookup.cache import CategoryCache; c=CategoryCache(Path('/var/lib/product-category-cache/categories.sqlite3')); c.put('tree','fixture','0',[{'id':'100'}])")
+            synology_category_compose("up", "-d", "--no-build", "--force-recreate", "--no-deps",
+                                      "--wait", "--wait-timeout", "100", "product-api")
+            api_id = synology_category_compose("ps", "-q", "product-api")
+            command("docker", "exec", api_id, "python", "-c", "from pathlib import Path; from app.modules.category_lookup.cache import CategoryCache; c=CategoryCache(Path('/var/lib/product-category-cache/categories.sqlite3')); assert c.get('tree','fixture','0')==[{'id':'100'}]")
+            assert request("/rpa/v1/products/" + IDENTITY + "/uu?expected_sha256=" + hashlib.sha256(UU).hexdigest(),
+                           auth=False, bearer=rpa_token) == json.loads(UU)
+            print("PASS: Synology category-cache volume persists and RPA remains unchanged", flush=True)
         finally:
+            synology_category_compose("down", "--remove-orphans", "--volumes", check=False)
             synology_compose("down", "--remove-orphans", check=False)
             compose("down", "--remove-orphans", check=False)
             command("docker", "rm", "-f", postgres, check=False)

@@ -50,6 +50,11 @@ class DouyinCategoryClient:
                              {"key": keyword, "search_type": 1})
         return normalize_candidates(payload.get("data"))
 
+    def category_options(self, session: CentralShopSession, parent_id: str) -> list[dict]:
+        payload = self._call(session, "GET", "/product/tproduct/categoryOptionsN", "197362053948",
+                             {"cid": parent_id, "display_all": 0})
+        return normalize_category_options(payload.get("data"), parent_id)
+
     def schema(self, session: CentralShopSession, category_id: str, title: str) -> list[dict]:
         body = {
             "context": {"feature": {"session_publish_id": "helper_" + uuid4().hex,
@@ -177,6 +182,32 @@ class DouyinCategoryClient:
         if code != 0:
             raise LookupError("platform_rejected", code)
         return payload
+
+
+def normalize_category_options(value, parent_id: str) -> list[dict]:
+    """Keep the platform's explicit tree relationships and leaf flags."""
+    if not isinstance(value, list) or len(value) > 10000:
+        raise LookupError("invalid_tree")
+    result, seen = [], set()
+    for item in value:
+        if not isinstance(item, dict):
+            raise LookupError("invalid_tree")
+        cid = item.get("id")
+        name = item.get("name")
+        leaf = item.get("is_leaf")
+        parent = item.get("parent_cid")
+        if (isinstance(cid, bool) or not re.fullmatch(r"[0-9]{1,20}", str(cid or ""))
+                or not isinstance(name, str) or not name.strip() or len(name) > 300
+                or not isinstance(leaf, bool)
+                or (parent is not None and str(parent) != parent_id)):
+            raise LookupError("invalid_tree")
+        identity = str(cid)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append({"id": identity, "name": name.strip(), "isLeaf": leaf,
+                       "enabled": item.get("enable", 1) not in (0, False)})
+    return result
 
 
 def normalize_candidates(value) -> list[dict]:

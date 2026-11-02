@@ -28,7 +28,8 @@ def settings(tmp_path):
     key = tmp_path / "signer"
     key.write_text(SIGNER_KEY)
     return Settings(_env_file=None, douyin_category_lookup_enabled=True,
-                    douyin_signer_key_file=key, api_token=PRODUCT_KEY, rpa_api_token=RPA_KEY)
+                    douyin_signer_key_file=key, category_cache_file=tmp_path / "categories.sqlite3",
+                    api_token=PRODUCT_KEY, rpa_api_token=RPA_KEY)
 
 
 def make_session(shop_id=None):
@@ -72,6 +73,23 @@ def test_signed_search_and_schema_do_not_require_token_and_return_safe_fields(se
     assert client.schema(session, "1000010075", "不锈钢勺子") == [
         {"id": "12", "label": "材质", "required": True, "options": [{"label": "不锈钢", "value": "3"}]}]
     assert [item[0] for item in calls] == ["sign", "sign", "platform", "sign", "sign", "platform"]
+
+
+def test_signed_category_options_keep_tree_and_leaf_status(settings):
+    def handler(request):
+        if request.url.host != "fxg.jinritemai.com":
+            return httpx.Response(200, json={"ok": True, "a_bogus": "signature"})
+        assert request.url.path == "/product/tproduct/categoryOptionsN"
+        assert request.url.params["cid"] == "0" and request.url.params["display_all"] == "0"
+        return httpx.Response(200, json={"code": 0, "data": [
+            {"id": 100, "name": "居家日用", "parent_cid": 0, "is_leaf": False, "enable": 1},
+            {"id": 101, "name": "不可用示例", "parent_cid": 0, "is_leaf": True, "enable": 0},
+        ]})
+    client = DouyinCategoryClient(settings, transport=httpx.MockTransport(handler))
+    assert client.category_options(make_session(), "0") == [
+        {"id": "100", "name": "居家日用", "isLeaf": False, "enabled": True},
+        {"id": "101", "name": "不可用示例", "isLeaf": True, "enabled": False},
+    ]
 
 
 def test_lookup_rejects_redirect_and_does_not_expose_sensitive_exception(settings):
@@ -148,6 +166,119 @@ class FakeLookup:
         return [{"id": "1000010075", "name": "汤勺", "path": "餐具 > 汤勺"}]
     def schema(self, session, category_id, title):
         return [{"id": "12", "label": "材质", "required": True, "options": []}]
+
+
+def test_tree_and_attribute_cache_survive_restart_and_refresh_only_on_request(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    calls = []
+
+    class TrackedLookup(FakeLookup):
+        fail = False
+        revision = 1
+
+        def category_options(self, session, parent_id):
+            calls.append(("tree", parent_id))
+            if self.fail:
+                raise LookupError("platform_unavailable")
+            return [{"id": "100" if parent_id == "0" else "101", "name": f"类目{self.revision}",
+                     "isLeaf": parent_id != "0", "enabled": True}]
+
+        def schema(self, session, category_id, title):
+            calls.append(("schema", category_id))
+            if self.fail:
+                raise LookupError("platform_unavailable")
+            return [{"id": "12", "label": f"材质{self.revision}", "required": True, "options": []}]
+
+    lookup = TrackedLookup(settings)
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: FakeCentral([shop_id])
+    app.dependency_overrides[get_lookup] = lambda: lookup
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client:
+        path = '/api/v1/category-lookup/tree'
+        root = client.post(path, json={}, headers=auth)
+        assert root.status_code == 200 and root.json()['items'][0]['isLeaf'] is False
+        child_body = {"parentId": "100", "shopId": str(shop_id)}
+        child = client.post(path, json=child_body, headers=auth)
+        assert child.json()['items'][0]['isLeaf'] is True
+        assert client.post(path, json={}, headers=auth).json()['fromCache'] is True
+        assert client.post(path, json=child_body, headers=auth).json()['fromCache'] is True
+        schema = '/api/v1/category-lookup/schema/auto'
+        body = {"categoryId": "101", "title": "旧标题"}
+        assert client.post(schema, json=body, headers=auth).json()['attributes'][0]['label'] == '材质1'
+        assert client.post(schema, json={**body, "title": "另一个商品"}, headers=auth).json()['attributes'][0]['label'] == '材质1'
+        assert calls == [("tree", "0"), ("tree", "100"), ("schema", "101")]
+
+        lookup.fail = True
+        assert client.post(path, json={"refresh": True}, headers=auth).status_code == 502
+        assert client.post(path, json=child_body, headers=auth).json()['fromCache'] is True
+        assert client.post(schema, json={**body, "refresh": True}, headers=auth).status_code == 502
+        assert client.post(schema, json=body, headers=auth).json()['attributes'][0]['label'] == '材质1'
+
+        lookup.fail = False
+        lookup.revision = 2
+        assert client.post(path, json={"refresh": True}, headers=auth).json()['items'][0]['name'] == '类目2'
+        assert client.post(path, json=child_body, headers=auth).json()['fromCache'] is False
+        assert client.post(schema, json={**body, "refresh": True}, headers=auth).json()['attributes'][0]['label'] == '材质2'
+        assert client.post(schema, json=body, headers=auth).json()['attributes'][0]['label'] == '材质2'
+        assert client.post(path, json={}, headers={"Authorization": "Bearer " + RPA_KEY}).status_code == 401
+    from app.modules.category_lookup.cache import CategoryCache
+    cache = CategoryCache(settings.category_cache_file)
+    assert cache.get("tree", str(shop_id), "100")[0]["name"] == "类目2"
+    assert cache.get("schema", str(shop_id), "101")[0]["label"] == "材质2"
+    assert COOKIE.encode() not in settings.category_cache_file.read_bytes()
+    assert "旧标题".encode() not in settings.category_cache_file.read_bytes()
+    get_settings.cache_clear()
+
+
+def test_schema_cache_isolated_by_shop_and_missing_cache_fails_closed(settings, monkeypatch, tmp_path):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
+    get_settings.cache_clear()
+    ids = [uuid4(), uuid4()]
+    calls = []
+
+    class ShopSpecificLookup(FakeLookup):
+        def schema(self, session, category_id, title):
+            calls.append(session.shop_id)
+            return [{"id": "12", "label": str(session.shop_id), "required": True, "options": []}]
+
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: FakeCentral(ids)
+    app.dependency_overrides[get_lookup] = lambda: ShopSpecificLookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client:
+        path = '/api/v1/category-lookup/schema'
+        for shop_id in ids:
+            body = {"shopId": str(shop_id), "categoryId": "1000010075"}
+            assert client.post(path, json=body, headers=auth).json()['attributes'][0]['label'] == str(shop_id)
+            assert client.post(path, json=body, headers=auth).json()['attributes'][0]['label'] == str(shop_id)
+        assert calls == ids
+        assert client.post('/api/v1/category-lookup/tree', json={"shopId": str(uuid4())}, headers=auth).status_code == 403
+        bad_settings = settings.model_copy(update={"category_cache_file": tmp_path / "missing" / "cache.sqlite3"})
+        app.dependency_overrides[get_lookup] = lambda: ShopSpecificLookup(bad_settings)
+        response = client.post('/api/v1/category-lookup/tree', json={}, headers=auth)
+        assert response.status_code == 503 and "缓存不可用" in response.json()['detail']
+        assert len(calls) == 2
+    get_settings.cache_clear()
+
+
+def test_old_inflight_tree_result_cannot_repopulate_after_manual_refresh(settings):
+    from app.modules.category_lookup.cache import CategoryCache
+    cache = CategoryCache(settings.category_cache_file)
+    version = cache.tree_version()
+    cache.put("tree", "shop", "0", [{"name": "new"}], refresh_tree=True)
+    cache.put("tree", "shop", "123", [{"name": "old"}], tree_version=version)
+    assert cache.get("tree", "shop", "0") == [{"name": "new"}]
+    assert cache.get("tree", "shop", "123") is None
+    schema_version = cache.schema_version("123")
+    cache.put("schema", "shop", "123", [{"label": "new"}], refresh_schema=True)
+    cache.put("schema", "other-shop", "123", [{"label": "old"}], schema_version=schema_version)
+    assert cache.get("schema", "shop", "123") == [{"label": "new"}]
+    assert cache.get("schema", "other-shop", "123") is None
 
 
 def test_api_auto_assigns_shops_and_preserves_rpa_boundary(settings, monkeypatch):

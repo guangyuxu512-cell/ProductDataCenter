@@ -511,28 +511,48 @@ test('拼多多无参数图片使用小图，失败回退原图，放大仍是�
   await expect.poll(() => requested.includes(original(0))).toBe(true)
 })
 
-test('类目候选与属性只读查看，切换商品后不沿用上一件的结果', async ({ page }) => {
+test('直接展开完整类目并手动更新缓存，切换商品后不沿用上一件的结果', async ({ page }, testInfo) => {
   await fixtures(page)
   const shop = '00000000-0000-4000-8000-000000000111'
+  const treeCalls: Array<{ parentId: string; refresh: boolean }> = []
+  const schemaCalls: Array<{ categoryId: string; refresh: boolean }> = []
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: false, importProducts: false, categoryLookup: true,
   } }))
-  await page.route('**/api/v1/category-lookup/search', (route) => route.fulfill({ json: {
-    shopId: shop, candidates: [{ id: '1000010075', name: '汤勺', path: '餐具 > 汤勺' }],
-  } }))
-  await page.route('**/api/v1/category-lookup/schema', (route) => route.fulfill({ json: {
-    categoryId: '1000010075', attributes: [{ id: '12', label: '材质', required: true, options: [] }],
-  } }))
+  await page.route('**/api/v1/category-lookup/tree', (route) => {
+    const body = route.request().postDataJSON() as { parentId: string; refresh: boolean }
+    treeCalls.push(body)
+    const item = body.parentId === '0' ? { id: '100', name: '餐饮厨具', isLeaf: false, enabled: true }
+      : body.parentId === '100' ? { id: '200', name: '餐具', isLeaf: false, enabled: true }
+        : { id: '1000010075', name: '汤勺', isLeaf: true, enabled: true }
+    return route.fulfill({ json: { shopId: shop, parentId: body.parentId, items: [item], fromCache: !body.refresh } })
+  })
+  await page.route('**/api/v1/category-lookup/schema', (route) => {
+    schemaCalls.push(route.request().postDataJSON())
+    return route.fulfill({ json: { categoryId: '1000010075', attributes: [{ id: '12', label: '材质', required: true, options: [] }] } })
+  })
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
-  await dialog.getByRole('button', { name: '查找类目' }).click()
-  await dialog.locator('[aria-label="抖店类目"]').click()
-  await page.getByText('餐具 > 汤勺', { exact: true }).last().click()
+  await expect(dialog.getByRole('button', { name: '查找类目' })).toHaveCount(0)
+  await dialog.getByRole('textbox', { name: '抖店类目' }).click()
+  await page.getByRole('button', { name: '餐饮厨具', exact: true }).click()
+  await page.getByRole('button', { name: '餐具', exact: true }).click()
+  await page.screenshot({ path: testInfo.outputPath('category-tree.png'), animations: 'disabled' })
+  await page.getByRole('button', { name: '汤勺', exact: true }).click()
+  await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('餐饮厨具 → 餐具 → 汤勺')
   await expect(dialog.getByText('当前类目和属性仅供查看，尚未保存')).toBeVisible()
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   await expect(dialog.getByText('材质', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: '更新属性' }).click()
+  await expect.poll(() => schemaCalls.length).toBe(2)
+  expect(schemaCalls.map((call) => call.refresh)).toEqual([false, true])
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
+  await dialog.getByRole('tab', { name: '基本信息' }).click()
+  await dialog.getByRole('textbox', { name: '抖店类目' }).click()
+  await page.getByRole('button', { name: '更新类目' }).click()
+  await expect.poll(() => treeCalls.some((call) => call.parentId === '0' && call.refresh)).toBe(true)
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
   await dialog.getByRole('button', { name: '下一件' }).click()
   await expect(dialog.getByText('商品 ID ' + String(BigInt(firstId) + 1n))).toBeVisible()
   await expect(dialog.getByText('材质', { exact: true })).toHaveCount(0)
@@ -595,8 +615,8 @@ test('非抖音来源不会把原平台类目当作抖店类目', async ({ page 
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
-  await expect(dialog.getByText('平台推荐类目尚未接通，可手动查找类目')).toBeVisible()
+  await expect(dialog.getByText('平台推荐类目尚未接通，可手动选择类目')).toBeVisible()
   await dialog.getByRole('tab', { name: '商品属性' }).click()
-  await expect(dialog.getByText('请先查找并选择抖店类目')).toBeVisible()
+  await expect(dialog.getByText('请先选择抖店类目')).toBeVisible()
   expect(calls).toEqual([])
 })
