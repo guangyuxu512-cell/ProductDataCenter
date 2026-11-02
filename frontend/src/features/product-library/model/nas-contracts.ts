@@ -35,6 +35,7 @@ export interface ProductListResponse {
 export interface NasDetail {
   product: ProductRow
   sourceCategoryId?: string | null
+  sourceAttributes?: Array<{ id: string | null; name: string; values: string[] }>
   skus: Array<{ sku_id: string; sku_name: string; current_price: string | null; image_rel_path: string; sort_order: number }>
   images: Array<{ image_type: 'main' | 'detail' | 'sku'; sort_order: number; rel_path: string; source_url: string }>
 }

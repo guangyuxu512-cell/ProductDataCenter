@@ -42,7 +42,10 @@ export function detailView(detail: NasDetail): LibraryProduct {
     currency: 'CNY', collectedAt: capturedTime(row.captured_at), sourceUrl: null,
     mainImageUrl: images('main')[0] || row.main_image_url, previewMainImageUrls: images('main'),
     previewSkuImageUrls: images('sku'),
-    detailImageUrls: images('detail'), specDimensions: [], attributes: [], mockEditedAt: null,
+    detailImageUrls: images('detail'), specDimensions: [],
+    attributes: platform === 'douyin' ? (detail.sourceAttributes ?? []).map((attribute) => ({
+      id: attribute.id, name: attribute.name, value: attribute.values.join('、'),
+    })) : [], mockEditedAt: null,
     skus: detail.skus.map((sku) => {
       // An image's position is not an association with a SKU row. Use only an explicit path match.
       const linkedImage = sku.image_rel_path && detail.images.find((image) =>

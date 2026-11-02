@@ -47,10 +47,14 @@ describe('采集字段适配', () => {
         main_image_url: null, captured_at: null, updated_at: null, title_status: '', shop_name: '',
         category_level_4: '', sku_count: 0, main_image_count: 0, detail_image_count: 0, sku_image_count: 0,
         asset_rel_path: '', workbook_rel_path: '', raw_rel_path: '' },
-      sourceCategoryId: '1000010075', skus: [], images: [],
+      sourceCategoryId: '1000010075', sourceAttributes: [
+        { id: '501', name: '材质', values: ['棉', '麻'] },
+      ], skus: [], images: [],
     } as NasDetail
     expect(detailView(detail).sourceCategoryId).toBe('1000010075')
+    expect(detailView(detail).attributes).toEqual([{ id: '501', name: '材质', value: '棉、麻' }])
     detail.product.source_platform = 'pinduoduo'
     expect(detailView(detail).sourceCategoryId).toBeNull()
+    expect(detailView(detail).attributes).toEqual([])
   })
 })

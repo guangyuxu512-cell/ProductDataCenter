@@ -1,4 +1,5 @@
 """仅使用名称固定的隔离测试库；绝不连接 NAS 或修改生产数据。"""
+import json
 import os
 from pathlib import Path
 
@@ -35,6 +36,13 @@ def engine():
             19.99, 29.99, '2026-10-26T08:18:34.999999+08', '{"goodsInfo":{"productId":"3760269504500859111","catId1":"100","catId2":"200","catId3":"300","catId4":"0"}}'),
             ('pdd:3760269504500859111', 'pinduoduo', '3760269504500859111', '桌面收纳盒', '测试店铺', '家居/桌面',
             9.99, 9.99, '2026-10-26T08:18:35+08', '{"goodsInfo":{"productId":"3760269504500859111","catId3":"999"}}')"""))
+        conn.execute(text("""UPDATE products SET uu_json = uu_json || CAST(:attributes AS jsonb)
+            WHERE product_id=:id"""), {"id": "3760269504500859111", "attributes": json.dumps({
+                "category_properties_value": {"value": {"501": [{"k": "材质", "value_name": "棉"}]}},
+                "goodsDetailInfo": {"product_format": [{"format": [
+                    {"property_id": "502", "name": "品牌", "message": [{"desc": "测试品牌"}]},
+                ]}]},
+            }, ensure_ascii=False)})
         conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
             VALUES ('3760269504500859111','main',0,'','https://fixture.invalid/main.png')"""))
         conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,sort_order)
@@ -55,7 +63,12 @@ def test_exact_id_and_second_precision(engine):
     detail = repo.detail("3760269504500859111")
     assert detail["product"]["source_platform"] == "douyin" and len(detail["skus"]) == 1
     assert detail["sourceCategoryId"] == "300"
-    assert repo.detail("pdd:3760269504500859111")["sourceCategoryId"] is None
+    assert detail["sourceAttributes"] == [
+        {"id": "501", "name": "材质", "values": ["棉"]},
+        {"id": "502", "name": "品牌", "values": ["测试品牌"]},
+    ]
+    pdd_detail = repo.detail("pdd:3760269504500859111")
+    assert pdd_detail["sourceCategoryId"] is None and pdd_detail["sourceAttributes"] == []
     assert "uu_json" not in detail["product"]
 
 

@@ -599,6 +599,37 @@ test('抖音原类目直接取属性，切换商品时不使用旧响应', async
   expect(calls.every((item) => item.body.title === title)).toBe(true)
 })
 
+test('抖音原类目回显原包属性，切换类目后不错误沿用', async ({ page }) => {
+  await fixtures(page)
+  const shop = '00000000-0000-4000-8000-000000000111'
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: false, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => route.fulfill({ json: {
+    product: product(firstId), sourceCategoryId: '100', skus: [], images: [],
+    sourceAttributes: [{ id: '501', name: '材质', values: ['棉', '麻'] }],
+  } }))
+  await page.route('**/api/v1/category-lookup/tree', (route) => route.fulfill({ json: {
+    shopId: shop, parentId: '0', items: [{ id: '200', name: '新类目', isLeaf: true, enabled: true }], fromCache: true,
+  } }))
+  await page.route('**/api/v1/category-lookup/schema**', (route) => route.fulfill({ json: {
+    shopId: shop, categoryId: route.request().postDataJSON().categoryId,
+    attributes: [{ id: '501', label: '材质', required: true, options: [] }],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  const material = dialog.locator('.n-form-item').filter({ hasText: '材质' }).locator('input')
+  await expect(material).toHaveValue('棉、麻')
+  await dialog.getByRole('tab', { name: '基本信息' }).click()
+  await dialog.getByRole('textbox', { name: '抖店类目' }).click()
+  await page.getByRole('button', { name: '新类目', exact: true }).click()
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect(material).toHaveValue('')
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
+})
+
 test('非抖音来源不会把原平台类目当作抖店类目', async ({ page }) => {
   await fixtures(page)
   const calls: string[] = []

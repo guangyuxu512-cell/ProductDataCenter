@@ -54,11 +54,18 @@ class ImageRead(BaseModel):
     source_url: str
 
 
+class SourceAttribute(BaseModel):
+    id: str | None = None
+    name: str
+    values: list[str]
+
+
 class ProductDetail(BaseModel):
     product: ProductRead
     skus: list[SkuRead]
     images: list[ImageRead]
     sourceCategoryId: str | None = None
+    sourceAttributes: list[SourceAttribute] = Field(default_factory=list)
 
 
 class GroupRead(BaseModel):
