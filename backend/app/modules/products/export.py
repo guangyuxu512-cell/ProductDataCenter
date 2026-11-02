@@ -17,35 +17,30 @@ def resolve_data_file(root: Path, relative: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def current_uu_bytes(row: dict, root: Path, remaining: int) -> tuple[bytes, str]:
-    candidate = resolve_data_file(root, row.get("uu_rel_path") or "")
-    if candidate:
-        if candidate.stat().st_size > remaining:
-            raise ExportUnavailable("导出资料过大，请减少商品数量")
-        content = candidate.read_bytes()
-        expected = str(row.get("uu_sha256") or "").strip()
-        if expected and hashlib.sha256(content).hexdigest() != expected:
-            raise ExportUnavailable("UU 文件校验不一致，请核对资料后重试")
-        source = "version_file"
-    else:
-        content, source = str(row["uu_text"]).encode("utf-8"), "database"
+def current_uu_bytes(row: dict, remaining: int) -> tuple[bytes, str]:
+    # The database is the single source of the current package. Historical files
+    # can remain on disk but must never override an edited database value.
+    value = row.get("uu_text")
+    if not isinstance(value, str) or not value:
+        raise ExportUnavailable("商品数据包缺失，无法导出")
+    content = value.encode("utf-8")
     if len(content) > remaining:
         raise ExportUnavailable("导出资料过大，请减少商品数量")
     try:
         json.loads(content)
     except (ValueError, UnicodeError):
         raise ExportUnavailable("UU 数据格式异常，无法导出") from None
-    return content, source
+    return content, "database"
 
 
-def export_archive(rows: list[dict], product_ids: list[str], root: Path, max_bytes: int):
+def export_archive(rows: list[dict], product_ids: list[str], max_bytes: int):
     archive = io.BytesIO()
     exported: list[dict] = []
     total_bytes = 0
     now = datetime.now(timezone.utc)
     with ZipFile(archive, "w", compression=ZIP_STORED) as zipped:
         for row in rows:
-            content, source = current_uu_bytes(row, root, max_bytes - total_bytes)
+            content, source = current_uu_bytes(row, max_bytes - total_bytes)
             total_bytes += len(content)
             platform = re.sub(r"[^a-zA-Z0-9_-]", "_", row["source_platform"])
             identity = re.sub(r"[^a-zA-Z0-9_-]", "_", row["source_product_id"] or row["product_id"])

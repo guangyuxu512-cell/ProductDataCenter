@@ -92,13 +92,17 @@ def test_uu_bytes_hash_and_version_check(client):
     assert client.get("/rpa/v1/products/12345678/uu", headers=AUTH).status_code == 404
 
 
-def test_original_uu_file_bytes_are_not_rewritten(client, tmp_path, monkeypatch):
+def test_rpa_reads_database_even_when_legacy_file_exists(client, tmp_path, monkeypatch):
     original = b'{\r\n  "goodsId": "3760269504500859111"\r\n}\r\n'
     (tmp_path / "product.txt").write_bytes(original)
     monkeypatch.setattr(FakeRepository, "export_rows", lambda self, ids: [{
         "product_id": PRODUCT, "uu_rel_path": "product.txt", "uu_text": "{}",
         "uu_sha256": hashlib.sha256(original).hexdigest(),
     }])
-    response = client.get(f"/rpa/v1/products/{PRODUCT}/uu", headers=AUTH)
-    assert response.content == original
-    assert response.headers["x-uu-sha256"] == hashlib.sha256(original).hexdigest()
+    path = f"/rpa/v1/products/{PRODUCT}/uu"
+    response = client.get(path, headers=AUTH)
+    assert response.content == b"{}"
+    assert response.headers["x-uu-sha256"] == hashlib.sha256(b"{}").hexdigest()
+    # Old pinned hashes must not accidentally authorize a different package.
+    assert client.get(path, headers=AUTH, params={"expected_sha256": hashlib.sha256(original).hexdigest()}).status_code == 409
+    assert (tmp_path / "product.txt").read_bytes() == original

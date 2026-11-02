@@ -55,7 +55,7 @@ class ProductService:
 
     def export(self, product_ids: list[str]):
         return export_archive(self.repository.export_rows(product_ids), product_ids,
-                              self.settings.data_root, self.settings.export_max_bytes)
+                              self.settings.export_max_bytes)
 
     def image_file(self, product_id: str, kind: str, position: int):
         row = self.repository.image(product_id, kind, position)

@@ -67,7 +67,7 @@ def product_uu(product_id: str, service: Service,
     rows = service.repository.export_rows([product_id])
     if not rows:
         raise ProductNotFound("商品不存在或没有可用的 UU")
-    content, _ = current_uu_bytes(rows[0], service.settings.data_root, service.settings.export_max_bytes)
+    content, _ = current_uu_bytes(rows[0], service.settings.export_max_bytes)
     digest = hashlib.sha256(content).hexdigest()
     if expected_sha256 is not None and expected_sha256 != digest:
         raise UuVersionChanged()
