@@ -146,7 +146,13 @@ def test_group_crud_preserves_products_skus_uu_and_files(engine, tmp_path):
     assert "products_search_trgm_idx" in indexes and "products_captured_at_idx" in indexes
 
 
-def test_edit_updates_same_database_package_rpa_reads_and_rejects_stale_version(engine):
+def test_edit_updates_same_database_package_rpa_reads_and_rejects_stale_version(engine, tmp_path):
+    import hashlib
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from app.main import create_application
+    from app.modules.products.api import get_service
     from app.modules.products.errors import ProductEditConflict
     from app.modules.products.export import current_uu_bytes
     from app.modules.products.schemas import ProductEdit
@@ -175,6 +181,15 @@ def test_edit_updates_same_database_package_rpa_reads_and_rejects_stale_version(
         assert saved["goodsInfo"]["goodsName"] == "新的商品"
         assert saved["goodsInfo"]["goodsImageList"] == ["https://example.test/b"]
         assert saved["goodsSkuInfo"] == package["goodsSkuInfo"]
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            response = client.get(f"/rpa/v1/products/{identity}/uu", headers={"Authorization": "Bearer rpa-test"})
+            assert response.status_code == 200 and response.content == exported
+            assert response.headers["x-uu-sha256"] == hashlib.sha256(exported).hexdigest()
+            assert client.patch(f"/api/v1/products/{identity}", headers={"Authorization": "Bearer rpa-test"},
+                                json={"expectedVersion": new_version, "title": "越权"}).status_code == 401
         detail = repo.detail(identity)
         assert detail["product"]["title"] == "新的商品"
         assert [image["source_url"] for image in detail["images"]] == ["https://example.test/b"]
