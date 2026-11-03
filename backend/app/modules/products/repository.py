@@ -28,6 +28,28 @@ def _original_category_id(levels) -> str | None:
     return None
 
 
+def _spec_image_values(value_groups, sku_groups, index):
+    group = value_groups[index] if isinstance(value_groups, list) and index < len(value_groups) else {}
+    values = group.get("spec_values", []) if isinstance(group, dict) else []
+    sku_group = sku_groups[index] if isinstance(sku_groups, list) and index < len(sku_groups) else {}
+    items = sku_group.get("spec_item_list", []) if isinstance(sku_group, dict) else []
+    links = {}
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, dict) and item.get("spec_item_id") is not None:
+            key = str(item["spec_item_id"])
+            links.setdefault(key, []).append(item)
+    result = []
+    for item in values if isinstance(values, list) else []:
+        if not isinstance(item, dict) or item.get("id") is None:
+            continue
+        key = str(item["id"])
+        matches = links.get(key, [])
+        linked = matches[0] if len(matches) == 1 else {}
+        result.append({"id": key, "name": str(item.get("name", "")),
+            "url": str(item.get("img_url") or linked.get("big_pic") or linked.get("small_pic") or "")})
+    return result
+
+
 class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
@@ -137,28 +159,8 @@ class ProductRepository:
         sku_block = package.get("goodsSkuInfo") if isinstance(package, dict) else None
         sku_groups = sku_block.get("sku_detail", []) if isinstance(sku_block, dict) else []
 
-        def image_values(index, values):
-            group = sku_groups[index] if isinstance(sku_groups, list) and index < len(sku_groups) else {}
-            items = group.get("spec_item_list", []) if isinstance(group, dict) else []
-            links = {}
-            for item in items if isinstance(items, list) else []:
-                if isinstance(item, dict) and item.get("spec_item_id") is not None:
-                    key = str(item["spec_item_id"])
-                    links.setdefault(key, []).append(item)
-            result = []
-            for item in values:
-                if not isinstance(item, dict) or item.get("id") is None:
-                    continue
-                key = str(item["id"])
-                matches = links.get(key, [])
-                linked = matches[0] if len(matches) == 1 else {}
-                result.append({"id": key, "name": str(item.get("name", "")),
-                    "url": str(item.get("img_url") or linked.get("big_pic") or linked.get("small_pic") or "")})
-            return result
-
         first = groups[0] if isinstance(groups, list) and groups and isinstance(groups[0], dict) else {}
-        items = first.get("spec_values", []) if isinstance(first.get("spec_values", []), list) else []
-        spec_images = image_values(0, items)
+        spec_images = _spec_image_values(groups, sku_groups, 0)
         spec_groups = []
         for index, group in enumerate(groups if isinstance(groups, list) else []):
             if not isinstance(group, dict):
@@ -176,7 +178,7 @@ class ProductRepository:
                 except ProductRequestError:
                     pass
             spec_groups.append({"index": index, "name": str(group.get("name") or ""),
-                "values": image_values(index, values),
+                "values": _spec_image_values(groups, sku_groups, index),
                 "movable": movable})
         detail = sku_block.get("spec_detail") if isinstance(sku_block, dict) else None
         rows = detail.get("value", []) if isinstance(detail, dict) else []
@@ -246,9 +248,10 @@ class ProductRepository:
                 sql += f", {kind}_image_count=:{kind}_count"
             if edit.specImages is not None or edit.specImageGroupIndex is not None:
                 groups = package["spec_detail_value"]["value"]
-                sku_urls = list(dict.fromkeys(str(item.get("img_url")) for group in groups if isinstance(group, dict)
-                    for item in group.get("spec_values", []) if isinstance(item, dict) and item.get("img_url")
-                    and str(item.get("img_url")).startswith(("http://", "https://"))))
+                sku_groups = package["goodsSkuInfo"]["sku_detail"]
+                image_groups = [_spec_image_values(groups, sku_groups, index) for index in range(len(groups))]
+                sku_urls = list(dict.fromkeys(item["url"] for group in image_groups for item in group
+                    if item["url"].startswith(("http://", "https://"))))
                 old = conn.execute(text("""SELECT source_url, rel_path FROM product_images
                     WHERE product_id=:id AND image_type='sku'"""), {"id": product_id}).mappings()
                 paths = {item["source_url"]: item["rel_path"] for item in old if item["source_url"] and item["rel_path"]}
@@ -259,8 +262,7 @@ class ProductRepository:
                         {"id": product_id, "position": index, "path": paths.get(url, ""), "url": url})
                 params["sku_count_images"] = len(sku_urls)
                 sql += ", sku_image_count=:sku_count_images"
-                spec_to_url = {str(item.get("id")): str(item.get("img_url") or "")
-                               for item in groups[0].get("spec_values", []) if isinstance(item, dict)}
+                spec_to_url = {item["id"]: item["url"] for item in image_groups[0]}
                 sku_map = package.get("goodsInfo", {}).get("skuInfoMap", {})
                 for sku_row in package.get("goodsSkuInfo", {}).get("spec_detail", {}).get("value", []):
                     if not isinstance(sku_row, dict) or not isinstance(sku_row.get("spec_detail_ids"), list):

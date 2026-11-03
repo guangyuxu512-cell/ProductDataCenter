@@ -262,7 +262,7 @@ def test_moved_spec_image_group_is_visible_to_rpa_without_losing_off_sale_skus(e
             {"name": "颜色", "spec_item_list": [{"spec_item_id": "11", "big_pic": "https://example.test/black"},
                                               {"spec_item_id": "12", "big_pic": ""}]},
             {"name": "款式", "spec_item_list": [{"spec_item_id": "21", "big_pic": ""},
-                                              {"spec_item_id": "22", "big_pic": ""}]}],
+                                              {"spec_item_id": "22", "big_pic": "", "small_pic": "https://example.test/short"}]}],
             "spec_detail": {"value": [{"spec_detail_ids": ["11", "21"], "price": "12", "sku_status": True},
                                        {"spec_detail_ids": ["11", "22"], "price": "13", "sku_status": True},
                                        {"spec_detail_ids": ["12", "22"], "price": "16", "sku_status": False}]}},
@@ -282,6 +282,7 @@ def test_moved_spec_image_group_is_visible_to_rpa_without_losing_off_sale_skus(e
         repo = ProductRepository(engine)
         snapshot = repo.edit_snapshot(identity)
         assert snapshot["specGroups"][1]["movable"] is True
+        assert snapshot["specGroups"][1]["values"][1]["url"] == "https://example.test/short"
         repo.save_edit(identity, ProductEdit(expectedVersion=snapshot["version"], specImageGroupIndex=1,
             specImages=[{"specId": "21", "url": "https://example.test/long"}]))
         refreshed = repo.edit_snapshot(identity)
@@ -298,7 +299,8 @@ def test_moved_spec_image_group_is_visible_to_rpa_without_losing_off_sale_skus(e
         assert [row["spec_detail_ids"] for row in saved["goodsSkuInfo"]["spec_detail"]["value"]] == [
             ["21", "11"], ["22", "11"], ["22", "12"]]
         assert saved["goodsSkuInfo"]["spec_detail"]["value"][-1]["sku_status"] is False
-        assert [image["source_url"] for image in repo.detail(identity)["images"]] == ["https://example.test/long"]
+        assert [image["source_url"] for image in repo.detail(identity)["images"]] == [
+            "https://example.test/long", "https://example.test/short"]
     finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})

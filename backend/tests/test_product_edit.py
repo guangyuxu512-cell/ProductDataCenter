@@ -5,10 +5,23 @@ from pydantic import ValidationError
 
 from app.modules.products.editing import apply_edit
 from app.modules.products.errors import ProductRequestError
+from app.modules.products.repository import _spec_image_values
 from app.modules.products.schemas import ProductEdit
 
 
 VERSION = "a" * 64
+
+
+def test_spec_image_falls_back_only_to_the_matching_unambiguous_id():
+    groups = [{"spec_values": [{"id": "11", "name": "黑色", "img_url": ""},
+                               {"id": "12", "name": "白色", "img_url": ""}]}]
+    sku_groups = [{"spec_item_list": [{"spec_item_id": "11", "small_pic": "https://example.test/black"},
+                                      {"spec_item_id": "12", "big_pic": "https://example.test/a"},
+                                      {"spec_item_id": "12", "big_pic": "https://example.test/b"}]}]
+    assert _spec_image_values(groups, sku_groups, 0) == [
+        {"id": "11", "name": "黑色", "url": "https://example.test/black"},
+        {"id": "12", "name": "白色", "url": ""},
+    ]
 
 
 @pytest.fixture
