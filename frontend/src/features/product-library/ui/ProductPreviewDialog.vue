@@ -72,7 +72,7 @@ const imageGroupIndex = ref(0)
 const specImageEnabled = ref(false)
 const specImages = computed(() => specGroups.value[imageGroupIndex.value]?.values ?? [])
 function copyGroups(groups: SpecGroup[]) { return groups.map((group) => ({ ...group, values: group.values.map((item) => ({ ...item })) })) }
-type SkuDraft = { skuId: string; specIds: string[]; price: string; stock: string; enabled: boolean | null; merchantCode: string; deleted: boolean }
+type SkuDraft = { skuId: string; sourceSpecIds: string[] | null; specIds: string[]; price: string; stock: string; enabled: boolean | null; merchantCode: string; deleted: boolean }
 const skuDrafts = ref<SkuDraft[]>([])
 const initialSkuDrafts = ref<SkuDraft[]>([])
 const selectedParts = ref<CategoryTreeItem[] | null>(null)
@@ -112,13 +112,13 @@ function setEditSnapshot(result: EditSnapshot) {
   editVersion.value = result.version
   const groups = result.specGroups?.length ? result.specGroups :
     [{ index: 0, name: result.specImageGroup, values: result.specImages, movable: false }]
-  specGroups.value = copyGroups(groups)
-  initialSpecGroups.value = copyGroups(groups)
+  specGroups.value = copyGroups(groups).map((group) => ({ ...group, sourceIndex: group.index }))
+  initialSpecGroups.value = copyGroups(specGroups.value)
   imageGroupIndex.value = 0
   specImageEnabled.value = specImages.value.some((item) => !!item.url)
-  skuDrafts.value = (result.skus ?? []).map((item) => ({ ...item, specIds: [...item.specIds],
+  skuDrafts.value = (result.skus ?? []).map((item) => ({ ...item, sourceSpecIds: [...item.specIds], specIds: [...item.specIds],
     stock: item.stock === null ? '' : String(item.stock), deleted: false }))
-  initialSkuDrafts.value = skuDrafts.value.map((item) => ({ ...item, specIds: [...item.specIds] }))
+  initialSkuDrafts.value = skuDrafts.value.map((item) => ({ ...item, sourceSpecIds: item.sourceSpecIds ? [...item.sourceSpecIds] : null, specIds: [...item.specIds] }))
 }
 
 function allowLeave() { return !dirty.value || window.confirm('当前商品有未保存的修改，确定放弃吗？') }
@@ -145,13 +145,15 @@ function specImageIndex(name: string) {
 function setSpecImageGroup(index: number, value: boolean) {
   if (!canEdit.value) return
   if (value && index !== imageGroupIndex.value) {
-    if (index !== 0 && !specGroups.value[index]?.movable) return
+    if (index !== 0 && !specGroups.value[index]?.movable && !structureDirty.value) return
     const hasOldImages = specGroups.value.some((group, groupIndex) => groupIndex !== index && group.values.some((item) => item.url))
     const note = hasOldImages ? '原规格组的规格图将在保存后移除。' : ''
     if (!window.confirm(`开启后该规格组将置顶展示。${note}`)) return
     for (const [groupIndex, group] of specGroups.value.entries()) {
       if (groupIndex !== index) {
-        if (index === 0) group.values = (initialSpecGroups.value[groupIndex]?.values ?? []).map((item) => ({ ...item }))
+        if (index === 0) for (const item of group.values) {
+          item.url = initialSpecGroups.value[group.sourceIndex ?? -1]?.values.find((original) => original.id === item.id)?.url ?? ''
+        }
         else for (const item of group.values) item.url = ''
       }
     }
@@ -164,14 +166,98 @@ function setSpecImageGroup(index: number, value: boolean) {
     specImageEnabled.value = value
   }
 }
-function skuDraft(row: ProductSku) { return skuDrafts.value.find((item) => item.skuId === row.sourceSkuId) }
+function skuDraft(row: ProductSku) { return skuDrafts.value.find((item) => item.skuId === row.draftKey) }
 function deleteSku(row: ProductSku) {
   const draft = skuDraft(row)
   if (canEdit.value && draft && window.confirm('确定删除这个 SKU 组合吗？保存后会同步修改商品数据包。')) draft.deleted = true
 }
 function restoreDeletedSkus() { for (const [index, sku] of skuDrafts.value.entries()) if (!initialSkuDrafts.value[index]?.deleted) sku.deleted = false }
-const visibleSkus = computed(() => (props.product?.skus ?? []).filter((row) => !skuDraft(row)?.deleted))
+const canStructure = computed(() => canEdit.value && props.product?.platform === 'douyin' &&
+  specGroups.value.length > 0 && specGroups.value.every((group) => group.values.length > 0) &&
+  skuDrafts.value.length > 0 && skuDrafts.value.every((row) => row.deleted || (row.specIds.length === specGroups.value.length &&
+    row.specIds.every((id, index) => specGroups.value[index].values.some((value) => value.id === id)))))
+const structureSignature = (groups: SpecGroup[]) => JSON.stringify(groups.map((group) => ({
+  sourceIndex: group.sourceIndex, name: group.name, values: group.values.map(({ id, name }) => ({ id, name })),
+})))
+const structureDirty = computed(() => structureSignature(specGroups.value) !== structureSignature(initialSpecGroups.value) ||
+  skuDrafts.value.some((row, index) => !initialSkuDrafts.value[index] ||
+    JSON.stringify(row.specIds) !== JSON.stringify(initialSkuDrafts.value[index].specIds)))
+const visibleSkus = computed<ProductSku[]>(() => {
+  if (!canStructure.value) return (props.product?.skus ?? []).filter((row) => !skuDraft(row)?.deleted)
+  return skuDrafts.value.filter((row) => !row.deleted).map((row) => {
+    const original = props.product?.skus.find((item) => item.draftKey === row.skuId)
+    return { draftKey: row.skuId, sourceSkuId: row.skuId.startsWith('local-') ? null : (original?.sourceSkuId ?? row.skuId),
+      name: original?.name ?? '', currentPrice: row.price || null, stockLabel: row.stock || null,
+      imageUrl: original?.imageUrl ?? null, specValues: {} }
+  })
+})
 const deletedSkus = computed(() => skuDrafts.value.filter((row, index) => row.deleted && !initialSkuDrafts.value[index]?.deleted).length)
+
+function localId() { return 'local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) }
+function reindexGroups() { specGroups.value.forEach((group, index) => { group.index = index }) }
+function addSpecGroup() {
+  if (!canStructure.value || specGroups.value.length >= 3) return
+  const name = window.prompt('请输入规格类型名称')?.trim()
+  if (!name) return
+  const value = window.prompt('请输入“' + name + '”的第一个规格值')?.trim()
+  if (!value) return
+  const id = localId()
+  specGroups.value.push({ index: specGroups.value.length, sourceIndex: null, name, movable: true, values: [{ id, name: value, url: '' }] })
+  for (const row of skuDrafts.value) row.specIds.push(id)
+}
+function addSpecValue(index: number) {
+  if (!canStructure.value) return
+  const group = specGroups.value[index]
+  const name = window.prompt('请输入“' + group.name + '”的规格值')?.trim()
+  if (!name) return
+  if (group.values.some((value) => value.name === name)) { message.error('规格值不能重复'); return }
+  const id = localId()
+  const added = new Map<string, string[]>()
+  for (const row of skuDrafts.value.filter((item) => !item.deleted)) {
+    const ids = [...row.specIds]; ids[index] = id
+    added.set(JSON.stringify(ids), ids)
+  }
+  if (skuDrafts.value.filter((row) => !row.deleted).length + added.size > 2000) { message.error('SKU 组合不能超过 2000 个'); return }
+  group.values.push({ id, name, url: '' })
+  for (const ids of added.values()) skuDrafts.value.push({ skuId: localId(), sourceSpecIds: null, specIds: ids,
+    price: '', stock: '0', merchantCode: '', enabled: true, deleted: false })
+}
+function deleteSpecValue(index: number, id: string) {
+  if (!canStructure.value) return
+  const group = specGroups.value[index]
+  if (group.values.length <= 1) { message.error('每个规格类型至少保留一个规格值'); return }
+  const affected = skuDrafts.value.filter((row) => !row.deleted && row.specIds[index] === id)
+  if (affected.length === visibleSkus.value.length) { message.error('至少需要保留一个 SKU 组合'); return }
+  if (!window.confirm('删除该规格值会同时删除 ' + affected.length + ' 个 SKU，保存后生效。确定删除吗？')) return
+  group.values = group.values.filter((item) => item.id !== id)
+  for (const row of affected) row.deleted = true
+}
+function deleteSpecGroup(index: number) {
+  if (!canStructure.value || specGroups.value.length <= 1) return
+  const active = skuDrafts.value.filter((row) => !row.deleted)
+  const keys = active.map((row) => JSON.stringify(row.specIds.filter((_, i) => i !== index)))
+  if (new Set(keys).size !== keys.length) { message.error('删除后部分 SKU 会重复，请先删除多余的 SKU 组合'); return }
+  if (!window.confirm('确定删除该规格类型吗？相关 SKU 将同步调整。')) return
+  specGroups.value.splice(index, 1)
+  for (const row of skuDrafts.value) row.specIds.splice(index, 1)
+  if (imageGroupIndex.value === index) { imageGroupIndex.value = 0; specImageEnabled.value = false }
+  else if (imageGroupIndex.value > index) imageGroupIndex.value--
+  reindexGroups()
+}
+function moveSpecGroup(index: number, offset: number) {
+  if (!canStructure.value) return
+  const target = index + offset
+  if (target < 0 || target >= specGroups.value.length) return
+  if (specImageEnabled.value && (index === imageGroupIndex.value || target === imageGroupIndex.value)) {
+    message.warning('带规格图的类型需要排在第一位'); return
+  }
+  ;[specGroups.value[index], specGroups.value[target]] = [specGroups.value[target], specGroups.value[index]]
+  for (const row of skuDrafts.value) [row.specIds[index], row.specIds[target]] = [row.specIds[target], row.specIds[index]]
+  if (!specImageEnabled.value) imageGroupIndex.value = 0
+  else if (imageGroupIndex.value === index) imageGroupIndex.value = target
+  else if (imageGroupIndex.value === target) imageGroupIndex.value = index
+  reindexGroups()
+}
 function changeImage(kind: 'main' | 'detail' | 'sku', index?: number) {
   if (!canEdit.value) return
   const images = kind === 'main' ? draftMain.value : kind === 'detail' ? draftDetail.value : null
@@ -210,13 +296,47 @@ async function submitEdit() {
   if (selectedParts.value) patch.category = selectedParts.value.map(({ id, name }) => ({ id, name }))
   if (JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value)) patch.mainImages = [...draftMain.value]
   if (JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value)) patch.detailImages = [...draftDetail.value]
-  if (imageGroupIndex.value !== 0) patch.specImageGroupIndex = imageGroupIndex.value
-  const initialImages = initialSpecGroups.value[imageGroupIndex.value]?.values ?? []
-  if (JSON.stringify(specImages.value) !== JSON.stringify(initialImages)) patch.specImages = specImages.value
-    .filter((item, index) => item.url !== initialImages[index]?.url)
-    .map((item) => ({ specId: item.id, url: item.url }))
-  const changedSkus: NonNullable<ProductPatch['skus']> = []
-  for (const [index, item] of skuDrafts.value.entries()) {
+  if (structureDirty.value) {
+    if (!canStructure.value) { message.error('规格数据不完整，请刷新商品后重试'); return }
+    const names = specGroups.value.map((group) => group.name.replace(/\s*[（(]\d+[）)]\s*$/u, '').trim())
+    if (names.some((name) => !name) || new Set(names).size !== names.length) {
+      message.error('规格类型名称不能为空或重复'); tab.value = 'sku'; return
+    }
+    for (const group of specGroups.value) {
+      const values = group.values.map((item) => item.name.trim())
+      if (values.some((value) => !value) || new Set(values).size !== values.length) {
+        message.error('规格值不能为空或重复'); tab.value = 'sku'; return
+      }
+    }
+    const active = skuDrafts.value.filter((item) => !item.deleted)
+    if (!active.length) { message.error('至少需要保留一个 SKU'); return }
+    for (const item of active) {
+      const previous = initialSkuDrafts.value.find((row) => row.skuId === item.skuId)
+      if ((!previous || item.price !== previous.price) &&
+          (!/^\d+(?:\.\d{1,2})?$/.test(item.price) || Number(item.price) <= 0 || Number(item.price) > 9999999999)) {
+        message.error('请填写有效的 SKU 价格，最多两位小数'); tab.value = 'sku'; return
+      }
+      if ((!previous || item.stock !== previous.stock) && (!/^\d+$/.test(item.stock) || Number(item.stock) > 2147483647)) {
+        message.error('SKU 库存必须是非负整数'); tab.value = 'sku'; return
+      }
+    }
+    const order = specGroups.value.map((_, index) => index)
+    if (imageGroupIndex.value > 0) { order.splice(imageGroupIndex.value, 1); order.unshift(imageGroupIndex.value) }
+    patch.specStructure = {
+      groups: order.map((index) => ({ sourceIndex: specGroups.value[index].sourceIndex ?? null,
+        name: specGroups.value[index].name.trim(), values: specGroups.value[index].values.map((value) => ({ ...value, name: value.name.trim() })) })),
+      skus: active.map((item) => ({ sourceSpecIds: item.sourceSpecIds ? [...item.sourceSpecIds] : null,
+        specIds: order.map((index) => item.specIds[index]), price: item.price, stock: item.stock,
+        merchantCode: item.merchantCode, enabled: item.enabled })),
+    }
+  } else {
+    if (imageGroupIndex.value !== 0) patch.specImageGroupIndex = imageGroupIndex.value
+    const initialImages = initialSpecGroups.value[imageGroupIndex.value]?.values ?? []
+    if (JSON.stringify(specImages.value) !== JSON.stringify(initialImages)) patch.specImages = specImages.value
+      .filter((item, index) => item.url !== initialImages[index]?.url)
+      .map((item) => ({ specId: item.id, url: item.url }))
+    const changedSkus: NonNullable<ProductPatch['skus']> = []
+    for (const [index, item] of skuDrafts.value.entries()) {
     const previous = initialSkuDrafts.value[index]
     if (!previous || JSON.stringify(item) === JSON.stringify(previous)) continue
     const change: NonNullable<ProductPatch['skus']>[number] = { specIds: [...item.specIds] }
@@ -237,9 +357,10 @@ async function submitEdit() {
       if (item.merchantCode !== previous.merchantCode) change.merchantCode = item.merchantCode
       if (item.enabled !== previous.enabled && item.enabled !== null) change.enabled = item.enabled
     }
-    changedSkus.push(change)
+      changedSkus.push(change)
+    }
+    if (changedSkus.length) patch.skus = changedSkus
   }
-  if (changedSkus.length) patch.skus = changedSkus
   if (touchedAttributes.value.length) patch.attributes = touchedAttributes.value.flatMap((id) => {
     const field = categoryAttributes.value.find((item) => item.id === id)
     if (!field) return []
@@ -375,7 +496,7 @@ const allText = computed(() => {
 const titleLength = computed(() => Array.from(props.editable ? draftTitle.value : (props.product?.title ?? ''))
   .reduce((sum, character) => sum + ((character.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0))
 const specLayout = computed(() => {
-  const skus = props.product?.skus ?? []
+  const skus = canStructure.value ? visibleSkus.value : (props.product?.skus ?? [])
   const fallback = sourceSpecLayout(skus)
   const groups = specGroups.value
   if (!groups.length || groups.some((group, index) => group.index !== index || !group.values.length)) return fallback
@@ -384,7 +505,7 @@ const specLayout = computed(() => {
     const ids = skuDraft(row)?.specIds
     if (!ids || ids.length !== groups.length) return fallback
     const values = ids.map((id, index) => groups[index].values.find((item) => item.id === id)?.name)
-    if (values.some((value) => !value)) return fallback
+    if (values.some((value) => value === undefined)) return fallback
     rows[row.draftKey] = values as string[]
   }
   return {
@@ -566,22 +687,24 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
           </section>
           <section v-if="tab === 'sku'" class="product-preview__section">
             <div class="product-preview__section-heading"><strong>销售规格</strong>
-              <AppButton size="small" disabled>添加规格类型</AppButton>
+              <AppButton size="small" :disabled="!canStructure || specGroups.length >= 3" @click="addSpecGroup">添加规格类型</AppButton>
             </div>
             <div v-for="{ axis, index: axisIndex } in displayAxes" :key="axisIndex" class="product-preview__axis">
               <div class="product-preview__axis-heading">
-                <AppInput :model-value="axis.name" aria-label="规格类型" readonly />
+                <AppInput :model-value="axis.name" aria-label="规格类型" :readonly="!canStructure"
+                  @update:model-value="specGroups[axisIndex] && (specGroups[axisIndex].name = $event)" />
                 <span class="product-preview__status"><NSwitch
                   :value="axisIndex === imageGroupIndex && specImageEnabled"
-                  :disabled="!canEdit || !specGroups[axisIndex]?.values.length || (axisIndex !== imageGroupIndex && axisIndex !== 0 && !specGroups[axisIndex]?.movable)"
+                  :disabled="!canEdit || !specGroups[axisIndex]?.values.length || (axisIndex !== imageGroupIndex && axisIndex !== 0 && !specGroups[axisIndex]?.movable && !structureDirty)"
                   :aria-label="`${axis.name}规格图开关`" @update:value="setSpecImageGroup(axisIndex, $event)" />添加规格图</span>
                 <div class="product-preview__actions">
-                  <AppButton tone="link" size="small" disabled>上移</AppButton><AppButton tone="link" size="small" disabled>下移</AppButton>
-                  <AppButton tone="link" size="small" disabled>删除</AppButton>
+                  <AppButton tone="link" size="small" :disabled="!canStructure || axisIndex === 0" @click="moveSpecGroup(axisIndex, -1)">上移</AppButton>
+                  <AppButton tone="link" size="small" :disabled="!canStructure || axisIndex === specGroups.length - 1" @click="moveSpecGroup(axisIndex, 1)">下移</AppButton>
+                  <AppButton tone="link" size="small" :disabled="!canStructure || specGroups.length <= 1" @click="deleteSpecGroup(axisIndex)">删除</AppButton>
                 </div>
               </div>
               <div class="product-preview__values">
-                <div v-for="value in axis.values" :key="value" class="product-preview__value">
+                <div v-for="(value, valueIndex) in axis.values" :key="specGroups[axisIndex]?.values[valueIndex]?.id ?? valueIndex" class="product-preview__value">
                   <div v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0"
                     class="product-preview__spec-image">
                     <NImage v-if="specImages[specImageIndex(value)]?.url"
@@ -595,13 +718,14 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                     <button v-else type="button" class="product-preview__spec-image-add" :disabled="!canEdit"
                       :aria-label="`更换${value}规格图片`" @click="changeImage('sku', specImageIndex(value))">＋</button>
                   </div>
-                  <AppInput :model-value="value" :aria-label="`${axis.name}规格值`" readonly />
+                  <AppInput :model-value="value" :aria-label="`${axis.name}规格值`" :readonly="!canStructure"
+                    @update:model-value="specGroups[axisIndex]?.values[valueIndex] && (specGroups[axisIndex].values[valueIndex].name = $event)" />
                   <AppButton v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0 && specImages[specImageIndex(value)]?.url"
                     tone="link" size="small" :disabled="!canEdit" :aria-label="`更换${value}规格图片`"
                     @click="changeImage('sku', specImageIndex(value))">更换</AppButton>
-                  <AppButton tone="link" size="small" disabled>删除</AppButton>
+                  <AppButton tone="link" size="small" :disabled="!canStructure" @click="deleteSpecValue(axisIndex, specGroups[axisIndex].values[valueIndex].id)">删除</AppButton>
                 </div>
-                <AppButton size="small" disabled>添加规格值</AppButton>
+                <AppButton size="small" :disabled="!canStructure" @click="addSpecValue(axisIndex)">添加规格值</AppButton>
               </div>
             </div>
             <div class="product-preview__section-heading"><strong>价格与库存</strong>
@@ -609,7 +733,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                 <AppButton size="small" @click="copy(allText, '全部商品信息')">复制全部信息</AppButton></div>
             </div>
             <div v-if="deletedSkus" class="product-preview__status">已删除 {{ deletedSkus }} 个 SKU，保存后生效
-              <AppButton tone="link" size="small" @click="restoreDeletedSkus">撤销删除</AppButton>
+              <AppButton v-if="!structureDirty" tone="link" size="small" @click="restoreDeletedSkus">撤销删除</AppButton>
             </div>
             <AppTable :columns="skuColumns" :data="visibleSkus" :row-key="(row) => row.draftKey" :scroll-x="1000" bordered />
           </section>

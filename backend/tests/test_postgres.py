@@ -304,3 +304,67 @@ def test_moved_spec_image_group_is_visible_to_rpa_without_losing_off_sale_skus(e
     finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
+
+
+def test_spec_structure_save_updates_postgres_projection_and_rpa_payload(engine, tmp_path):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.products.api import get_service
+    from app.modules.products.schemas import ProductEdit
+
+    identity = "9999999999999999914"
+    package = {"goodsId": identity, "goodsInfo": {"goodsName": "规格测试", "skuInfoMap": {
+        "11": {"sku_id": "1001"}, "12": {"sku_id": "1002"}}},
+        "goodsSkuInfo": {"sku_detail": [{"name": "颜色", "spec_item_list": [
+            {"spec_item_id": "11", "name": "黑", "big_pic": "https://example.test/black"},
+            {"spec_item_id": "12", "name": "白", "big_pic": ""}]}],
+            "spec_detail": {"value": [
+                {"spec_detail_ids": ["11"], "price": "12", "sku_status": True, "stock_info": {"stock_num": 5}},
+                {"spec_detail_ids": ["12"], "price": "16", "sku_status": False, "stock_info": {"stock_num": 0}}]}},
+        "spec_detail_value": {"value": [{"name": "颜色", "spec_values": [
+            {"id": "11", "name": "黑", "img_url": "https://example.test/black"},
+            {"id": "12", "name": "白", "img_url": ""}]}]}}
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO products(product_id,source_platform,source_product_id,title,uu_json,sku_count)
+            VALUES (:id,'douyin',:id,'规格测试',CAST(:package AS jsonb),2)"""),
+            {"id": identity, "package": json.dumps(package)})
+        conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,image_rel_path,sort_order)
+            VALUES (:id,'1001','黑',12,'sku/black.jpg',0),(:id,'1002','白',16,'',1)"""), {"id": identity})
+        conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+            VALUES (:id,'sku',0,'sku/black.jpg','https://example.test/black')"""), {"id": identity})
+    try:
+        repo = ProductRepository(engine)
+        snapshot = repo.edit_snapshot(identity)
+        edit = ProductEdit(expectedVersion=snapshot["version"], specStructure={
+            "groups": [{"sourceIndex": 0, "name": "颜色", "values": [
+                {"id": "11", "name": "深黑", "url": "https://example.test/black"},
+                {"id": "12", "name": "白"}, {"id": "local-red", "name": "红", "url": "https://example.test/red"}]}],
+            "skus": [{"sourceSpecIds": ["11"], "specIds": ["11"], "price": "12", "stock": "5", "enabled": True},
+                     {"sourceSpecIds": ["12"], "specIds": ["12"], "price": "16", "stock": "0", "enabled": False},
+                     {"specIds": ["local-red"], "price": "20", "stock": "2", "enabled": True}]})
+        repo.save_edit(identity, edit)
+        refreshed = repo.edit_snapshot(identity)
+        assert len(refreshed["skus"]) == 3
+        assert refreshed["skus"][1]["skuId"] == "1002" and refreshed["skus"][1]["enabled"] is False
+        assert refreshed["skus"][2]["skuId"].startswith("local-")
+        detail = repo.detail(identity)
+        assert detail["product"]["sku_count"] == 3
+        assert [sku["sku_id"] for sku in detail["skus"]][:2] == ["1001", "1002"]
+        assert detail["skus"][0]["sku_name"] == "颜色: 深黑"
+        assert detail["skus"][0]["image_rel_path"] == "sku/black.jpg"
+        assert [image["source_url"] for image in detail["images"]] == ["https://example.test/black", "https://example.test/red"]
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            response = client.get(f"/rpa/v1/products/{identity}/uu", headers={"Authorization": "Bearer rpa-test"})
+            assert response.status_code == 200
+            saved = response.json()
+        assert saved["goodsInfo"]["skuInfoMap"]["12"]["sku_id"] == "1002"
+        assert "sku_id" not in saved["goodsInfo"]["skuInfoMap"]["local-red"]
+        assert saved["goodsSkuInfo"]["spec_detail"]["value"][-1]["stock_info"]["stock_num"] == 2
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})

@@ -4,7 +4,7 @@ import type { Capabilities, NasDetail, ProductFilters, ProductGroup, ProductList
 const EXACT_PRODUCT_ID = /^(?:\d{8,}|[a-z][a-z0-9_-]{1,63}:\d{8,})$/i
 
 export interface SpecImage { id: string; name: string; url: string }
-export interface SpecGroup { index: number; name: string; values: SpecImage[]; movable: boolean }
+export interface SpecGroup { index: number; name: string; values: SpecImage[]; movable: boolean; sourceIndex?: number | null }
 export interface EditableSku { skuId: string; specIds: string[]; price: string; stock: number | null; enabled: boolean | null; merchantCode: string }
 export interface EditSnapshot { version: string; specImageGroup: string; specImages: SpecImage[]; specGroups?: SpecGroup[]; skus: EditableSku[] }
 export interface ProductPatch {
@@ -17,6 +17,10 @@ export interface ProductPatch {
   specImages?: Array<{ specId: string; url: string }>
   specImageGroupIndex?: number
   skus?: Array<{ specIds: string[]; price?: string; stock?: number; merchantCode?: string; enabled?: boolean; delete?: boolean }>
+  specStructure?: {
+    groups: Array<{ sourceIndex: number | null; name: string; values: SpecImage[] }>
+    skus: Array<{ sourceSpecIds: string[] | null; specIds: string[]; price: string; stock: string; merchantCode: string; enabled: boolean | null }>
+  }
 }
 
 export async function fetchEditSnapshot(id: string) {

@@ -2,9 +2,11 @@
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 import json
+import re
+from uuid import uuid4
 
 from .errors import ProductRequestError
-from .schemas import ProductEdit
+from .schemas import ProductEdit, SkuEdit
 
 
 def _mapping(value, message: str) -> dict:
@@ -190,11 +192,190 @@ def _edit_skus(data: dict, changes) -> None:
                 item["_price"] = str(min_by_spec[str(item["id"])])
 
 
+def _sku_key(source: dict, fallback: str) -> str:
+    return str(source.get("sku_id") or source.get("skuId") or source.get("id") or
+               source.get("_local_sku_key") or fallback)
+
+
+def _edit_spec_structure(data: dict, structure) -> None:
+    """Update the coupled source structures, retaining original rows and their metadata."""
+    value_groups = _mapping(data.get("spec_detail_value"), "商品缺少销售规格").get("value")
+    info = _mapping(data.get("goodsSkuInfo"), "商品缺少销售规格")
+    sku_groups = info.get("sku_detail")
+    rows = _mapping(info.get("spec_detail"), "商品缺少 SKU 组合").get("value")
+    goods = _mapping(data.get("goodsInfo"), "商品缺少 SKU 来源映射")
+    source_map = _mapping(goods.get("skuInfoMap"), "商品缺少 SKU 来源映射")
+    if not isinstance(value_groups, list) or not isinstance(sku_groups, list) or not isinstance(rows, list) or len(value_groups) != len(sku_groups):
+        raise ProductRequestError("规格数据不完整，无法编辑")
+    old_values = []
+    old_items = []
+    for value_group, sku_group in zip(value_groups, sku_groups, strict=True):
+        values = _mapping(value_group, "规格数据无效").get("spec_values")
+        items = _mapping(sku_group, "规格数据无效").get("spec_item_list")
+        if not isinstance(values, list) or not isinstance(items, list):
+            raise ProductRequestError("规格数据不完整，无法编辑")
+        vm = {str(v.get("id")): v for v in values if isinstance(v, dict) and v.get("id") is not None}
+        im = {str(v.get("spec_item_id")): v for v in items if isinstance(v, dict) and v.get("spec_item_id") is not None}
+        if len(vm) != len(values) or len(im) != len(items) or set(vm) != set(im) or any(not key or "_" in key for key in vm):
+            raise ProductRequestError("规格值无法唯一对应，无法编辑")
+        old_values.append(vm)
+        old_items.append(im)
+    all_old_ids = [key for group in old_values for key in group]
+    if len(all_old_ids) != len(set(all_old_ids)):
+        raise ProductRequestError("规格值标识重复，无法编辑")
+    old_rows = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("spec_detail_ids"), list):
+            raise ProductRequestError("SKU 组合格式无效")
+        ids = [str(value) for value in row["spec_detail_ids"]]
+        if len(ids) != len(old_values) or any(value not in old_values[i] for i, value in enumerate(ids)):
+            raise ProductRequestError("SKU 组合与规格不一致")
+        key = "_".join(ids)
+        if key in old_rows or not isinstance(source_map.get(key), dict):
+            raise ProductRequestError("SKU 来源映射不完整或重复")
+        old_rows[key] = row
+
+    groups = structure.groups
+    source_indices = [group.sourceIndex for group in groups if group.sourceIndex is not None]
+    if len(source_indices) != len(set(source_indices)) or any(index >= len(old_values) for index in source_indices):
+        raise ProductRequestError("规格类型与原数据不能唯一对应")
+    group_names = [re.sub(r"\s*[（(]\d+[）)]\s*$", "", group.name).strip() for group in groups]
+    if any(not name for name in group_names) or len(set(group_names)) != len(group_names):
+        raise ProductRequestError("规格类型名称不能为空或重复")
+    all_ids = [value.id for group in groups for value in group.values]
+    if len(all_ids) != len(set(all_ids)):
+        raise ProductRequestError("规格值标识重复")
+    new_value_groups = []
+    new_sku_groups = []
+    for index, group in enumerate(groups):
+        if len({value.name for value in group.values}) != len(group.values):
+            raise ProductRequestError("同一规格类型下的规格值不能重复")
+        original = group.sourceIndex
+        value_group = deepcopy(value_groups[original]) if original is not None else {}
+        sku_group = deepcopy(sku_groups[original]) if original is not None else {}
+        value_group["name"] = group.name
+        sku_group["name"] = group.name
+        if "spec_index" in sku_group:
+            start = 1 if sku_groups and sku_groups[0].get("spec_index") in (1, "1") else 0
+            sku_group["spec_index"] = str(index + start) if isinstance(sku_group["spec_index"], str) else index + start
+        values, items = [], []
+        for value in group.values:
+            if value.id in all_old_ids and (original is None or value.id not in old_values[original]):
+                raise ProductRequestError("规格值不能移动到其他规格类型")
+            if value.id not in all_old_ids and not value.id.startswith("local-"):
+                raise ProductRequestError("新增规格值标识无效")
+            val = deepcopy(old_values[original].get(value.id, {})) if original is not None else {}
+            item = deepcopy(old_items[original].get(value.id, {})) if original is not None else {}
+            old_url = val.get("img_url") or item.get("big_pic") or item.get("small_pic") or ""
+            is_new = value.id not in all_old_ids
+            val.update(id=value.id, name=value.name)
+            item.update(spec_item_id=value.id, name=value.name)
+            if is_new or old_url != value.url:
+                val["img_url"] = value.url
+                item["big_pic"] = value.url
+                if "small_pic" in item:
+                    item["small_pic"] = value.url
+            values.append(val)
+            items.append(item)
+        value_group["spec_values"] = values
+        sku_group["spec_item_list"] = items
+        new_value_groups.append(value_group)
+        new_sku_groups.append(sku_group)
+
+    new_rows, new_map, remapped, changes = [], {}, {}, []
+    group_ids = [{value.id for value in group.values} for group in groups]
+    for draft in structure.skus:
+        ids = draft.specIds
+        if len(ids) != len(groups) or any(value not in group_ids[i] for i, value in enumerate(ids)):
+            raise ProductRequestError("SKU 组合与当前规格不一致")
+        key = "_".join(ids)
+        if key in new_map:
+            raise ProductRequestError("SKU 组合重复，请先处理重复组合")
+        old_key = "_".join(draft.sourceSpecIds) if draft.sourceSpecIds else None
+        if old_key is not None:
+            if old_key not in old_rows or old_key in remapped:
+                raise ProductRequestError("SKU 来源无法唯一对应，请刷新后重试")
+            old_ids = draft.sourceSpecIds
+            if any(group.sourceIndex is not None and ids[i] != old_ids[group.sourceIndex] for i, group in enumerate(groups)):
+                raise ProductRequestError("已有 SKU 不能指向其他规格值")
+            row, source = deepcopy(old_rows[old_key]), deepcopy(source_map[old_key])
+            if key != old_key and not any(source.get(field) for field in ("sku_id", "skuId", "id", "_local_sku_key")):
+                source["_local_sku_key"] = old_key
+            remapped[old_key] = key
+        else:
+            row = {"stock_info": {}}
+            source = {"_local_sku_key": "local-" + uuid4().hex}
+        old_price = str(row.get("price") or "")
+        old_stock = row.get("stock_info", {}).get("stock_num") if isinstance(row.get("stock_info"), dict) else None
+        old_stock = "" if old_stock is None else str(old_stock)
+        old_enabled = row.get("sku_status") if isinstance(row.get("sku_status"), bool) else None
+        row["spec_detail_ids"] = list(ids)
+        new_rows.append(row)
+        new_map[key] = source
+        values = {"specIds": ids}
+        if draft.price != old_price:
+            try:
+                price = Decimal(draft.price)
+                if not price.is_finite() or price <= 0 or price > 9999999999 or price.as_tuple().exponent < -2:
+                    raise InvalidOperation
+            except InvalidOperation:
+                raise ProductRequestError("SKU 价格必须大于 0，最多两位小数") from None
+            values["price"] = price
+        if draft.stock != old_stock:
+            if not re.fullmatch(r"[0-9]+", draft.stock) or int(draft.stock) > 2147483647:
+                raise ProductRequestError("SKU 库存必须是非负整数")
+            values["stock"] = int(draft.stock)
+        if draft.merchantCode != str(row.get("merchant_code") or ""):
+            values["merchantCode"] = draft.merchantCode
+        if draft.enabled is not None and draft.enabled != old_enabled:
+            values["enabled"] = draft.enabled
+        if old_key is None and ("price" not in values or "stock" not in values):
+            raise ProductRequestError("新增 SKU 必须填写价格和库存")
+        if len(values) > 1:
+            changes.append(SkuEdit(**values))
+
+    def map_hidden(key):
+        old_ids = str(key).split("_")
+        if len(old_ids) != len(old_values) or any(value not in old_values[i] for i, value in enumerate(old_ids)):
+            raise ProductRequestError("SKU 来源映射不完整，无法安全编辑")
+        result = [old_ids[g.sourceIndex] if g.sourceIndex is not None else g.values[0].id for g in groups]
+        if any(value not in group_ids[i] for i, value in enumerate(result)):
+            raise ProductRequestError("删除的规格值仍被其他来源记录使用，无法安全保存")
+        return "_".join(result)
+
+    for old_key, source in source_map.items():
+        if old_key in old_rows:
+            continue
+        key = map_hidden(old_key)
+        if key in new_map:
+            raise ProductRequestError("规格调整导致来源 SKU 重复，无法安全保存")
+        new_map[key] = deepcopy(source)
+        remapped[old_key] = key
+    if "_source_sku_prices" in data:
+        prices = _mapping(data["_source_sku_prices"], "SKU 来源价格格式无效")
+        new_prices = {}
+        for old_key, price in prices.items():
+            if old_key in old_rows and old_key not in remapped:
+                continue
+            key = remapped.get(old_key) or map_hidden(old_key)
+            if key in new_prices:
+                raise ProductRequestError("规格调整导致来源 SKU 价格重复")
+            new_prices[key] = price
+        data["_source_sku_prices"] = new_prices
+    value_groups[:] = new_value_groups
+    sku_groups[:] = new_sku_groups
+    rows[:] = new_rows
+    goods["skuInfoMap"] = new_map
+    _edit_skus(data, changes)
+
+
 def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
     """Return a modified copy; reject shapes we cannot faithfully translate."""
     data = deepcopy(_mapping(source, "商品数据包格式无效"))
     if platform == "douyin":
         goods = _mapping(data.get("goodsInfo"), "抖音商品数据包缺少商品信息")
+        if edit.specStructure is not None:
+            _edit_spec_structure(data, edit.specStructure)
         if edit.skus is not None:
             _edit_skus(data, edit.skus)
         if edit.specImageGroupIndex is not None:
@@ -259,7 +440,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                                            or str(item.get("property_id", "")) not in edited_ids]
     elif platform in {"pinduoduo", "pdd"}:
         product = _mapping(data.get("product"), "拼多多商品数据包缺少商品信息")
-        if edit.category is not None or edit.attributes is not None or edit.specImages is not None or edit.specImageGroupIndex is not None or edit.skus is not None:
+        if edit.category is not None or edit.attributes is not None or edit.specImages is not None or edit.specImageGroupIndex is not None or edit.skus is not None or edit.specStructure is not None:
             raise ProductRequestError("拼多多数据包的抖店类目转换尚未接入")
         if edit.title is not None:
             product["title"] = edit.title
