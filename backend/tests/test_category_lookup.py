@@ -85,6 +85,13 @@ def test_pure_body_hash_uses_wire_bytes_and_get_keeps_empty_body_hash():
     assert bytes(post["body_hash"]) == double_sm3(body + b"dhzx")
     assert bytes(get["body_hash"]) == double_sm3(b"dhzx")
     assert post["result"] != get["result"]
+
+
+def test_schema_keeps_options_beyond_previous_500_item_limit():
+    options = [{"value_id": i, "value_name": f"选项{i}"} for i in range(501)]
+    fields = normalize_fields([{"id": 12, "label": "材质", "required": True, "options": options}])
+    assert len(fields[0]["options"]) == 501
+    assert fields[0]["options"][-1] == {"label": "选项500", "value": "500"}
     with pytest.raises(TypeError):
         pure_signer.generate("appid=1", "test-agent", body="not bytes")
 

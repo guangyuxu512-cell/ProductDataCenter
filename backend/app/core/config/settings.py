@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     central_application_token_file: Path | None = Field(default=None, repr=False)
     # Read-only category/schema lookup; disabled independently of product/RPA APIs.
     douyin_category_lookup_enabled: bool = False
+    # Enable only after collector migration 0009 and the queue grants are installed.
+    auto_precheck_enabled: bool = False
     # The existing service can still be selected explicitly for rollback.
     douyin_signer_mode: str = "pure"
     douyin_signer_url: str = "http://product-cloud-signer-v1-product-signer-1:8787"

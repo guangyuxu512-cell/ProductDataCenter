@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, h, ref } from 'vue'
+import { useQuery } from '@tanstack/vue-query'
 import { NDatePicker, NEllipsis, NFormItem, useMessage, type DataTableColumns } from 'naive-ui'
 import { ProductInfoCell } from '@/entities/product'
 import { PlatformDisplay } from '@/entities/platform'
 import { ContextSwitchBar, DataTable, FilterBar, FilterField, FormDialog,
   ManagementListSection, PaginationBar, TableToolbar } from '@/shared/components'
-import { AppButton, AppInput, AppSelect } from '@/shared/ui'
+import { AppButton, AppDialog, AppInput, AppSelect } from '@/shared/ui'
 import { useProductLibrary } from '../model/useProductLibrary'
 import { capturedTime, platformCode, priceRange } from '../model/format'
-import { exportProducts, moveProducts } from '../api/products'
+import { createManualProduct, exportProducts, fetchAutoPrechecks, moveProducts } from '../api/products'
 import type { ProductRow } from '../model/nas-contracts'
+import { batchPrecheck, type PrecheckResult } from '../model/precheck'
 import ProductPreviewDialog from './ProductPreviewDialog.vue'
 import ProductGroupManager from './ProductGroupManager.vue'
 
@@ -17,7 +19,18 @@ const { filters, selected, detailId, list, groups, capabilities, detail, total, 
 const message = useMessage()
 const keyword = ref(''), capturedFrom = ref<string | null>(null), capturedTo = ref<string | null>(null)
 const managerOpen = ref(false), moveOpen = ref(false), moveTarget = ref('ungrouped'), moveIds = ref<string[]>([]), busy = ref(false)
+const manualOpen = ref(false), manualTitle = ref('')
+const precheckOpen = ref(false), precheckRunning = ref(false)
+const precheckIds = ref<string[]>([]), precheckResults = ref<Record<string, PrecheckResult>>({})
 const rows = computed(() => list.data.value?.items ?? [])
+const autoIds = computed(() => [...new Set([...rows.value.map((row) => row.product_id), ...(detailId.value ? [detailId.value] : [])])])
+const autoChecks = useQuery({
+  queryKey: computed(() => ['auto-prechecks', autoIds.value] as const),
+  enabled: computed(() => capabilities.data.value?.autoPrecheck === true && autoIds.value.length > 0),
+  queryFn: ({ signal, queryKey }) => fetchAutoPrechecks([...queryKey[1]], signal),
+  refetchInterval: 5_000, retry: false,
+})
+const autoResults = computed(() => Object.fromEntries((autoChecks.data.value ?? []).map((item) => [item.productId, item])))
 const groupItems = computed(() => groups.data.value ?? [])
 const canWriteGroups = computed(() => capabilities.data.value?.groupWrites === true)
 const preview = computed(() => detailId.value ? detail.data.value ?? null : null)
@@ -84,6 +97,52 @@ async function groupsChanged() {
   }
 }
 
+async function createManual() {
+  const title = manualTitle.value.trim()
+  const length = Array.from(title).reduce((sum, char) => sum + ((char.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0)
+  if (!title || length > 60) { message.error('商品标题不能为空，长度不能超过 60'); return }
+  busy.value = true
+  try {
+    const created = await createManualProduct(title)
+    manualOpen.value = false; manualTitle.value = ''
+    await refresh()
+    detailId.value = created.productId
+    message.success('商品草稿已创建')
+  } catch (error) { message.error(errorText(error)) }
+  finally { busy.value = false }
+}
+
+async function startPrecheck() {
+  if (!selected.value.length || precheckRunning.value || !capabilities.data.value?.categoryLookup) return
+  precheckIds.value = [...selected.value]
+  precheckResults.value = {}
+  precheckOpen.value = true
+  precheckRunning.value = true
+  try {
+    await batchPrecheck(precheckIds.value, (result) => { precheckResults.value[result.productId] = result })
+  } finally { precheckRunning.value = false }
+}
+
+function precheckLabel(result: PrecheckResult | undefined) {
+  if (!result) return '等待预检'
+  return { ready: '已检查', needs_completion: '待完善', needs_category: '待选择类目', failed: '预检失败' }[result.status]
+}
+
+function autoPrecheckLabel(id: string) {
+  const record = autoResults.value[id]
+  if (autoChecks.isError.value) return '暂不可用'
+  if (!record) return '—'
+  if (record.error) return '等待重试'
+  if (record.state === 'pending') return '等待预检'
+  if (record.state === 'running') return '预检中'
+  return precheckLabel(record.result ?? undefined)
+}
+
+function openPrechecked(id: string) {
+  precheckOpen.value = false
+  detailId.value = id
+}
+
 const columns = computed<DataTableColumns<ProductRow>>(() => [
   { type: 'selection', width: 44, fixed: 'left' },
   { title: '商品信息', key: 'title', width: 360, fixed: 'left', render: (row) => h(ProductInfoCell, {
@@ -96,6 +155,8 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   { title: '分组', key: 'group_name', width: 130, align: 'center', render: (row) => row.group_name || '未分组' },
   { title: '店铺', key: 'shop_name', width: 140, align: 'center', ellipsis: { tooltip: true } },
   { title: '类目', key: 'category_path', width: 260, align: 'center', render: (row) => h(NEllipsis, { tooltip: true, lineClamp: 2 }, () => row.category_path || '—') },
+  ...(capabilities.data.value?.autoPrecheck ? [{ title: '自动预检', key: 'auto_precheck', width: 120, align: 'center' as const,
+    render: (row: ProductRow) => h('span', { title: autoResults.value[row.product_id]?.result?.issues.join('；') || '' }, autoPrecheckLabel(row.product_id)) }] : []),
   { title: '当前价格', key: 'price', width: 120, align: 'center', render: (row) => priceRange(row) },
   { title: 'SKU', key: 'sku_count', width: 80, align: 'center' },
   { title: '采集时间', key: 'captured_at', width: 176, align: 'center', render: (row) => capturedTime(row.captured_at) },
@@ -134,7 +195,10 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       <TableToolbar density="compact">
         <span v-if="selected.length">已选 {{ selected.length }} 项</span>
         <template #actions>
+          <AppButton size="small" :disabled="busy || !capabilities.data.value?.productEdit" @click="manualOpen = true">手动新建商品</AppButton>
           <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出商品数据包</AppButton>
+          <AppButton size="small" :disabled="!selected.length || precheckRunning || !capabilities.data.value?.categoryLookup" @click="startPrecheck">批量预检</AppButton>
+          <AppButton v-if="precheckIds.length" size="small" @click="precheckOpen = true">预检结果 {{ Object.keys(precheckResults).length }}/{{ precheckIds.length }}</AppButton>
           <AppButton size="small" :disabled="!selected.length || busy || !canWriteGroups" @click="openMove(selected)">移动分组</AppButton>
           <AppButton size="small" :disabled="busy" @click="refresh">刷新</AppButton>
         </template>
@@ -150,6 +214,8 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
     <ProductPreviewDialog :show="!!detailId" :product="preview" :exportable="!busy"
       :editable="capabilities.data.value?.productEdit === true" @saved="refresh"
       :category-lookup-enabled="capabilities.data.value?.categoryLookup === true"
+      :auto-result="detailId && preview?.id === detailId ? autoResults[detailId] : undefined"
+      :batch-prediction="detailId && preview?.id === detailId ? (precheckResults[detailId]?.prediction || autoResults[detailId]?.result?.prediction) : undefined"
       :loading="detail.isFetching.value" :error="detail.error.value ? errorText(detail.error.value) : null"
       :can-previous="previewIndex > 0 && !detail.isFetching.value"
       :can-next="previewIndex >= 0 && previewIndex < rows.length - 1 && !detail.isFetching.value"
@@ -159,6 +225,19 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       @retry="detail.refetch()"
       @export="download([$event.id])" @group="openMove([$event.id])" />
     <ProductGroupManager v-model:show="managerOpen" :groups="groupItems" :writable="canWriteGroups" @changed="groupsChanged" />
+    <FormDialog v-model:show="manualOpen" title="手动新建商品" submit-text="创建" :submitting="busy" @submit="createManual">
+      <NFormItem label="商品标题" required><AppInput v-model="manualTitle" aria-label="新商品标题" /></NFormItem>
+    </FormDialog>
+    <AppDialog v-model:show="precheckOpen" title="批量预检" size="lg" positive-text="关闭" :show-negative="false" @confirm="precheckOpen = false">
+      <p>已完成 {{ Object.keys(precheckResults).length }} / {{ precheckIds.length }}</p>
+      <p>检查标题、主图、SKU 价格及已选类目的必填属性。</p>
+      <div v-for="id in precheckIds" :key="id" class="product-library-precheck-row">
+        <div><strong>{{ precheckResults[id]?.title || rows.find((row) => row.product_id === id)?.title || id }}</strong>
+          <div>{{ precheckLabel(precheckResults[id]) }}<template v-if="precheckResults[id]?.issues.length">：{{ precheckResults[id].issues.join('；') }}</template></div>
+        </div>
+        <AppButton size="small" :disabled="!precheckResults[id]" @click="openPrechecked(id)">查看商品</AppButton>
+      </div>
+    </AppDialog>
     <FormDialog v-model:show="moveOpen" title="移动商品分组" :submitting="busy" :submit-disabled="!canWriteGroups" @submit="submitMove">
       <NFormItem label="目标分组"><AppSelect v-model="moveTarget" :options="groupOptions.filter((item) => item.value !== '')" /></NFormItem>
     </FormDialog>
@@ -181,4 +260,5 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   gap: var(--space-3);
   white-space: nowrap;
 }
+.product-library-precheck-row { display:flex; justify-content:space-between; align-items:center; gap:var(--space-3); padding:var(--space-2) 0; border-bottom:1px solid var(--border-color); }
 </style>

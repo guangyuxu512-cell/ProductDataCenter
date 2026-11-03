@@ -10,7 +10,7 @@ from app.core.security.access import require_api_access, require_group_writes, r
 from .repository import ProductRepository
 from .service import ProductService
 from .schemas import (AssignGroup, AssignGroupResponse, Capabilities, DeleteGroupResponse,
-                      GroupName, GroupResponse, GroupsRead, ProductDetail, ProductEdit, ProductIds, ProductPage)
+                      GroupName, GroupResponse, GroupsRead, ManualProductCreate, ProductDetail, ProductEdit, ProductIds, ProductPage)
 
 router = APIRouter(prefix="/api/v1", tags=["product-library"], dependencies=[Depends(require_api_access)])
 
@@ -26,12 +26,18 @@ Service = Annotated[ProductService, Depends(get_service)]
 def capabilities():
     settings = get_settings()
     return Capabilities(groupWrites=settings.enable_group_writes, productEdit=settings.enable_product_writes,
-                        categoryLookup=settings.douyin_category_lookup_enabled)
+                        categoryLookup=settings.douyin_category_lookup_enabled,
+                        autoPrecheck=settings.auto_precheck_enabled)
 
 
 @router.get("/products", response_model=ProductPage)
 def products(request: Request, service: Service):
     return service.list(request.query_params)
+
+
+@router.post("/products", dependencies=[Depends(require_product_writes)])
+def create_manual_product(body: ManualProductCreate, service: Service):
+    return service.create_manual(body.title)
 
 
 @router.get("/product-groups", response_model=GroupsRead)

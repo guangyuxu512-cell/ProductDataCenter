@@ -11,6 +11,7 @@ services:
       BACKEND_API_TOKEN_FILE: /run/secrets/product_api_token
       BACKEND_ENABLE_GROUP_WRITES: ${BACKEND_ENABLE_GROUP_WRITES:-false}
       BACKEND_ENABLE_PRODUCT_WRITES: ${BACKEND_ENABLE_PRODUCT_WRITES:-false}
+      BACKEND_AUTO_PRECHECK_ENABLED: ${BACKEND_AUTO_PRECHECK_ENABLED:-false}
       BACKEND_DATA_ROOT: /data
     volumes:
       - ${NAS_DATA_ROOT:?existing data root required}:/data:ro

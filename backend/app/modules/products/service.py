@@ -26,6 +26,9 @@ class ProductService:
     def edit_snapshot(self, product_id: str):
         return self.repository.edit_snapshot(product_id)
 
+    def create_manual(self, title: str):
+        return {"productId": self.repository.create_manual(title)}
+
     def save_edit(self, product_id: str, edit):
         return self.repository.save_edit(product_id, edit)
 

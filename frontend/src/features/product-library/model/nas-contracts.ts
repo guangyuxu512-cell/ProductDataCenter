@@ -60,6 +60,7 @@ export interface ProductFilters {
 
 export interface Capabilities {
   categoryLookup?: boolean
+  autoPrecheck?: boolean
   groupWrites: boolean
   export: boolean
   productEdit: boolean

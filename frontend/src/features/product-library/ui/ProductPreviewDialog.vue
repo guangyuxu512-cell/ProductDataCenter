@@ -15,6 +15,7 @@ import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
 import { originalAttributeValue, pddAttributeValue } from '../model/source-attributes'
+import type { AutoPrecheck, CategoryPrediction } from '../model/precheck'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
@@ -31,6 +32,8 @@ const props = withDefaults(defineProps<{
   groupable?: boolean
   categoryLookupEnabled?: boolean
   editable?: boolean
+  batchPrediction?: CategoryPrediction
+  autoResult?: AutoPrecheck
   navigationItems?: ReadonlyArray<{ id: string; title: string; subtitle: string; imageUrl: string | null }>
 }>(), {
   loading: false, error: null, canPrevious: false, canNext: false,
@@ -148,7 +151,7 @@ function applyPddSourceAttributes() {
   }
 }
 function attributeValue(item: CategoryAttribute) {
-  if (Object.hasOwn(attributeInputs.value, item.id)) return attributeInputs.value[item.id]
+  if (item.id in attributeInputs.value) return attributeInputs.value[item.id]
   const product = props.product
   if (product?.platform === 'pdd') {
     const current = product.targetCategory?.at(-1)?.id
@@ -159,7 +162,13 @@ function attributeValue(item: CategoryAttribute) {
   }
   return product ? originalAttributeValue(item, categoryAttributes.value, product, selectedCategory.value) : ''
 }
-const missingRequired = computed(() => categoryAttributes.value.filter((item) => item.required && !attributeValue(item).trim()).length)
+function hasCustomAttributeValue(item: CategoryAttribute) {
+  if (!touchedAttributes.value.includes(item.id) || !item.options.length) return false
+  const values = attributeValue(item).split('、').map((value) => value.trim()).filter(Boolean)
+  return values.some((value) => !item.options.some((option) => option.label === value))
+}
+const missingAttributes = computed(() => categoryAttributes.value.filter((item) => item.required && !attributeValue(item).trim()))
+const missingRequired = computed(() => missingAttributes.value.length)
 function validImageUrl(value: string) {
   try { return ['http:', 'https:'].includes(new URL(value).protocol) } catch { return false }
 }
@@ -432,7 +441,9 @@ watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.produ
     selectedCategory.value = product.targetCategory.at(-1)?.id ?? null
     categoryLabel.value = product.targetCategory.map((part) => part.name).join(' → ')
   } else return
-  if (tab.value === 'attributes') void loadAttributes()
+  // The source Douyin category is already known, so show missing fields without
+  // requiring the user to discover the attributes tab first.
+  if (product.platform === 'douyin' || tab.value === 'attributes') void loadAttributes()
 }, { immediate: true })
 watch(() => props.show, (show) => { if (!show) tab.value = 'base' })
 watch(tab, (value) => { if (value === 'attributes') void loadAttributes() })
@@ -484,6 +495,7 @@ function selectCategory(value: { id: string; path: string; shopId: string; level
     selectedParts.value = value.id === original ? null : value.levels
     attributeInputs.value = {}; touchedAttributes.value = []
   }
+  void loadAttributes()
 }
 
 function choosePrediction(candidate: PredictedCategory) {
@@ -494,6 +506,26 @@ function choosePrediction(candidate: PredictedCategory) {
   tab.value = 'attributes'
   void loadAttributes()
 }
+
+let appliedBatchPrediction: CategoryPrediction | undefined
+watch(() => [props.show, props.product?.id, props.batchPrediction, editVersion.value, canEdit.value] as const, () => {
+  const prediction = props.batchPrediction
+  const product = props.product
+  if (!props.show) { appliedBatchPrediction = undefined; return }
+  if (!prediction || prediction === appliedBatchPrediction || !product || product.platform !== 'pdd' ||
+      product.targetCategory?.length || !canEdit.value) return
+  if (prediction.sourceVersion !== editVersion.value) {
+    appliedBatchPrediction = prediction
+    predictionMessage.value = '商品数据已变化，请重新预检'; return
+  }
+  if (dirty.value) return
+  appliedBatchPrediction = prediction
+  if (prediction.missing.length) { predictionMessage.value = `请先完善${prediction.missing.join('、')}`; return }
+  if (!prediction.candidates.length) { predictionMessage.value = '未找到推荐类目，请手动选择'; return }
+  predictionShop.value = prediction.shopId
+  predictionCandidates.value = prediction.candidates
+  predictionMessage.value = '请选择合适的推荐类目'
+})
 
 async function runPrediction() {
   const product = props.product
@@ -643,6 +675,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
         <header class="product-preview__header">
           <div class="product-preview__meta">
             <PlatformDisplay :code="product.platform" />
+            <span v-if="product.id.startsWith('manual:')">手动创建</span>
             <span>商品 ID {{ product.productId }}</span>
             <span v-if="product.shopName">来源店铺 {{ product.shopName }}</span>
             <span>分组 {{ product.groupName ?? '未分组' }}</span>
@@ -663,6 +696,16 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
           <NTab name="attributes" role="tab" :aria-selected="tab === 'attributes'">商品属性</NTab>
           <NTab name="sku" role="tab" :aria-selected="tab === 'sku'">规格与 SKU</NTab>
         </AppTabs>
+        <div v-if="autoResult && !dirty" class="product-preview__missing" role="status">
+          <NText v-if="autoResult.error" type="warning">自动预检：{{ autoResult.error }}</NText>
+          <NText v-else-if="autoResult.state !== 'done'" depth="3">自动预检：{{ autoResult.state === 'running' ? '预检中' : '等待预检' }}</NText>
+          <NText v-else-if="autoResult.result?.issues.length" type="warning">自动预检待处理：{{ autoResult.result.issues.join('；') }}</NText>
+          <NText v-else depth="3">自动预检：已检查</NText>
+        </div>
+        <div v-if="!categoryBusy && categorySchemaLoaded && missingRequired" class="product-preview__missing" role="status">
+          <NText type="warning">待完善必填属性：{{ missingAttributes.map((item) => item.label).join('、') }}</NText>
+          <AppButton v-if="tab !== 'attributes'" tone="link" size="small" @click="tab = 'attributes'">去完善</AppButton>
+        </div>
         <div class="product-preview__content" :inert="loading || undefined">
           <section v-if="tab === 'base'" class="product-preview__section">
             <NFormItem label="商品标题" required>
@@ -744,10 +787,13 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <NText v-if="editable && categorySchemaLoaded && missingRequired" type="warning">还有 {{ missingRequired }} 项必填属性未填写</NText>
             <div class="product-preview__attributes">
               <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required">
-                <NAutoComplete v-if="editable && item.options.length" :value="attributeValue(item)"
-                  :options="item.options.map((option) => ({ label: option.label, value: option.label }))"
-                  :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)" placeholder="请选择或输入"
-                  @update:value="setAttribute(item, $event)" />
+                <div v-if="editable && item.options.length" class="product-preview__attribute-input">
+                  <NAutoComplete :value="attributeValue(item)"
+                    :options="item.options.map((option) => ({ label: option.label, value: option.label }))"
+                    :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)" placeholder="请选择或输入"
+                    @update:value="setAttribute(item, $event)" />
+                  <NText v-if="hasCustomAttributeValue(item)" depth="3">自定义值是否可用，以抖店校验为准</NText>
+                </div>
                 <AppInput v-else :model-value="attributeValue(item)" :readonly="!canEdit || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
@@ -814,12 +860,14 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 </template>
 
 <style scoped>
+.product-preview__attribute-input { width: 100%; }
 .product-preview__layout { position:relative; display:grid; grid-template-columns:clamp(260px,20vw,320px) minmax(0,1fr); gap:var(--space-4); height:100%; min-height:0; overflow:hidden; }
 .product-preview__main { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
 .product-preview__loading-mask { position:absolute; inset:0; z-index:2; display:grid; place-items:center; background:color-mix(in srgb,var(--bg-surface-solid) 55%,transparent); }
 .product-preview__header { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--space-3); padding-bottom:var(--space-3); }
 .product-preview__meta,.product-preview__actions { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }
 .product-preview__predictions { display:flex; gap:var(--space-2); flex-wrap:wrap; }
+.product-preview__missing { display:flex; align-items:center; gap:var(--space-2); padding:var(--space-2) 0; }
 .product-preview__meta { color:var(--text-secondary); font-size:var(--font-size-secondary); }
 .product-preview__tabs { flex:0 0 auto; }
 .product-preview__content { min-width:0; min-height:0; flex:1; overflow:auto; padding:var(--space-3) var(--space-1) var(--space-3) 0; scrollbar-gutter:stable; }
