@@ -266,10 +266,15 @@ def _edit_spec_structure(data: dict, structure) -> None:
                 raise ProductRequestError("新增规格值标识无效")
             val = deepcopy(old_values[original].get(value.id, {})) if original is not None else {}
             item = deepcopy(old_items[original].get(value.id, {})) if original is not None else {}
-            val.update(id=value.id, name=value.name, img_url=value.url if index == 0 else "")
-            item.update(spec_item_id=value.id, name=value.name, big_pic=value.url if index == 0 else "")
-            if "small_pic" in item:
-                item["small_pic"] = value.url if index == 0 else ""
+            old_url = val.get("img_url") or item.get("big_pic") or item.get("small_pic") or ""
+            is_new = value.id not in all_old_ids
+            val.update(id=value.id, name=value.name)
+            item.update(spec_item_id=value.id, name=value.name)
+            if is_new or old_url != value.url:
+                val["img_url"] = value.url
+                item["big_pic"] = value.url
+                if "small_pic" in item:
+                    item["small_pic"] = value.url
             values.append(val)
             items.append(item)
         value_group["spec_values"] = values

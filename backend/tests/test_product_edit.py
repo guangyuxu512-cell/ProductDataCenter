@@ -303,3 +303,23 @@ def test_structure_cannot_map_one_existing_sku_to_another_value(sparse_specs):
     ], "skus": [{"sourceSpecIds": ["11", "21"], "specIds": ["12", "21"], "price": "12.00", "stock": "5"}]}
     with pytest.raises(ProductRequestError, match="不能指向其他规格值"):
         apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+
+
+def test_structure_preserves_unchanged_secondary_image_source_fields(sparse_specs):
+    item = sparse_specs["goodsSkuInfo"]["sku_detail"][1]["spec_item_list"][0]
+    item["small_pic"] = "https://example.test/secondary"
+    structure = {"groups": [
+        {"sourceIndex": 0, "name": "颜色", "values": [
+            {"id": "11", "name": "深黑", "url": "https://example.test/black"}, {"id": "12", "name": "白"}]},
+        {"sourceIndex": 1, "name": "尺码", "values": [
+            {"id": "21", "name": "大", "url": "https://example.test/secondary"}, {"id": "22", "name": "小"}]},
+    ], "skus": [
+        {"sourceSpecIds": ["11", "21"], "specIds": ["11", "21"],
+         "price": "12.00", "stock": "5", "merchantCode": "original", "enabled": True},
+        {"sourceSpecIds": ["12", "22"], "specIds": ["12", "22"],
+         "price": "16.00", "stock": "0", "enabled": False},
+    ]}
+    result = apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+    second = result["goodsSkuInfo"]["sku_detail"][1]["spec_item_list"][0]
+    assert second["big_pic"] == "" and second["small_pic"] == "https://example.test/secondary"
+    assert result["spec_detail_value"]["value"][1]["spec_values"][0]["img_url"] == ""
