@@ -127,10 +127,15 @@ def test_manual_product_can_be_edited_and_read_by_rpa(engine, tmp_path):
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
 
 
-def test_manual_create_saves_complete_package_atomically_with_restricted_role(engine):
+def test_manual_create_saves_complete_package_atomically_with_restricted_role(engine, tmp_path):
     from contextlib import contextmanager
     from decimal import Decimal
+    from unittest.mock import patch as mock_patch
     from uuid import uuid4
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.products.api import get_service
     from app.modules.products.errors import ProductRequestError
     from app.modules.products.schemas import ProductEdit
 
@@ -177,6 +182,14 @@ def test_manual_create_saves_complete_package_atomically_with_restricted_role(en
             prices = conn.execute(text("SELECT current_price FROM product_skus WHERE product_id=:id ORDER BY sort_order"),
                                   {"id": product_id}).scalars().all()
             assert prices == [Decimal("9.90"), Decimal("12.00")]
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_settings] = lambda: settings
+        app.dependency_overrides[get_service] = lambda: ProductService(ProductRepository(engine), settings)
+        with mock_patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            response = client.get(f"/rpa/v1/products/{product_id}/uu", headers={"Authorization": "Bearer rpa-test"})
+        assert response.status_code == 200
+        assert response.json()["goodsSkuInfo"]["spec_detail"]["value"][1]["stock_info"]["stock_num"] == 3
         bad_title = "失败回滚测试"
         bad = ProductEdit(expectedVersion="0" * 64, title=bad_title,
                           skus=[{"specIds": ["does-not-exist"], "price": "1.00"}])
