@@ -471,10 +471,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                     raise ProductRequestError("请先选择抖店类目")
                 values = _mapping(target.setdefault("attributes", {}), "抖店属性数据格式无效")
                 for item in edit.attributes:
-                    if item.values:
-                        values[item.id] = {"name": item.name, "values": [value.model_dump() for value in item.values]}
-                    else:
-                        values.pop(item.id, None)
+                    values[item.id] = {"name": item.name, "values": [value.model_dump() for value in item.values]}
         if isinstance(product, dict):
             if edit.title is not None:
                 product["title"] = edit.title

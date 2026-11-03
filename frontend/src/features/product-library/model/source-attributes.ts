@@ -14,3 +14,16 @@ export function originalAttributeValue(
   const byName = product.attributes.filter((item) => item.name.trim() === label)
   return byName.length === 1 ? byName[0].value : ''
 }
+
+/** Cross-platform IDs are unrelated: match only unique names and accepted values. */
+export function pddAttributeValue(target: CategoryAttribute, definitions: CategoryAttribute[], product: LibraryProduct): string {
+  if (product.platform !== 'pdd') return ''
+  const label = target.label.trim()
+  if (!label || definitions.filter((item) => item.label.trim() === label).length !== 1) return ''
+  const matches = product.attributes.filter((item) => item.name.trim() === label)
+  if (matches.length !== 1) return ''
+  const values = matches[0].value.split('、').map((value) => value.trim()).filter(Boolean)
+  if (!values.length || (target.options.length && values.some((value) =>
+    target.options.filter((option) => option.label === value).length !== 1))) return ''
+  return values.join('、')
+}

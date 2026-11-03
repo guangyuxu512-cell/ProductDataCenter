@@ -35,3 +35,15 @@ def test_conflicting_names_and_malformed_source_are_not_guessed():
                   "2": "invalid", "3": [{"k": "品牌", "value_name": {"nested": "not text"}}]}
     formats = [{"format": [{"property_id": "1", "name": "材质", "message": [{"desc": "棉"}]}]}]
     assert source_attributes(properties, formats) == []
+
+
+def test_reads_modern_pdd_properties_without_inventing_values():
+    assert source_attributes(None, None, [
+        {"key": "产地", "values": ["中国大陆"], "propertyId": "482"},
+        {"key": "材质", "values": ["玻璃", "玻璃"], "propertyId": "317"},
+        {"key": "空值", "values": [], "propertyId": "3"},
+        {"key": "错误", "values": "invalid", "propertyId": "4"},
+    ]) == [
+        {"id": "482", "name": "产地", "values": ["中国大陆"]},
+        {"id": "317", "name": "材质", "values": ["玻璃"]},
+    ]

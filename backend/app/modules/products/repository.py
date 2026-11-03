@@ -90,8 +90,11 @@ class ProductRepository:
                 source_category_id = _original_category_id(levels[:4])
                 attributes = source_attributes(levels[4], levels[5])
             elif product["source_platform"] == "pinduoduo":
-                target = conn.execute(text("SELECT uu_json #> '{douyinTarget}' FROM products WHERE product_id=:id"),
-                                      {"id": product_id}).scalar_one()
+                target, pdd_values, pdd_formats, pdd_properties = conn.execute(text("""SELECT
+                    uu_json #> '{douyinTarget}', uu_json #> '{category_properties_value,value}',
+                    uu_json #> '{goodsDetailInfo,product_format}', uu_json #> '{product,properties}'
+                    FROM products WHERE product_id=:id"""), {"id": product_id}).one()
+                attributes = source_attributes(pdd_values, pdd_formats, pdd_properties)
                 if isinstance(target, dict):
                     parts = target.get("category")
                     if isinstance(parts, list) and 0 < len(parts) <= 4 and all(
@@ -109,8 +112,9 @@ class ProductRepository:
                             if isinstance(values, list):
                                 names = [value["name"] for value in values[:30]
                                          if isinstance(value, dict) and isinstance(value.get("name"), str)]
-                                if names:
-                                    target_attributes.append({"id": identity, "name": item["name"], "values": names})
+                                # An explicitly cleared value must remain distinguishable
+                                # from a value that has never been mapped.
+                                target_attributes.append({"id": identity, "name": item["name"], "values": names})
             skus = conn.execute(text("""SELECT sku_id, sku_name, current_price, image_rel_path, sort_order
                 FROM product_skus WHERE product_id=:id ORDER BY sort_order, sku_id"""), {"id": product_id}).mappings().all()
             images = conn.execute(text("""SELECT image_type, sort_order, rel_path, source_url

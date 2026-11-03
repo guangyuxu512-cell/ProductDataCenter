@@ -15,6 +15,7 @@ from app.core.config import Settings, get_settings
 from app.main import create_application
 from app.modules.category_lookup.api import get_central, get_lookup
 from app.modules.category_lookup.client import DouyinCategoryClient, LookupError, normalize_candidates, normalize_fields
+from app.modules.category_lookup import pure_signer
 from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession
 
 PRODUCT_KEY = "synthetic-product-token-1234567890"
@@ -28,7 +29,7 @@ def settings(tmp_path):
     key = tmp_path / "signer"
     key.write_text(SIGNER_KEY)
     return Settings(_env_file=None, douyin_category_lookup_enabled=True,
-                    douyin_signer_key_file=key, category_cache_file=tmp_path / "categories.sqlite3",
+                    douyin_signer_mode="service", douyin_signer_key_file=key, category_cache_file=tmp_path / "categories.sqlite3",
                     api_token=PRODUCT_KEY, rpa_api_token=RPA_KEY)
 
 
@@ -37,6 +38,61 @@ def make_session(shop_id=None):
                               cookies=(CentralCookie(name="sessionid", value=COOKIE, domain=".jinritemai.com"),
                                        CentralCookie(name="csrf_session_id", value="synthetic-csrf", domain=".jinritemai.com"),
                                        CentralCookie(name="bad", value="dont-send", domain="other.example")))
+
+
+def test_pure_signs_the_exact_utf8_body_sent_and_does_not_call_signer_service(settings, monkeypatch):
+    pure_settings = settings.model_copy(update={"douyin_signer_mode": "pure", "douyin_signer_key_file": None})
+    signed = []
+    platform_requests = []
+
+    def sign(query, user_agent, *, body, aid, page_id):
+        signed.append((query, user_agent, body, aid, page_id))
+        return "pure-signature"
+
+    def handler(request):
+        assert request.url.host == "fxg.jinritemai.com", "纯算不能请求原签名服务"
+        assert request.url.params["a_bogus"] == "pure-signature"
+        assert COOKIE in request.headers["cookie"]
+        platform_requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"code": 0, "data": []})
+        return httpx.Response(200, json={"code": 0, "data": {"model": {
+            "category_properties": {"items": []}}}})
+
+    monkeypatch.setattr(pure_signer, "generate", sign)
+    client = DouyinCategoryClient(pure_settings, transport=httpx.MockTransport(handler))
+    assert client.category_options(make_session(), "0") == []
+    assert client.schema(make_session(), "1000010075", "不锈钢勺子") == []
+    assert len(signed) == len(platform_requests) == 2
+    for (query, user_agent, body, aid, page_id), request in zip(signed, platform_requests, strict=True):
+        assert query == str(request.url.copy_remove_param("a_bogus")).split("?", 1)[1]
+        assert body == request.content and user_agent == request.headers["user-agent"]
+        assert (aid, page_id) == (4272, 6241)
+    assert signed[0][2] == b"" and "不锈钢勺子" in signed[1][2].decode("utf-8")
+
+
+def test_pure_body_hash_uses_wire_bytes_and_get_keeps_empty_body_hash():
+    import hashlib
+
+    def double_sm3(data):
+        return hashlib.new("sm3", hashlib.new("sm3", data).digest()).digest()
+
+    kwargs = {"aid": 4272, "page_id": 6241, "now_ms": 1793520000000,
+              "enter_ms": 1793520000000, "rng": lambda: 0.2, "trace": True}
+    body = '{"title":"不锈钢勺子"}'.encode("utf-8")
+    post = pure_signer.generate("appid=1", "test-agent", body=body, **kwargs)
+    get = pure_signer.generate("appid=1", "test-agent", **kwargs)
+    assert bytes(post["body_hash"]) == double_sm3(body + b"dhzx")
+    assert bytes(get["body_hash"]) == double_sm3(b"dhzx")
+    assert post["result"] != get["result"]
+    with pytest.raises(TypeError):
+        pure_signer.generate("appid=1", "test-agent", body="not bytes")
+
+
+def test_invalid_signer_mode_does_not_make_a_platform_request(settings):
+    config = settings.model_copy(update={"douyin_signer_mode": "unknown"})
+    with pytest.raises(LookupError, match="invalid_configuration"):
+        DouyinCategoryClient(config).category_options(make_session(), "0")
 
 
 def test_signed_search_and_schema_do_not_require_token_and_return_safe_fields(settings):

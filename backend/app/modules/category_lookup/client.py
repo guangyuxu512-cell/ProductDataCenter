@@ -10,6 +10,7 @@ import httpx
 
 from app.core.config import Settings
 from app.modules.central.client import CentralShopSession
+from . import pure_signer
 
 
 BASE = "https://fxg.jinritemai.com"
@@ -104,7 +105,12 @@ class DouyinCategoryClient:
 
     def _call(self, session: CentralShopSession, method: str, path: str, lid: str,
               extra: dict, body: dict | None = None) -> dict:
-        signer_url, signer_key = self._signer()
+        if not self.settings.douyin_category_lookup_enabled:
+            raise LookupError("not_configured")
+        signer_mode = self.settings.douyin_signer_mode
+        if signer_mode not in {"pure", "service"}:
+            raise LookupError("invalid_configuration")
+        signer_url, signer_key = self._signer() if signer_mode == "service" else (None, None)
         cookies = httpx.Cookies()
         fp = ""
         csrf = ""
@@ -146,27 +152,32 @@ class DouyinCategoryClient:
                 cookie = request.headers.get("cookie", "")
                 if not cookie:
                     raise LookupError("session_unavailable")
-                for _ in range(2):
-                    sign_body = {"host": "fxg.jinritemai.com", "full_url": str(request.url), "method": method,
-                                 "user_agent": USER_AGENT, "referer": REFERER, "cookie": cookie, "aid": 4272}
-                    if "msToken" in request.url.params:
-                        sign_body["ms_token"] = request.url.params["msToken"]
-                    if content is not None:
-                        sign_body["body"] = content.decode()
-                    signed = client.post(signer_url + "/sign", headers={"X-API-Key": signer_key}, json=sign_body)
-                    if signed.status_code != 200:
-                        raise LookupError("signer_unavailable")
-                    data = signed.json()
-                    if not isinstance(data, dict) or data.get("ok") is not True or not isinstance(data.get("a_bogus"), str) or not data["a_bogus"]:
-                        raise LookupError("signer_unavailable")
-                    ms_token = data.get("msToken")
-                    if isinstance(ms_token, str) and ms_token and "msToken" not in request.url.params:
-                        request.url = request.url.copy_add_param("msToken", ms_token)
-                        continue
-                    request.url = request.url.copy_add_param("a_bogus", data["a_bogus"])
-                    break
+                if signer_mode == "pure":
+                    signature = pure_signer.generate(urlsplit(str(request.url)).query, USER_AGENT,
+                        body=content or b"", aid=4272, page_id=6241)
+                    request.url = request.url.copy_add_param("a_bogus", signature)
                 else:
-                    raise LookupError("signer_unavailable")
+                    for _ in range(2):
+                        sign_body = {"host": "fxg.jinritemai.com", "full_url": str(request.url), "method": method,
+                                     "user_agent": USER_AGENT, "referer": REFERER, "cookie": cookie, "aid": 4272}
+                        if "msToken" in request.url.params:
+                            sign_body["ms_token"] = request.url.params["msToken"]
+                        if content is not None:
+                            sign_body["body"] = content.decode()
+                        signed = client.post(signer_url + "/sign", headers={"X-API-Key": signer_key}, json=sign_body)
+                        if signed.status_code != 200:
+                            raise LookupError("signer_unavailable")
+                        data = signed.json()
+                        if not isinstance(data, dict) or data.get("ok") is not True or not isinstance(data.get("a_bogus"), str) or not data["a_bogus"]:
+                            raise LookupError("signer_unavailable")
+                        ms_token = data.get("msToken")
+                        if isinstance(ms_token, str) and ms_token and "msToken" not in request.url.params:
+                            request.url = request.url.copy_add_param("msToken", ms_token)
+                            continue
+                        request.url = request.url.copy_add_param("a_bogus", data["a_bogus"])
+                        break
+                    else:
+                        raise LookupError("signer_unavailable")
                 response = client.send(request, stream=True)
                 try:
                     if response.status_code != 200:

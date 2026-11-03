@@ -57,7 +57,7 @@ describe('采集字段适配', () => {
     detail.targetCategory = [{ id: '100', name: '家居' }, { id: '101', name: '收纳' }]
     detail.targetAttributes = [{ id: '502', name: '材质', values: ['塑料'] }]
     expect(detailView(detail).sourceCategoryId).toBeNull()
-    expect(detailView(detail).attributes).toEqual([])
+    expect(detailView(detail).attributes).toEqual([{ id: '501', name: '材质', value: '棉、麻' }])
     expect(detailView(detail).targetCategory).toEqual(detail.targetCategory)
     expect(detailView(detail).targetAttributes).toEqual(detail.targetAttributes)
   })

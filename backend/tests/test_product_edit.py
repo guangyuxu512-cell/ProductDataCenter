@@ -119,6 +119,17 @@ def test_pdd_shared_package_edits_preserve_source_category_and_skus():
     assert changed["douyinTarget"] == saved["douyinTarget"] and changed["unknown"] == original["unknown"]
 
 
+def test_pdd_explicit_clear_is_distinguishable_from_unmapped_source():
+    package = {"product": {"title": "商品"}, "douyinTarget": {
+        "category": [{"id": "10", "name": "家居"}],
+        "attributes": {"12": {"name": "产地", "values": [{"name": "中国大陆", "valueId": "99"}]}}}}
+    original = deepcopy(package)
+    edit = ProductEdit(expectedVersion=VERSION, attributes=[{"id": "12", "name": "产地", "values": []}])
+    result = apply_edit(package, "pinduoduo", edit)
+    assert package == original
+    assert result["douyinTarget"]["attributes"]["12"] == {"name": "产地", "values": []}
+
+
 def test_invalid_title_and_image_are_rejected():
     with pytest.raises(ValidationError):
         ProductEdit(expectedVersion=VERSION, title="长" * 31)

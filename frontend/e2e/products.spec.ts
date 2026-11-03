@@ -680,12 +680,15 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
       payload = route.request().postDataJSON() as Record<string, unknown>
       const update = payload as unknown as ProductPatch
       targetCategory = update.category ?? targetCategory
-      targetAttributes = (update.attributes ?? []).map((item) => ({ id: item.id, name: item.name,
-        values: item.values.map((value) => value.name) }))
+      for (const item of update.attributes ?? []) {
+        targetAttributes = targetAttributes.filter((attribute) => attribute.id !== item.id)
+        targetAttributes.push({ id: item.id, name: item.name, values: item.values.map((value) => value.name) })
+      }
       version = 'b'.repeat(64)
       return route.fulfill({ json: { version } })
     }
     return route.fulfill({ json: { product: product(firstId, 'pinduoduo'), sourceCategoryId: null,
+      sourceAttributes: [{ id: '482', name: '产地', values: ['中国大陆'] }],
       targetCategory, targetAttributes, skus: [], images: [] } })
   })
   await page.route('**/api/v1/category-lookup/predict', (route) => {
@@ -698,7 +701,10 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
     } })
   })
   await page.route('**/api/v1/category-lookup/schema**', (route) => route.fulfill({ json: {
-    shopId: shop, categoryId: '102', attributes: [{ id: '501', label: '材质', required: true, options: [] }],
+    shopId: shop, categoryId: '102', attributes: [
+      { id: '501', label: '材质', required: true, options: [] },
+      { id: '502', label: '产地', required: false, options: [{ label: '中国大陆', value: '99' }] },
+    ],
   } }))
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
@@ -710,15 +716,27 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
   await dialog.getByRole('button', { name: '居家日用 > 收纳工具 > 收纳架' }).click()
   const material = dialog.locator('.n-form-item').filter({ hasText: '材质' }).locator('input')
+  const origin = dialog.locator('.n-form-item').filter({ hasText: '产地' }).locator('input')
   await expect(material).toBeEditable()
+  await expect(origin).toHaveValue('中国大陆')
   await expect(dialog.getByText('还有 1 项必填属性未填写')).toBeVisible()
   await material.fill('塑料')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => payload).not.toBeNull()
   expect(payload).toMatchObject({ expectedVersion: 'a'.repeat(64),
     category: [{ id: '100', name: '居家日用' }, { id: '101', name: '收纳工具' }, { id: '102', name: '收纳架' }],
-    attributes: [{ id: '501', name: '材质', values: [{ name: '塑料', valueId: '0' }] }] })
+    attributes: [{ id: '502', name: '产地', values: [{ name: '中国大陆', valueId: '99' }] },
+      { id: '501', name: '材质', values: [{ name: '塑料', valueId: '0' }] }] })
   await expect(material).toHaveValue('塑料')
+  await origin.fill('')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).toMatchObject({ attributes: [{ id: '502', name: '产地', values: [] }] })
+  await expect(origin).toHaveValue('')
+  await dialog.getByRole('button', { name: '关闭', exact: true }).last().click()
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect(origin).toHaveValue('')
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
 })
 
 test('拼多多无推荐时可以手动选择类目并保存', async ({ page }) => {
