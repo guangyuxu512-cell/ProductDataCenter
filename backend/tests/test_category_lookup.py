@@ -230,6 +230,8 @@ def test_prediction_auto_distributes_and_reports_no_recommendation(settings, mon
             if product_ids[0] == "12345678":
                 return [{"source_platform": "douyin", "uu_text": "{}"}]
             package = {"product": {"title": title}, "images": {"main": [{"url": "https://example.test/main.jpg"}]}}
+            if product_ids[0] == "pdd:99999999":
+                package = {"goodsInfo": {"goodsName": title, "goodsImageList": ["https://example.test/main.jpg"]}}
             if product_ids[0] == "pdd:87654321":
                 package = {"product": {"title": ""}, "images": {"main": [{"url": "file:///etc/passwd"}]}}
             return [{"source_platform": "pinduoduo", "uu_text": json.dumps(package)}]
@@ -249,6 +251,9 @@ def test_prediction_auto_distributes_and_reports_no_recommendation(settings, mon
         assert a.json()['status'] == 'no_recommendation' and a.json()['candidates'] == [] and a.json()['recommendedId'] is None
         assert len(a.json()['sourceVersion']) == 64
         assert a.headers['cache-control'] == 'no-store' and COOKIE not in a.text
+        legacy = client.post('/api/v1/category-lookup/predict', json={'productId': 'pdd:99999999'}, headers=auth)
+        assert legacy.status_code == 200 and legacy.json()['status'] == 'no_recommendation'
+        assert legacy.json()['missing'] == []
         missing = client.post('/api/v1/category-lookup/predict', json={'productId': 'pdd:87654321'}, headers=auth)
         assert missing.status_code == 200 and missing.json()['status'] == 'missing_data'
         assert missing.json()['missing'] == ['商品标题', '商品主图'] and missing.json()['shopId'] is None

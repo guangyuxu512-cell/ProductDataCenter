@@ -295,9 +295,15 @@ def predict(body: PredictBody, response: Response,
     try:
         package = json.loads(raw)
         product = package.get("product") if isinstance(package, dict) else None
-        images = package.get("images") if isinstance(package, dict) else None
-        title = product.get("title") if isinstance(product, dict) else None
-        main_images = images.get("main") if isinstance(images, dict) else None
+        if isinstance(product, dict):
+            images = package.get("images")
+            title = product.get("title")
+            main_images = images.get("main") if isinstance(images, dict) else None
+        else:
+            # Older PDD captures can already use the shared goodsInfo package.
+            goods = package.get("goodsInfo") if isinstance(package, dict) else None
+            title = goods.get("goodsName") if isinstance(goods, dict) else None
+            main_images = goods.get("goodsImageList") if isinstance(goods, dict) else None
         title = title.strip() if isinstance(title, str) else ""
         main_images = main_images if isinstance(main_images, list) else []
         image_url = next((url for item in main_images if (url := _usable_image_url(item))), "")

@@ -369,6 +369,23 @@ def _edit_spec_structure(data: dict, structure) -> None:
     _edit_skus(data, changes)
 
 
+def _edit_shared_text_images(data: dict, goods: dict, edit: ProductEdit) -> None:
+    """Update fields shared by Douyin and older converted PDD packages."""
+    if edit.title is not None:
+        goods["goodsName"] = edit.title
+    if edit.mainImages is not None:
+        goods["goodsImageList"] = list(edit.mainImages)
+    if edit.detailImages is not None:
+        details = _mapping(data.get("goodsDetailInfo"), "商品数据包缺少详情图片信息")
+        details["detail_imgs"] = _ordered_images(details.get("detail_imgs"), edit.detailImages,
+                                                  lambda url: {"url_list": [url]})
+        previous = details.get("detail_imgs_new")
+        old_new = {_url(item.get("image")): item for item in previous if isinstance(item, dict) and _url(item.get("image"))} if isinstance(previous, list) else {}
+        details["detail_imgs_new"] = [deepcopy(old_new[url]) if url in old_new else
+            {"image": deepcopy(image), "pic_type": "pic"}
+            for url, image in zip(edit.detailImages, details["detail_imgs"], strict=True)]
+
+
 def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
     """Return a modified copy; reject shapes we cannot faithfully translate."""
     data = deepcopy(_mapping(source, "商品数据包格式无效"))
@@ -380,19 +397,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
             _edit_skus(data, edit.skus)
         if edit.specImageGroupIndex is not None:
             move_spec_image_group(data, edit.specImageGroupIndex)
-        if edit.title is not None:
-            goods["goodsName"] = edit.title
-        if edit.mainImages is not None:
-            goods["goodsImageList"] = list(edit.mainImages)
-        if edit.detailImages is not None:
-            details = _mapping(data.get("goodsDetailInfo"), "商品数据包缺少详情图片信息")
-            details["detail_imgs"] = _ordered_images(details.get("detail_imgs"), edit.detailImages,
-                                                      lambda url: {"url_list": [url]})
-            previous = details.get("detail_imgs_new")
-            old_new = {_url(item.get("image")): item for item in previous if isinstance(item, dict) and _url(item.get("image"))} if isinstance(previous, list) else {}
-            details["detail_imgs_new"] = [deepcopy(old_new[url]) if url in old_new else
-                {"image": deepcopy(image), "pic_type": "pic"}
-                for url, image in zip(edit.detailImages, details["detail_imgs"], strict=True)]
+        _edit_shared_text_images(data, goods, edit)
         if edit.specImages is not None:
             value_groups = _mapping(data.get("spec_detail_value"), "商品缺少规格图片信息").get("value")
             sku_groups = _mapping(data.get("goodsSkuInfo"), "商品缺少销售规格").get("sku_detail")
@@ -439,7 +444,10 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                         group["format"] = [item for item in group["format"] if not isinstance(item, dict)
                                            or str(item.get("property_id", "")) not in edited_ids]
     elif platform in {"pinduoduo", "pdd"}:
-        product = _mapping(data.get("product"), "拼多多商品数据包缺少商品信息")
+        product = data.get("product")
+        goods = data.get("goodsInfo")
+        if not isinstance(product, dict) and not isinstance(goods, dict):
+            raise ProductRequestError("拼多多商品数据包缺少商品信息")
         if edit.specImages is not None or edit.specImageGroupIndex is not None or edit.skus is not None or edit.specStructure is not None:
             raise ProductRequestError("拼多多数据包的规格编辑尚未接入")
         if edit.category is not None or edit.attributes is not None:
@@ -467,13 +475,16 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                         values[item.id] = {"name": item.name, "values": [value.model_dump() for value in item.values]}
                     else:
                         values.pop(item.id, None)
-        if edit.title is not None:
-            product["title"] = edit.title
-        if edit.mainImages is not None or edit.detailImages is not None:
-            images = _mapping(data.get("images"), "商品数据包缺少图片信息")
-            for kind, urls in (("main", edit.mainImages), ("detail", edit.detailImages)):
-                if urls is not None:
-                    images[kind] = _ordered_images(images.get(kind), urls, lambda url: {"url": url})
+        if isinstance(product, dict):
+            if edit.title is not None:
+                product["title"] = edit.title
+            if edit.mainImages is not None or edit.detailImages is not None:
+                images = _mapping(data.get("images"), "商品数据包缺少图片信息")
+                for kind, urls in (("main", edit.mainImages), ("detail", edit.detailImages)):
+                    if urls is not None:
+                        images[kind] = _ordered_images(images.get(kind), urls, lambda url: {"url": url})
+        else:
+            _edit_shared_text_images(data, goods, edit)
     else:
         raise ProductRequestError("暂不支持编辑该来源平台的数据包")
     return data
