@@ -148,6 +148,51 @@ def test_platform_level_names_and_integer_required_are_preserved():
     assert normalize_fields([{"id": 12, "label": "材质", "required": 1}])[0]["required"] is True
 
 
+def test_prediction_uses_full_title_image_and_keeps_all_category_levels(settings):
+    title = "完整商品标题" * 20
+    image = "https://images.example.test/main.jpg"
+    requests = []
+
+    def handler(request):
+        if request.url.host != "fxg.jinritemai.com":
+            data = json.loads(request.content)
+            assert data["method"] == "POST" and data["body"]
+            return httpx.Response(200, json={"ok": True, "a_bogus": "synthetic-signature"})
+        assert request.url.path == "/product/tproduct/predictCategoryN"
+        body = json.loads(request.content)
+        requests.append(body)
+        assert body["title"] == title and body["pic"] == [{"url": image}]
+        assert body["scene"] == "predict_by_title_and_img" and body["publish_id"].startswith("helper_")
+        return httpx.Response(200, json={"code": 0, "data": {"predict_cid": "", "candidate_category_details": [
+            {"first_cid": 100, "first_cname": "居家日用", "second_cid": 101, "second_cname": "收纳工具",
+             "third_cid": 102, "third_cname": "收纳架", "fourth_cid": 0, "fourth_cname": "",
+             "deleted": False, "forbidden_status": 0},
+            {"first_cid": 200, "first_cname": "家居", "second_cid": 201, "second_cname": "架类",
+             "third_cid": 202, "third_cname": "置物架", "fourth_cid": 203, "fourth_cname": "落地架"},
+        ]}})
+
+    client = DouyinCategoryClient(settings, transport=httpx.MockTransport(handler))
+    result = client.predict(make_session(), title, image)
+    assert result["recommendedId"] is None  # An empty platform recommendation is not the first candidate.
+    assert result["candidates"][0] == {"id": "102", "name": "收纳架", "path": "居家日用 > 收纳工具 > 收纳架",
+        "levels": [{"id": "100", "name": "居家日用"}, {"id": "101", "name": "收纳工具"},
+                   {"id": "102", "name": "收纳架"}], "selectable": True}
+    assert result["candidates"][1]["id"] == "203" and len(result["candidates"][1]["levels"]) == 4
+    assert len(requests) == 1
+
+
+def test_prediction_empty_and_invalid_category_paths_are_not_invented():
+    from app.modules.category_lookup.client import normalize_predictions
+    assert normalize_predictions({"candidate_category_details": None, "predict_cid": ""}) == {
+        "candidates": [], "recommendedId": None}
+    with pytest.raises(LookupError):
+        normalize_predictions({"candidate_category_details": [{"first_cid": 1, "first_cname": "居家",
+            "second_cid": 0, "third_cid": 3, "third_cname": "架子"}]})
+    unavailable = normalize_predictions({"predict_cid": "1", "candidate_category_details": [
+        {"first_cid": 1, "first_cname": "类目", "deleted": True, "forbidden_status": 0}]})
+    assert unavailable["candidates"][0]["selectable"] is False and unavailable["recommendedId"] is None
+
+
 class FakeCentral:
     def __init__(self, ids):
         self.ids = ids
@@ -166,6 +211,51 @@ class FakeLookup:
         return [{"id": "1000010075", "name": "汤勺", "path": "餐具 > 汤勺"}]
     def schema(self, session, category_id, title):
         return [{"id": "12", "label": "材质", "required": True, "options": []}]
+
+
+def test_prediction_auto_distributes_and_reports_no_recommendation(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)
+    monkeypatch.setattr("app.modules.category_lookup.api._next", 0)
+    get_settings.cache_clear()
+    ids = [uuid4(), uuid4()]
+    title = "商品完整标题" * 20
+    class Predictor(FakeLookup):
+        def predict(self, session, actual_title, image_url):
+            assert session.shop_id in ids and actual_title == title and image_url == "https://example.test/main.jpg"
+            return {"recommendedId": None, "candidates": []}
+    class Repository:
+        def export_rows(self, product_ids):
+            assert len(product_ids) == 1
+            if product_ids[0] == "12345678":
+                return [{"source_platform": "douyin", "uu_text": "{}"}]
+            package = {"product": {"title": title}, "images": {"main": [{"url": "https://example.test/main.jpg"}]}}
+            if product_ids[0] == "pdd:87654321":
+                package = {"product": {"title": ""}, "images": {"main": [{"url": "file:///etc/passwd"}]}}
+            return [{"source_platform": "pinduoduo", "uu_text": json.dumps(package)}]
+    class Service:
+        repository = Repository()
+    app = create_application()
+    from app.modules.products.api import get_service
+    app.dependency_overrides[get_central] = lambda: FakeCentral(ids)
+    app.dependency_overrides[get_lookup] = lambda: Predictor(settings)
+    app.dependency_overrides[get_service] = lambda: Service()
+    body = {"productId": "pdd:12345678"}
+    with TestClient(app) as client:
+        auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+        a = client.post('/api/v1/category-lookup/predict', json=body, headers=auth)
+        b = client.post('/api/v1/category-lookup/predict', json=body, headers=auth)
+        assert a.status_code == b.status_code == 200 and a.json()['shopId'] != b.json()['shopId']
+        assert a.json()['status'] == 'no_recommendation' and a.json()['candidates'] == [] and a.json()['recommendedId'] is None
+        assert len(a.json()['sourceVersion']) == 64
+        assert a.headers['cache-control'] == 'no-store' and COOKIE not in a.text
+        missing = client.post('/api/v1/category-lookup/predict', json={'productId': 'pdd:87654321'}, headers=auth)
+        assert missing.status_code == 200 and missing.json()['status'] == 'missing_data'
+        assert missing.json()['missing'] == ['商品标题', '商品主图'] and missing.json()['shopId'] is None
+        assert client.post('/api/v1/category-lookup/predict', json={'productId': '12345678'}, headers=auth).status_code == 422
+        assert client.post('/api/v1/category-lookup/predict', json={'productId': 'invalid'}, headers=auth).status_code == 422
+        assert client.post('/api/v1/category-lookup/predict', json=body, headers={'Authorization': 'Bearer ' + RPA_KEY}).status_code == 401
+    get_settings.cache_clear()
 
 
 def test_tree_and_attribute_cache_survive_restart_and_refresh_only_on_request(settings, monkeypatch):

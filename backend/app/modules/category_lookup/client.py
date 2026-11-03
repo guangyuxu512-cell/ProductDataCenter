@@ -50,6 +50,17 @@ class DouyinCategoryClient:
                              {"key": keyword, "search_type": 1})
         return normalize_candidates(payload.get("data"))
 
+    def predict(self, session: CentralShopSession, title: str, image_url: str) -> dict:
+        """Ask Douyin for product-specific candidates using the complete title and main image."""
+        body = {"scene": "predict_by_title_and_img", "pic": [{"url": image_url}], "title": title,
+                "publish_id": "helper_" + uuid4().hex, "is_auction_or_mass": False,
+                "appid": 1, "_bid": "ffa_goods", "_lid": "209821037550"}
+        payload = self._call(session, "POST", "/product/tproduct/predictCategoryN", "209821032275", {}, body)
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise LookupError("invalid_response")
+        return normalize_predictions(data)
+
     def category_options(self, session: CentralShopSession, parent_id: str) -> list[dict]:
         payload = self._call(session, "GET", "/product/tproduct/categoryOptionsN", "197362053948",
                              {"cid": parent_id, "display_all": 0})
@@ -208,6 +219,57 @@ def normalize_category_options(value, parent_id: str) -> list[dict]:
         result.append({"id": identity, "name": name.strip(), "isLeaf": leaf,
                        "enabled": item.get("enable", 1) not in (0, False)})
     return result
+
+
+def normalize_predictions(data: dict) -> dict:
+    """Preserve platform category IDs at every level; do not choose a candidate."""
+    entries = data.get("candidate_category_details")
+    if entries is None:
+        entries = []
+    if not isinstance(entries, list) or len(entries) > 200:
+        raise LookupError("invalid_response")
+    candidates, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise LookupError("invalid_response")
+        levels = []
+        ended = False
+        for prefix in ("first", "second", "third", "fourth"):
+            raw_id = entry.get(prefix + "_cid")
+            name = entry.get(prefix + "_cname")
+            missing = raw_id is None or raw_id == "" or raw_id == 0 or raw_id == "0"
+            if missing:
+                ended = True
+                continue
+            identity = str(raw_id)
+            if (ended or isinstance(raw_id, bool) or not re.fullmatch(r"[0-9]{1,20}", identity) or not identity.strip("0")
+                    or not isinstance(name, str) or not name.strip() or len(name) > 300):
+                raise LookupError("invalid_response")
+            levels.append({"id": identity, "name": name.strip()})
+        if not levels:
+            raise LookupError("invalid_response")
+        identity = levels[-1]["id"]
+        if identity in seen:
+            continue
+        seen.add(identity)
+        deleted = entry.get("deleted")
+        forbidden = entry.get("forbidden_status")
+        if deleted in (True, 1, "1") or forbidden not in (None, False, 0, "", "0"):
+            selectable = False
+        elif deleted in (False, 0) and forbidden in (False, 0, "0"):
+            selectable = True
+        else:
+            selectable = None
+        candidates.append({"id": identity, "name": levels[-1]["name"],
+                           "path": " > ".join(level["name"] for level in levels), "levels": levels,
+                           "selectable": selectable})
+    explicit = data.get("predict_cid")
+    recommended_id = str(explicit) if not isinstance(explicit, bool) and str(explicit or "").isdigit() else None
+    if recommended_id and (not recommended_id.strip("0") or recommended_id not in seen):
+        recommended_id = None
+    if recommended_id and next(item for item in candidates if item["id"] == recommended_id)["selectable"] is not True:
+        recommended_id = None
+    return {"candidates": candidates, "recommendedId": recommended_id}
 
 
 def normalize_candidates(value) -> list[dict]:

@@ -1,6 +1,9 @@
 """Read-only category candidates and attribute definitions for the editor."""
+import hashlib
+import json
 from threading import BoundedSemaphore, Lock
 from typing import Annotated
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -9,6 +12,9 @@ from pydantic import BaseModel, Field, field_validator
 from app.core.config import Settings, get_settings
 from app.core.security.access import require_api_access
 from app.modules.central.client import CentralApplicationClient, CentralConnectionError, eligible_douyin_shops
+from app.modules.products.api import get_service
+from app.modules.products.queries import EXACT_PRODUCT_ID_PATTERN
+from app.modules.products.service import ProductService
 from .cache import CacheUnavailable, CategoryCache
 from .client import DouyinCategoryClient, LookupError
 
@@ -29,6 +35,34 @@ class SearchBody(BaseModel):
         if not value:
             raise ValueError("请输入类目关键词")
         return value
+
+
+class PredictBody(BaseModel):
+    productId: str = Field(min_length=1, max_length=128)
+
+    @field_validator("productId")
+    @classmethod
+    def valid_product_id(cls, value: str) -> str:
+        if not EXACT_PRODUCT_ID_PATTERN.fullmatch(value):
+            raise ValueError("商品 ID 无效")
+        return value
+
+
+def _usable_image_url(value) -> str:
+    if isinstance(value, dict):
+        value = value.get("url")
+    if isinstance(value, str) and 0 < len(value) <= 10000:
+        value = value.strip()
+        try:
+            parsed = urlsplit(value)
+            _ = parsed.port
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username
+                    or parsed.password or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value)):
+                raise ValueError()
+            return value
+        except ValueError:
+            pass
+    return ""
 
 
 class SchemaBody(BaseModel):
@@ -92,6 +126,25 @@ class Attribute(BaseModel):
 class SearchResponse(BaseModel):
     shopId: UUID
     candidates: list[Candidate]
+
+
+class CategoryLevel(BaseModel):
+    id: str
+    name: str
+
+
+class PredictedCandidate(Candidate):
+    levels: list[CategoryLevel]
+    selectable: bool | None
+
+
+class PredictResponse(BaseModel):
+    status: str
+    sourceVersion: str
+    missing: list[str]
+    shopId: UUID | None
+    candidates: list[PredictedCandidate]
+    recommendedId: str | None
 
 
 class SchemaResponse(BaseModel):
@@ -222,6 +275,45 @@ def search(body: SearchBody, response: Response,
     response.headers["Cache-Control"] = "no-store"
     shop_id, candidates = _auto_shop(central, lookup, lambda session: lookup.search(session, body.keyword))
     return SearchResponse(shopId=shop_id, candidates=candidates)
+
+
+@router.post("/predict", response_model=PredictResponse)
+def predict(body: PredictBody, response: Response,
+            central: Annotated[CentralApplicationClient, Depends(get_central)],
+            lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)],
+            service: Annotated[ProductService, Depends(get_service)]):
+    response.headers["Cache-Control"] = "no-store"
+    rows = service.repository.export_rows([body.productId])
+    if not rows:
+        raise HTTPException(404, "商品不存在或缺少数据包")
+    row = rows[0]
+    if row["source_platform"] == "douyin":
+        raise HTTPException(422, "抖音商品使用原类目，不进行类目推荐")
+    if row["source_platform"] != "pinduoduo":
+        raise HTTPException(422, "该来源平台的预检尚未接入")
+    raw = row["uu_text"]
+    try:
+        package = json.loads(raw)
+        product = package.get("product") if isinstance(package, dict) else None
+        images = package.get("images") if isinstance(package, dict) else None
+        title = product.get("title") if isinstance(product, dict) else None
+        main_images = images.get("main") if isinstance(images, dict) else None
+        title = title.strip() if isinstance(title, str) else ""
+        main_images = main_images if isinstance(main_images, list) else []
+        image_url = next((url for item in main_images if (url := _usable_image_url(item))), "")
+    except (ValueError, TypeError):
+        raise HTTPException(422, "商品数据包格式无效") from None
+    if len(title) > 10000:
+        raise HTTPException(422, "商品标题过长，无法预检")
+    version = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    missing = (["商品标题"] if not title else []) + (["商品主图"] if not image_url else [])
+    if missing:
+        return PredictResponse(status="missing_data", sourceVersion=version, missing=missing,
+                               shopId=None, candidates=[], recommendedId=None)
+    shop_id, result = _auto_shop(central, lookup, lambda session: lookup.predict(session, title, image_url))
+    status = ("recommended" if result["recommendedId"] else
+              "needs_category_confirmation" if result["candidates"] else "no_recommendation")
+    return PredictResponse(status=status, sourceVersion=version, missing=[], shopId=shop_id, **result)
 
 
 @router.post("/schema/auto", response_model=AutoSchemaResponse)

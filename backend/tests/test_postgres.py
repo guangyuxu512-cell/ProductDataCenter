@@ -72,6 +72,57 @@ def test_exact_id_and_second_precision(engine):
     assert "uu_json" not in detail["product"]
 
 
+def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, tmp_path):
+    from uuid import uuid4
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.category_lookup.api import get_central, get_lookup
+    from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession
+    from app.modules.products.api import get_service
+
+    product_id = "pdd:3760269504500859111"
+    title = "拼多多完整标题" * 12
+    package = {"product": {"title": title}, "images": {"main": [{"url": "https://fixture.invalid/main.png"}]}}
+    with engine.begin() as conn:
+        original = conn.execute(text("SELECT uu_json::text FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one()
+        conn.execute(text("UPDATE products SET uu_json=CAST(:package AS jsonb) WHERE product_id=:id"),
+                     {"id": product_id, "package": json.dumps(package, ensure_ascii=False)})
+        before = conn.execute(text("SELECT uu_json::text FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one()
+    settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test",
+                        douyin_category_lookup_enabled=True)
+    shop_id = uuid4()
+    class Central:
+        def list_shops(self):
+            return [CentralShop(shop_id=shop_id, display_name="测试店", platform="douyin", session_status="valid")]
+        def read_session(self, requested, expected_platform):
+            return CentralShopSession(shop_id=requested, platform=expected_platform, session_version=1,
+                cookies=(CentralCookie(name="sessionid", value="synthetic", domain=".jinritemai.com"),))
+    class Lookup:
+        def __init__(self): self.settings = settings
+        def predict(self, session, actual_title, image_url):
+            assert actual_title == title and image_url == "https://fixture.invalid/main.png"
+            return {"recommendedId": None, "candidates": []}
+    app = create_application()
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_service] = lambda: ProductService(ProductRepository(engine), settings)
+    app.dependency_overrides[get_central] = lambda: Central()
+    app.dependency_overrides[get_lookup] = lambda: Lookup()
+    try:
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            result = client.post("/api/v1/category-lookup/predict", json={"productId": product_id},
+                                 headers={"Authorization": "Bearer admin-test"})
+            assert result.status_code == 200 and result.json()["status"] == "no_recommendation"
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT uu_json::text FROM products WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == before
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET uu_json=CAST(:package AS jsonb) WHERE product_id=:id"),
+                         {"id": product_id, "package": original})
+
+
 def test_rpa_group_list_uses_real_postgres_and_preserves_uu(engine, tmp_path):
     from fastapi.testclient import TestClient
     from app.core.config import get_settings
