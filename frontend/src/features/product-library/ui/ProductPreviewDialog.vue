@@ -388,7 +388,7 @@ const specLayout = computed(() => {
     rows[row.draftKey] = values as string[]
   }
   return {
-    axes: groups.map((group) => ({ name: group.name || '规格',
+    axes: groups.map((group) => ({ name: group.name.replace(/\s*[（(]\d+[）)]\s*$/u, '').trim() || '规格',
       values: group.values.map((item) => item.name) })),
     rows,
   }

@@ -719,7 +719,7 @@ test('切换规格图的组会置顶，图片与对应规格一起保存', async
     specImages: [{ id: '11', name: '黑色', url: 'https://example.test/black.jpg' },
       { id: '12', name: '白色', url: '' }],
     specGroups: [
-      { index: 0, name: '', movable: false, values: [{ id: '11', name: '黑色', url: 'https://example.test/black.jpg' },
+      { index: 0, name: '规格（2）', movable: false, values: [{ id: '11', name: '黑色', url: 'https://example.test/black.jpg' },
         { id: '12', name: '白色', url: '' }] },
       { index: 1, name: '款式', movable: true, values: [{ id: '21', name: '长款', url: '' },
         { id: '22', name: '短款', url: '' }] },
@@ -744,6 +744,10 @@ test('切换规格图的组会置顶，图片与对应规格一起保存', async
   await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).toBeChecked()
   await expect(dialog.getByRole('button', { name: '更换黑色规格图片' }).locator('img'))
     .toHaveAttribute('src', 'https://example.test/black.jpg')
+  page.once('dialog', (confirmation) => confirmation.dismiss())
+  await dialog.getByRole('switch', { name: '款式规格图开关' }).click()
+  await expect(dialog.locator('.product-preview__axis').first().getByRole('textbox', { name: '规格类型' })).toHaveValue('规格')
+  await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).toBeChecked()
   page.once('dialog', (confirmation) => confirmation.accept())
   await dialog.getByRole('switch', { name: '款式规格图开关' }).click()
   await expect(dialog.locator('.product-preview__axis').first().getByRole('textbox', { name: '规格类型' })).toHaveValue('款式')
