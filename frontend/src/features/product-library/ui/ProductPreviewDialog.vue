@@ -10,7 +10,7 @@ import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
 import { fetchCategoryAttributes, fetchOriginalCategoryAttributes,
   type CategoryAttribute, type CategoryTreeItem } from '../api/category-lookup'
-import { fetchEditSnapshot, saveProduct, type ProductPatch, type SpecImage } from '../api/products'
+import { fetchEditSnapshot, saveProduct, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
@@ -66,9 +66,12 @@ const draftMain = ref<string[]>([])
 const draftDetail = ref<string[]>([])
 const initialMain = ref<string[]>([])
 const initialDetail = ref<string[]>([])
-const specImages = ref<SpecImage[]>([])
-const initialSpecImages = ref<SpecImage[]>([])
-const specImageGroup = ref('')
+const specGroups = ref<SpecGroup[]>([])
+const initialSpecGroups = ref<SpecGroup[]>([])
+const imageGroupIndex = ref(0)
+const specImageEnabled = ref(false)
+const specImages = computed(() => specGroups.value[imageGroupIndex.value]?.values ?? [])
+function copyGroups(groups: SpecGroup[]) { return groups.map((group) => ({ ...group, values: group.values.map((item) => ({ ...item })) })) }
 type SkuDraft = { skuId: string; specIds: string[]; price: string; stock: string; enabled: boolean | null; merchantCode: string; deleted: boolean }
 const skuDrafts = ref<SkuDraft[]>([])
 const initialSkuDrafts = ref<SkuDraft[]>([])
@@ -81,7 +84,7 @@ const dirty = computed(() => !!props.product && (
   draftTitle.value !== initialTitle.value || selectedParts.value !== null || touchedAttributes.value.length > 0 ||
   JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value) ||
   JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value) ||
-  JSON.stringify(specImages.value) !== JSON.stringify(initialSpecImages.value) ||
+  imageGroupIndex.value !== 0 || JSON.stringify(specGroups.value) !== JSON.stringify(initialSpecGroups.value) ||
   JSON.stringify(skuDrafts.value) !== JSON.stringify(initialSkuDrafts.value)))
 
 watch(() => [props.show, props.editable, props.product?.id] as const, () => {
@@ -89,7 +92,7 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
   const product = props.product
   editVersion.value = ''; editBusy.value = false; saving.value = false
   selectedParts.value = null; attributeInputs.value = {}; touchedAttributes.value = []
-  specImages.value = []; initialSpecImages.value = []; specImageGroup.value = ''
+  specGroups.value = []; initialSpecGroups.value = []; imageGroupIndex.value = 0; specImageEnabled.value = false
   skuDrafts.value = []; initialSkuDrafts.value = []
   if (!props.show || !product) return
   draftTitle.value = product.title; initialTitle.value = product.title
@@ -100,15 +103,23 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
   editBusy.value = true
   void fetchEditSnapshot(product.id).then((result) => {
     if (request !== editRequest) return
-    editVersion.value = result.version; specImageGroup.value = result.specImageGroup
-    specImages.value = result.specImages.map((item) => ({ ...item }))
-    initialSpecImages.value = result.specImages.map((item) => ({ ...item }))
-    skuDrafts.value = (result.skus ?? []).map((item) => ({ ...item, specIds: [...item.specIds],
-      stock: item.stock === null ? '' : String(item.stock), deleted: false }))
-    initialSkuDrafts.value = skuDrafts.value.map((item) => ({ ...item, specIds: [...item.specIds] }))
+    setEditSnapshot(result)
   }).catch(() => { if (request === editRequest) message.error('读取编辑数据失败，请刷新商品后重试') })
     .finally(() => { if (request === editRequest) editBusy.value = false })
 }, { immediate: true })
+
+function setEditSnapshot(result: EditSnapshot) {
+  editVersion.value = result.version
+  const groups = result.specGroups?.length ? result.specGroups :
+    [{ index: 0, name: result.specImageGroup, values: result.specImages, movable: false }]
+  specGroups.value = copyGroups(groups)
+  initialSpecGroups.value = copyGroups(groups)
+  imageGroupIndex.value = 0
+  specImageEnabled.value = specImages.value.some((item) => !!item.url)
+  skuDrafts.value = (result.skus ?? []).map((item) => ({ ...item, specIds: [...item.specIds],
+    stock: item.stock === null ? '' : String(item.stock), deleted: false }))
+  initialSkuDrafts.value = skuDrafts.value.map((item) => ({ ...item, specIds: [...item.specIds] }))
+}
 
 function allowLeave() { return !dirty.value || window.confirm('当前商品有未保存的修改，确定放弃吗？') }
 function closeEditor() { if (!saving.value && allowLeave()) emit('update:show', false) }
@@ -127,7 +138,32 @@ const missingRequired = computed(() => categoryAttributes.value.filter((item) =>
 function validImageUrl(value: string) {
   try { return ['http:', 'https:'].includes(new URL(value).protocol) } catch { return false }
 }
-function specImageIndex(name: string) { return specImages.value.findIndex((item) => item.name === name) }
+function specImageIndex(name: string) {
+  const matching = specImages.value.flatMap((item, index) => item.name === name ? [index] : [])
+  return matching.length === 1 ? matching[0] : -1
+}
+function setSpecImageGroup(index: number, value: boolean) {
+  if (!canEdit.value) return
+  if (value && index !== imageGroupIndex.value) {
+    if (index !== 0 && !specGroups.value[index]?.movable) return
+    const hasOldImages = specGroups.value.some((group, groupIndex) => groupIndex !== index && group.values.some((item) => item.url))
+    const note = hasOldImages ? '原规格组的规格图将在保存后移除。' : ''
+    if (!window.confirm(`开启后该规格组将置顶展示。${note}`)) return
+    for (const [groupIndex, group] of specGroups.value.entries()) {
+      if (groupIndex !== index) {
+        if (index === 0) group.values = (initialSpecGroups.value[groupIndex]?.values ?? []).map((item) => ({ ...item }))
+        else for (const item of group.values) item.url = ''
+      }
+    }
+    imageGroupIndex.value = index
+    specImageEnabled.value = true
+  } else if (index === imageGroupIndex.value) {
+    if (!value && specImages.value.some((item) => item.url) &&
+        !window.confirm('关闭后将移除当前规格图，保存后生效。确定关闭吗？')) return
+    if (!value) for (const item of specImages.value) item.url = ''
+    specImageEnabled.value = value
+  }
+}
 function skuDraft(row: ProductSku) { return skuDrafts.value.find((item) => item.skuId === row.sourceSkuId) }
 function deleteSku(row: ProductSku) {
   const draft = skuDraft(row)
@@ -144,7 +180,10 @@ function changeImage(kind: 'main' | 'detail' | 'sku', index?: number) {
   if (result === null) return
   const url = result.trim()
   if (!validImageUrl(url)) { message.error('请输入有效的 HTTP 或 HTTPS 图片链接'); return }
-  if (kind === 'sku' && index !== undefined && specImages.value[index]) specImages.value[index].url = url
+  if (kind === 'sku' && index !== undefined && specImages.value[index]) {
+    specImages.value[index].url = url
+    specImageEnabled.value = true
+  }
   else if (images && index === undefined) images.push(url)
   else if (images && index !== undefined) images[index] = url
 }
@@ -171,8 +210,10 @@ async function submitEdit() {
   if (selectedParts.value) patch.category = selectedParts.value.map(({ id, name }) => ({ id, name }))
   if (JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value)) patch.mainImages = [...draftMain.value]
   if (JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value)) patch.detailImages = [...draftDetail.value]
-  if (JSON.stringify(specImages.value) !== JSON.stringify(initialSpecImages.value)) patch.specImages = specImages.value
-    .filter((item, index) => item.url !== initialSpecImages.value[index]?.url)
+  if (imageGroupIndex.value !== 0) patch.specImageGroupIndex = imageGroupIndex.value
+  const initialImages = initialSpecGroups.value[imageGroupIndex.value]?.values ?? []
+  if (JSON.stringify(specImages.value) !== JSON.stringify(initialImages)) patch.specImages = specImages.value
+    .filter((item, index) => item.url !== initialImages[index]?.url)
     .map((item) => ({ specId: item.id, url: item.url }))
   const changedSkus: NonNullable<ProductPatch['skus']> = []
   for (const [index, item] of skuDrafts.value.entries()) {
@@ -214,8 +255,13 @@ async function submitEdit() {
     message.success('商品已保存')
     selectedParts.value = null; touchedAttributes.value = []
     initialMain.value = [...draftMain.value]; initialDetail.value = [...draftDetail.value]
-    initialSpecImages.value = specImages.value.map((item) => ({ ...item }))
-    initialSkuDrafts.value = skuDrafts.value.map((item) => ({ ...item, specIds: [...item.specIds] }))
+    try {
+      const snapshot = await fetchEditSnapshot(product.id)
+      if (props.product?.id === product.id) setEditSnapshot(snapshot)
+    } catch {
+      editVersion.value = ''
+      message.warning('已保存，请刷新后继续编辑')
+    }
     emit('saved')
   } catch (error) { message.error(error instanceof Error ? error.message : '保存失败，请重试') }
   finally { saving.value = false }
@@ -297,9 +343,9 @@ const imageSections = computed(() => {
       src, label: `详情图 ${index + 1}`, caption: '', skuKey: undefined,
     })) },
     { key: 'sku' as const, label: '规格图', images: props.editable && specImages.value.length
-      ? [...specImages.value.map((item) => ({ src: item.url, label: item.name || specImageGroup.value,
+      ? [...specImages.value.map((item) => ({ src: item.url, label: item.name || specGroups.value[imageGroupIndex.value]?.name || '规格图',
         caption: '', skuKey: item.id })), ...(product.previewSkuImageUrls ?? [])
-        .filter((url) => !initialSpecImages.value.some((item) => item.url === url) &&
+        .filter((url) => imageGroupIndex.value === 0 && !initialSpecGroups.value[0]?.values.some((item) => item.url === url) &&
           !specImages.value.some((item) => item.url === url))
         .map((src, index) => ({ src, label: `其他规格图 ${index + 1}`, caption: '', skuKey: undefined }))]
       : (product.previewSkuImageUrls ??
@@ -328,11 +374,38 @@ const allText = computed(() => {
 })
 const titleLength = computed(() => Array.from(props.editable ? draftTitle.value : (props.product?.title ?? ''))
   .reduce((sum, character) => sum + ((character.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0))
-const specLayout = computed(() => sourceSpecLayout(props.product?.skus ?? []))
+const specLayout = computed(() => {
+  const skus = props.product?.skus ?? []
+  const fallback = sourceSpecLayout(skus)
+  const groups = specGroups.value
+  if (!groups.length || groups.some((group, index) => group.index !== index || !group.values.length)) return fallback
+  const rows: Record<string, string[]> = {}
+  for (const row of skus) {
+    const ids = skuDraft(row)?.specIds
+    if (!ids || ids.length !== groups.length) return fallback
+    const values = ids.map((id, index) => groups[index].values.find((item) => item.id === id)?.name)
+    if (values.some((value) => !value)) return fallback
+    rows[row.draftKey] = values as string[]
+  }
+  return {
+    axes: groups.map((group) => ({ name: group.name || '规格',
+      values: group.values.map((item) => item.name) })),
+    rows,
+  }
+})
+const displayAxes = computed(() => {
+  const axes = specLayout.value?.axes ?? []
+  const order = axes.map((_, index) => index)
+  if (imageGroupIndex.value > 0 && imageGroupIndex.value < order.length) {
+    order.splice(imageGroupIndex.value, 1)
+    order.unshift(imageGroupIndex.value)
+  }
+  return order.map((index) => ({ axis: axes[index], index }))
+})
 const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
   const layout = specLayout.value
   const specColumns: DataTableColumns<ProductSku> = layout
-    ? layout.axes.map((axis, index) => ({ title: axis.name, key: `spec-${index}`, minWidth: 140,
+    ? displayAxes.value.map(({ axis, index }) => ({ title: axis.name, key: `spec-${index}`, minWidth: 140,
       render: (row: ProductSku) => layout.rows[row.draftKey]?.[index] ?? '—' }))
     : [{ title: '规格', key: 'name', minWidth: 240, render: (row: ProductSku) =>
       h('div', { class: 'product-preview__sku' }, [
@@ -495,10 +568,13 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <div class="product-preview__section-heading"><strong>销售规格</strong>
               <AppButton size="small" disabled>添加规格类型</AppButton>
             </div>
-            <div v-for="(axis, axisIndex) in specLayout?.axes ?? []" :key="axis.name" class="product-preview__axis">
+            <div v-for="{ axis, index: axisIndex } in displayAxes" :key="axisIndex" class="product-preview__axis">
               <div class="product-preview__axis-heading">
                 <AppInput :model-value="axis.name" aria-label="规格类型" readonly />
-                <span class="product-preview__status"><NSwitch :value="false" disabled />添加规格图</span>
+                <span class="product-preview__status"><NSwitch
+                  :value="axisIndex === imageGroupIndex && specImageEnabled"
+                  :disabled="!canEdit || !specGroups[axisIndex]?.values.length || (axisIndex !== imageGroupIndex && axisIndex !== 0 && !specGroups[axisIndex]?.movable)"
+                  :aria-label="`${axis.name}规格图开关`" @update:value="setSpecImageGroup(axisIndex, $event)" />添加规格图</span>
                 <div class="product-preview__actions">
                   <AppButton tone="link" size="small" disabled>上移</AppButton><AppButton tone="link" size="small" disabled>下移</AppButton>
                   <AppButton tone="link" size="small" disabled>删除</AppButton>
@@ -506,7 +582,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               </div>
               <div class="product-preview__values">
                 <div v-for="value in axis.values" :key="value" class="product-preview__value">
-                  <button v-if="editable && axisIndex === 0 && axis.name === specImageGroup && specImageIndex(value) >= 0"
+                  <button v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0"
                     type="button" class="product-preview__spec-image" :disabled="!canEdit"
                     :aria-label="`更换${value}规格图片`" @click="changeImage('sku', specImageIndex(value))">
                     <img v-if="specImages[specImageIndex(value)]?.url" :src="specImages[specImageIndex(value)].url" :alt="`${value}规格图片`" />

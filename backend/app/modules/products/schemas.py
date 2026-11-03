@@ -196,6 +196,7 @@ class ProductEdit(BaseModel):
     mainImages: list[str] | None = Field(default=None, max_length=100)
     detailImages: list[str] | None = Field(default=None, max_length=100)
     specImages: list[SpecImageEdit] | None = Field(default=None, max_length=500)
+    specImageGroupIndex: int | None = Field(default=None, ge=1, le=2)
     skus: list[SkuEdit] | None = Field(default=None, max_length=2000)
 
     @field_validator("title")
@@ -223,7 +224,7 @@ class ProductEdit(BaseModel):
 
     @model_validator(mode="after")
     def valid_edit(self):
-        if all(value is None for value in (self.title, self.category, self.attributes, self.mainImages, self.detailImages, self.specImages, self.skus)):
+        if all(value is None for value in (self.title, self.category, self.attributes, self.mainImages, self.detailImages, self.specImages, self.specImageGroupIndex, self.skus)):
             raise ValueError("没有需要保存的修改")
         if self.attributes is not None and len({item.id for item in self.attributes}) != len(self.attributes):
             raise ValueError("属性 ID 不能重复")

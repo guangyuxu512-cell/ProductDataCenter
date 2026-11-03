@@ -104,3 +104,60 @@ def test_sku_edit_and_deletion_do_not_recreate_missing_or_change_off_sale_varian
     assert len(deleted["goodsSkuInfo"]["spec_detail"]["value"]) == 2
     assert "12_22" not in deleted["goodsInfo"]["skuInfoMap"]
     assert all(row["sku_status"] is True for row in deleted["goodsSkuInfo"]["spec_detail"]["value"])
+
+
+def test_move_image_group_keeps_existing_combinations_and_updates_package(douyin):
+    douyin["goodsInfo"]["skuInfoMap"] = {
+        "11_21": {"sku_id": "1001"}, "11_22": {"sku_id": "1002"}, "12_22": {"sku_id": "1003"},
+    }
+    douyin["_source_sku_prices"] = {"12_22": {"first_price": 1600}}
+    douyin["goodsSkuInfo"]["spec_detail"]["value"] = [
+        {"spec_detail_ids": ["11", "21"], "sku_status": True},
+        {"spec_detail_ids": ["11", "22"], "sku_status": True},
+        {"spec_detail_ids": ["12", "22"], "sku_status": False},
+    ]
+    douyin["goodsSkuInfo"]["sku_detail"] = [
+        {"name": "颜色", "spec_index": 0, "spec_item_list": [
+            {"spec_item_id": "11", "name": "黑色", "big_pic": "https://example.test/black", "small_pic": "https://example.test/black-small"},
+            {"spec_item_id": "12", "name": "白色", "big_pic": ""}]},
+        {"name": "款式", "spec_index": 1, "spec_item_list": [
+            {"spec_item_id": "21", "name": "长款", "big_pic": ""},
+            {"spec_item_id": "22", "name": "短款", "big_pic": ""}]},
+    ]
+    douyin["spec_detail_value"] = {"value": [
+        {"name": "颜色", "spec_values": [{"id": "11", "name": "黑色", "img_url": "https://example.test/black"},
+                                            {"id": "12", "name": "白色", "img_url": ""}]},
+        {"name": "款式", "spec_values": [{"id": "21", "name": "长款", "img_url": ""},
+                                            {"id": "22", "name": "短款", "img_url": ""}]},
+    ]}
+    original = deepcopy(douyin)
+    result = apply_edit(douyin, "douyin", ProductEdit(expectedVersion=VERSION, specImageGroupIndex=1,
+        specImages=[{"specId": "21", "url": "https://example.test/long"}],
+        skus=[{"specIds": ["12", "22"], "stock": 3}]))
+    assert douyin == original
+    assert [group["name"] for group in result["goodsSkuInfo"]["sku_detail"]] == ["款式", "颜色"]
+    assert [group["spec_index"] for group in result["goodsSkuInfo"]["sku_detail"]] == [0, 1]
+    assert result["goodsSkuInfo"]["sku_detail"][0]["spec_item_list"][0]["big_pic"] == "https://example.test/long"
+    assert result["goodsSkuInfo"]["sku_detail"][1]["spec_item_list"][0]["small_pic"] == ""
+    assert result["spec_detail_value"]["value"][1]["spec_values"][0]["img_url"] == ""
+    rows = result["goodsSkuInfo"]["spec_detail"]["value"]
+    assert [row["spec_detail_ids"] for row in rows] == [["21", "11"], ["22", "11"], ["22", "12"]]
+    assert rows[-1]["sku_status"] is False and rows[-1]["stock_info"]["stock_num"] == 3
+    assert set(result["goodsInfo"]["skuInfoMap"]) == {"21_11", "22_11", "22_12"}
+    assert result["_source_sku_prices"] == {"22_12": {"first_price": 1600}}
+
+
+def test_move_image_group_rejects_ambiguous_sku_without_changing_source(douyin):
+    douyin["spec_detail_value"] = {"value": [
+        {"name": "颜色", "spec_values": [{"id": "11", "name": "黑色"}]},
+        {"name": "款式", "spec_values": [{"id": "22", "name": "短款"}]},
+    ]}
+    douyin["goodsSkuInfo"]["sku_detail"] = [
+        {"name": "颜色", "spec_item_list": [{"spec_item_id": "11"}]},
+        {"name": "款式", "spec_item_list": [{"spec_item_id": "22"}]},
+    ]
+    douyin["goodsInfo"]["skuInfoMap"]["11_999"] = {"sku_id": "bad"}
+    original = deepcopy(douyin)
+    with pytest.raises(ProductRequestError):
+        apply_edit(douyin, "douyin", ProductEdit(expectedVersion=VERSION, specImageGroupIndex=1))
+    assert douyin == original

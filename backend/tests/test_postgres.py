@@ -215,7 +215,7 @@ def test_sku_changes_and_image_are_consistent_in_database_package_and_projection
                 {"spec_detail_ids": ["11", "21"], "price": "12", "sku_status": True, "stock_info": {"stock_num": 5}},
                 {"spec_detail_ids": ["12", "22"], "price": "16", "sku_status": False, "stock_info": {"stock_num": 0}}]}},
         "spec_detail_value": {"value": [{"name": "颜色", "spec_values": [
-            {"id": "11", "name": "黑色", "img_url": "https://example.test/old"},
+            {"id": "11", "name": "黑色", "img_url": ""},
             {"id": "12", "name": "白色", "img_url": ""}]}]}}
     with engine.begin() as conn:
         conn.execute(text("""INSERT INTO products(product_id,source_platform,source_product_id,title,uu_json,sku_count)
@@ -225,6 +225,7 @@ def test_sku_changes_and_image_are_consistent_in_database_package_and_projection
     try:
         repo = ProductRepository(engine)
         snapshot = repo.edit_snapshot(identity)
+        assert snapshot["specImages"][0]["url"] == "https://example.test/old"
         assert snapshot["skus"][1]["enabled"] is False
         edit = ProductEdit(expectedVersion=snapshot["version"],
             skus=[{"specIds": ["11", "21"], "price": "19.90", "stock": 7},
@@ -241,6 +242,63 @@ def test_sku_changes_and_image_are_consistent_in_database_package_and_projection
         assert detail["product"]["sku_count"] == 1
         assert str(detail["skus"][0]["current_price"]) == "19.90" and len(detail["skus"]) == 1
         assert [image["source_url"] for image in detail["images"]] == ["https://example.test/new"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
+
+
+def test_moved_spec_image_group_is_visible_to_rpa_without_losing_off_sale_skus(engine, tmp_path):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.products.api import get_service
+    from app.modules.products.schemas import ProductEdit
+
+    identity = "9999999999999999913"
+    package = {"goodsId": identity, "goodsInfo": {"goodsName": "SKU 测试", "skuInfoMap": {
+        "11_21": {"sku_id": "1001"}, "11_22": {"sku_id": "1002"}, "12_22": {"sku_id": "1003"}}},
+        "goodsSkuInfo": {"sku_detail": [
+            {"name": "颜色", "spec_item_list": [{"spec_item_id": "11", "big_pic": "https://example.test/black"},
+                                              {"spec_item_id": "12", "big_pic": ""}]},
+            {"name": "款式", "spec_item_list": [{"spec_item_id": "21", "big_pic": ""},
+                                              {"spec_item_id": "22", "big_pic": ""}]}],
+            "spec_detail": {"value": [{"spec_detail_ids": ["11", "21"], "price": "12", "sku_status": True},
+                                       {"spec_detail_ids": ["11", "22"], "price": "13", "sku_status": True},
+                                       {"spec_detail_ids": ["12", "22"], "price": "16", "sku_status": False}]}},
+        "spec_detail_value": {"value": [
+            {"name": "颜色", "spec_values": [{"id": "11", "name": "黑色", "img_url": "https://example.test/black"},
+                                           {"id": "12", "name": "白色", "img_url": ""}]},
+            {"name": "款式", "spec_values": [{"id": "21", "name": "长款", "img_url": ""},
+                                           {"id": "22", "name": "短款", "img_url": ""}]}]}}
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO products(product_id,source_platform,source_product_id,title,uu_json,sku_count)
+            VALUES (:id,'douyin',:id,'SKU 测试',CAST(:package AS jsonb),3)"""),
+            {"id": identity, "package": json.dumps(package)})
+        conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,sort_order)
+            VALUES (:id,'1001','黑色长款',12,0),(:id,'1002','黑色短款',13,1),(:id,'1003','白色短款',16,2)"""),
+            {"id": identity})
+    try:
+        repo = ProductRepository(engine)
+        snapshot = repo.edit_snapshot(identity)
+        assert snapshot["specGroups"][1]["movable"] is True
+        repo.save_edit(identity, ProductEdit(expectedVersion=snapshot["version"], specImageGroupIndex=1,
+            specImages=[{"specId": "21", "url": "https://example.test/long"}]))
+        refreshed = repo.edit_snapshot(identity)
+        assert [group["name"] for group in refreshed["specGroups"]] == ["款式", "颜色"]
+        assert refreshed["skus"][-1]["enabled"] is False
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            response = client.get(f"/rpa/v1/products/{identity}/uu", headers={"Authorization": "Bearer rpa-test"})
+            assert response.status_code == 200
+            saved = response.json()
+        assert saved["goodsSkuInfo"]["sku_detail"][0]["spec_item_list"][0]["big_pic"] == "https://example.test/long"
+        assert [row["spec_detail_ids"] for row in saved["goodsSkuInfo"]["spec_detail"]["value"]] == [
+            ["21", "11"], ["22", "11"], ["22", "12"]]
+        assert saved["goodsSkuInfo"]["spec_detail"]["value"][-1]["sku_status"] is False
+        assert [image["source_url"] for image in repo.detail(identity)["images"]] == ["https://example.test/long"]
     finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
