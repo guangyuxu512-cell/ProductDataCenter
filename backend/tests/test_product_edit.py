@@ -97,6 +97,28 @@ def test_pdd_target_category_and_attributes_save_without_losing_source_data():
     assert changed["douyinTarget"]["attributes"] == {} and changed["product"] == original["product"]
 
 
+def test_pdd_shared_package_edits_preserve_source_category_and_skus():
+    package = {"goodsInfo": {"goodsName": "拼多多商品", "goodsImageList": ["https://example.test/a"],
+                             "catId1": "77", "skuInfoMap": {"1": {"sku_id": "100"}}},
+               "goodsDetailInfo": {"detail_imgs": [{"url_list": ["https://example.test/detail"], "keep": True}]},
+               "goodsSkuInfo": {"spec_detail": {"value": [{"sku_status": False}]}}, "unknown": {"keep": True}}
+    original = deepcopy(package)
+    edit = ProductEdit(expectedVersion=VERSION, category=[{"id": "10", "name": "家居"}],
+        attributes=[{"id": "12", "name": "材质", "values": [{"valueId": "13", "name": "塑料"}]}])
+    saved = apply_edit(package, "pinduoduo", edit)
+    assert package == original
+    assert saved["goodsInfo"] == original["goodsInfo"] and saved["goodsSkuInfo"] == original["goodsSkuInfo"]
+    assert saved["douyinTarget"]["category"] == [{"id": "10", "name": "家居"}]
+    assert saved["douyinTarget"]["attributes"]["12"]["values"][0]["valueId"] == "13"
+    changed = apply_edit(saved, "pinduoduo", ProductEdit(expectedVersion=VERSION, title="新标题",
+        mainImages=["https://example.test/b"], detailImages=["https://example.test/detail"]))
+    assert changed["goodsInfo"]["goodsName"] == "新标题"
+    assert changed["goodsInfo"]["goodsImageList"] == ["https://example.test/b"]
+    assert changed["goodsInfo"]["catId1"] == "77" and changed["goodsSkuInfo"] == original["goodsSkuInfo"]
+    assert changed["goodsDetailInfo"]["detail_imgs"][0]["keep"] is True
+    assert changed["douyinTarget"] == saved["douyinTarget"] and changed["unknown"] == original["unknown"]
+
+
 def test_invalid_title_and_image_are_rejected():
     with pytest.raises(ValidationError):
         ProductEdit(expectedVersion=VERSION, title="长" * 31)

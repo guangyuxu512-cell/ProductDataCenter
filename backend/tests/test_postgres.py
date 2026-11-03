@@ -123,13 +123,18 @@ def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, 
                          {"id": product_id, "package": original})
 
 
-def test_pdd_target_category_and_attributes_round_trip_without_changing_source(engine, tmp_path):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_pdd_target_category_and_attributes_round_trip_without_changing_source(engine, tmp_path, legacy):
     import hashlib
     from app.modules.products.schemas import ProductEdit
 
     product_id = "pdd:3760269504500859111"
     package = {"product": {"title": "收纳盒", "categoryIds": ["77"]}, "images": {"main": [], "detail": []},
                "skus": [{"skuId": "100", "onSale": False}]}
+    if legacy:
+        package = {"goodsInfo": {"goodsName": "收纳盒", "catId1": "77", "goodsImageList": []},
+                   "goodsSkuInfo": {"spec_detail": {"value": [{"sku_status": False}]}},
+                   "goodsDetailInfo": {"detail_imgs": []}}
     with engine.begin() as conn:
         original = conn.execute(text("SELECT uu_json::text, title_status, category_path FROM products WHERE product_id=:id"),
                                 {"id": product_id}).one()
@@ -147,7 +152,7 @@ def test_pdd_target_category_and_attributes_round_trip_without_changing_source(e
         assert detail["targetAttributes"] == [{"id": "12", "name": "材质", "values": ["塑料"]}]
         assert detail["product"]["category_path"] == original.category_path
         saved = json.loads(repo.export_rows([product_id])[0]["uu_text"])
-        assert saved["product"] == package["product"] and saved["skus"] == package["skus"]
+        assert all(saved[key] == value for key, value in package.items())
         assert saved["douyinTarget"]["attributes"]["12"]["values"][0]["valueId"] == "13"
     finally:
         with engine.begin() as conn:
