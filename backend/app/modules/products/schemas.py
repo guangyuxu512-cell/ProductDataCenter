@@ -60,12 +60,19 @@ class SourceAttribute(BaseModel):
     values: list[str]
 
 
+class TargetCategoryPart(BaseModel):
+    id: str
+    name: str
+
+
 class ProductDetail(BaseModel):
     product: ProductRead
     skus: list[SkuRead]
     images: list[ImageRead]
     sourceCategoryId: str | None = None
     sourceAttributes: list[SourceAttribute] = Field(default_factory=list)
+    targetCategory: list[TargetCategoryPart] = Field(default_factory=list)
+    targetAttributes: list[SourceAttribute] = Field(default_factory=list)
 
 
 class GroupRead(BaseModel):

@@ -62,6 +62,8 @@ export interface LibraryProduct {
   category: string | null
   /** Original Douyin category from the source package; absent for other platforms. */
   sourceCategoryId?: string | null
+  targetCategory?: Array<{ id: string; name: string }>
+  targetAttributes?: Array<{ id: string | null; name: string; values: string[] }>
   currentPrice: string | null
   currency?: string | null
   collectedAt: string

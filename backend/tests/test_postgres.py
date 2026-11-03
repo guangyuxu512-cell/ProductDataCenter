@@ -123,6 +123,38 @@ def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, 
                          {"id": product_id, "package": original})
 
 
+def test_pdd_target_category_and_attributes_round_trip_without_changing_source(engine, tmp_path):
+    import hashlib
+    from app.modules.products.schemas import ProductEdit
+
+    product_id = "pdd:3760269504500859111"
+    package = {"product": {"title": "收纳盒", "categoryIds": ["77"]}, "images": {"main": [], "detail": []},
+               "skus": [{"skuId": "100", "onSale": False}]}
+    with engine.begin() as conn:
+        original = conn.execute(text("SELECT uu_json::text, title_status, category_path FROM products WHERE product_id=:id"),
+                                {"id": product_id}).one()
+        conn.execute(text("UPDATE products SET uu_json=CAST(:package AS jsonb) WHERE product_id=:id"),
+                     {"id": product_id, "package": json.dumps(package, ensure_ascii=False)})
+        initial = conn.execute(text("SELECT uu_json::text FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one()
+    try:
+        repo = ProductRepository(engine)
+        edit = ProductEdit(expectedVersion=hashlib.sha256(initial.encode()).hexdigest(),
+            category=[{"id": "10", "name": "家居"}, {"id": "11", "name": "收纳"}],
+            attributes=[{"id": "12", "name": "材质", "values": [{"valueId": "13", "name": "塑料"}]}])
+        repo.save_edit(product_id, edit)
+        detail = repo.detail(product_id)
+        assert detail["targetCategory"] == [{"id": "10", "name": "家居"}, {"id": "11", "name": "收纳"}]
+        assert detail["targetAttributes"] == [{"id": "12", "name": "材质", "values": ["塑料"]}]
+        assert detail["product"]["category_path"] == original.category_path
+        saved = json.loads(repo.export_rows([product_id])[0]["uu_text"])
+        assert saved["product"] == package["product"] and saved["skus"] == package["skus"]
+        assert saved["douyinTarget"]["attributes"]["12"]["values"][0]["valueId"] == "13"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET uu_json=CAST(:package AS jsonb), title_status=:status WHERE product_id=:id"),
+                         {"id": product_id, "package": original[0], "status": original[1]})
+
+
 def test_rpa_group_list_uses_real_postgres_and_preserves_uu(engine, tmp_path):
     from fastapi.testclient import TestClient
     from app.core.config import get_settings

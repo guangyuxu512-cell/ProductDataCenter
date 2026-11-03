@@ -8,8 +8,8 @@ import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
-import { fetchCategoryAttributes, fetchOriginalCategoryAttributes,
-  type CategoryAttribute, type CategoryTreeItem } from '../api/category-lookup'
+import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictProductCategory,
+  type CategoryAttribute, type CategoryTreeItem, type PredictedCategory } from '../api/category-lookup'
 import { fetchEditSnapshot, saveProduct, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
@@ -57,6 +57,10 @@ const categoryShop = ref<string | null>(null)
 const categoryAttributes = ref<CategoryAttribute[]>([])
 const categorySchemaLoaded = ref(false)
 const categoryError = ref(false)
+const predictionBusy = ref(false)
+const predictionCandidates = ref<PredictedCategory[]>([])
+const predictionShop = ref<string | null>(null)
+const predictionMessage = ref('')
 const editVersion = ref('')
 const editBusy = ref(false)
 const saving = ref(false)
@@ -132,7 +136,15 @@ function setAttribute(item: CategoryAttribute, value: string) {
 }
 function attributeValue(item: CategoryAttribute) {
   if (Object.hasOwn(attributeInputs.value, item.id)) return attributeInputs.value[item.id]
-  return props.product ? originalAttributeValue(item, categoryAttributes.value, props.product, selectedCategory.value) : ''
+  const product = props.product
+  if (product?.platform === 'pdd') {
+    const current = product.targetCategory?.at(-1)?.id
+    if (current && current === selectedCategory.value && !selectedParts.value) {
+      return product.targetAttributes?.find((attribute) => attribute.id === item.id)?.values.join('、') ?? ''
+    }
+    return ''
+  }
+  return product ? originalAttributeValue(item, categoryAttributes.value, product, selectedCategory.value) : ''
 }
 const missingRequired = computed(() => categoryAttributes.value.filter((item) => item.required && !attributeValue(item).trim()).length)
 function validImageUrl(value: string) {
@@ -388,18 +400,25 @@ async function submitEdit() {
   finally { saving.value = false }
 }
 let categoryRequest = 0
+let predictionRequest = 0
 watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.product?.id,
-  props.product?.sourceCategoryId] as const, () => {
+  props.product?.sourceCategoryId, props.product?.targetCategory] as const, () => {
   imageRetries.value = {}
   imageFallbacks.value = {}
   categoryRequest += 1
+  predictionRequest += 1
+  predictionBusy.value = false; predictionCandidates.value = []; predictionShop.value = null; predictionMessage.value = ''
   selectedCategory.value = null; categoryLabel.value = ''; categoryShop.value = null
   categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryBusy.value = false; categoryError.value = false
   const product = props.product
-  if (!props.show || props.loading || !props.categoryLookupEnabled || !product ||
-      product.platform !== 'douyin' || !product.sourceCategoryId) return
-  selectedCategory.value = product.sourceCategoryId
-  categoryLabel.value = product.category || `原类目 ${product.sourceCategoryId}`
+  if (!props.show || props.loading || !props.categoryLookupEnabled || !product) return
+  if (product.platform === 'douyin' && product.sourceCategoryId) {
+    selectedCategory.value = product.sourceCategoryId
+    categoryLabel.value = product.category || `原类目 ${product.sourceCategoryId}`
+  } else if (product.platform === 'pdd' && product.targetCategory?.length) {
+    selectedCategory.value = product.targetCategory.at(-1)?.id ?? null
+    categoryLabel.value = product.targetCategory.map((part) => part.name).join(' → ')
+  } else return
   if (tab.value === 'attributes') void loadAttributes()
 }, { immediate: true })
 watch(() => props.show, (show) => { if (!show) tab.value = 'base' })
@@ -447,9 +466,40 @@ function selectCategory(value: { id: string; path: string; shopId: string; level
   selectedCategory.value = value.id; categoryLabel.value = value.path; categoryShop.value = value.shopId
   categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryError.value = false; categoryBusy.value = false
   if (props.editable && canEdit.value) {
-    selectedParts.value = value.id === props.product?.sourceCategoryId ? null : value.levels
+    const original = props.product?.platform === 'pdd' ? props.product.targetCategory?.at(-1)?.id : props.product?.sourceCategoryId
+    selectedParts.value = value.id === original ? null : value.levels
     attributeInputs.value = {}; touchedAttributes.value = []
   }
+}
+
+function choosePrediction(candidate: PredictedCategory) {
+  if (!predictionShop.value || candidate.selectable === false) return
+  selectCategory({ id: candidate.id, path: candidate.path, shopId: predictionShop.value,
+    levels: candidate.levels.map((level, index) => ({ ...level, isLeaf: index === candidate.levels.length - 1, enabled: true })) })
+  predictionCandidates.value = []; predictionMessage.value = ''
+  tab.value = 'attributes'
+  void loadAttributes()
+}
+
+async function runPrediction() {
+  const product = props.product
+  if (!product || product.platform !== 'pdd' || !canEdit.value || predictionBusy.value) return
+  if (dirty.value) { message.warning('请先保存当前修改，再预检类目'); return }
+  const request = ++predictionRequest
+  predictionBusy.value = true; predictionCandidates.value = []; predictionShop.value = null; predictionMessage.value = ''
+  try {
+    const result = await predictProductCategory(product.id)
+    if (request !== predictionRequest) return
+    if (result.sourceVersion !== editVersion.value) { message.warning('商品数据已变化，请刷新后重新预检'); return }
+    if (result.missing.length) { predictionMessage.value = `请先完善${result.missing.join('、')}`; return }
+    if (!result.candidates.length) { predictionMessage.value = '未找到推荐类目，请手动选择'; return }
+    predictionShop.value = result.shopId; predictionCandidates.value = result.candidates
+    const recommended = result.candidates.find((candidate) => candidate.id === result.recommendedId && candidate.selectable === true)
+    if (recommended) choosePrediction(recommended)
+    else predictionMessage.value = '请选择合适的推荐类目'
+  } catch (error) {
+    if (request === predictionRequest) predictionMessage.value = error instanceof Error ? error.message : '类目预检失败，请重试'
+  } finally { if (request === predictionRequest) predictionBusy.value = false }
 }
 
 const imageSections = computed(() => {
@@ -610,7 +660,9 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <NFormItem label="抖店类目" required>
               <template v-if="categoryLookupEnabled">
                 <CategoryPicker :key="product.id" :label="categoryLabel"
-                  :disabled="categoryBusy || (editable && (!canEdit || product.platform !== 'douyin'))" @select="selectCategory" />
+                  :disabled="categoryBusy || (editable && (!canEdit || !['douyin', 'pdd'].includes(product.platform)))" @select="selectCategory" />
+                <AppButton v-if="product.platform === 'pdd' && editable" size="small" :loading="predictionBusy"
+                  :disabled="!canEdit || categoryBusy" @click="runPrediction">预检类目</AppButton>
               </template>
               <template v-else>
                 <AppInput model-value="" aria-label="抖店类目" disabled />
@@ -619,7 +671,11 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             </NFormItem>
             <NText v-if="selectedCategory && !editable" depth="3">当前类目和属性仅供查看，尚未保存</NText>
             <NText v-if="product.category" depth="3">来源类目：{{ product.category }}</NText>
-            <NText v-if="categoryLookupEnabled && product.platform !== 'douyin'" depth="3">{{ editable ? '该来源的抖店类目转换尚未接通' : '平台推荐类目尚未接通，可手动选择类目' }}</NText>
+            <NText v-if="predictionMessage" depth="3">{{ predictionMessage }}</NText>
+            <div v-if="predictionCandidates.length" class="product-preview__predictions">
+              <AppButton v-for="candidate in predictionCandidates" :key="candidate.id" size="small"
+                :disabled="candidate.selectable === false" @click="choosePrediction(candidate)">{{ candidate.path }}</AppButton>
+            </div>
           </section>
           <section v-if="tab === 'images'" class="product-preview__image-workspace">
             <article v-for="section in imageSections" :key="section.key" class="product-preview__image-section">
@@ -670,15 +726,15 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <div v-else-if="categoryError"><NText depth="3">类目属性读取失败</NText><AppButton size="small" @click="loadAttributes()">重试</AppButton></div>
             <NText v-else-if="categorySchemaLoaded && !categoryAttributes.length" depth="3">当前类目没有可显示的属性</NText>
             <NText v-else-if="categorySchemaLoaded && product.platform === 'douyin' && selectedCategory === product.sourceCategoryId" depth="3">{{ editable ? '已显示原包中可对应的属性，请核对后保存' : '已显示原包中可对应的属性，尚未校验或保存' }}</NText>
-            <NText v-else-if="categorySchemaLoaded" depth="3">当前类目的属性尚未从原包自动对应</NText>
+            <NText v-else-if="categorySchemaLoaded && product.platform !== 'pdd'" depth="3">当前类目的属性尚未从原包自动对应</NText>
             <NText v-if="editable && categorySchemaLoaded && missingRequired" type="warning">还有 {{ missingRequired }} 项必填属性未填写</NText>
             <div class="product-preview__attributes">
               <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required">
                 <NAutoComplete v-if="editable && item.options.length" :value="attributeValue(item)"
                   :options="item.options.map((option) => ({ label: option.label, value: option.label }))"
-                  :disabled="!canEdit || product.platform !== 'douyin'" placeholder="请选择或输入"
+                  :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)" placeholder="请选择或输入"
                   @update:value="setAttribute(item, $event)" />
-                <AppInput v-else :model-value="attributeValue(item)" :readonly="!canEdit || product.platform !== 'douyin'" @update:model-value="setAttribute(item, $event)" />
+                <AppInput v-else :model-value="attributeValue(item)" :readonly="!canEdit || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
@@ -749,6 +805,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 .product-preview__loading-mask { position:absolute; inset:0; z-index:2; display:grid; place-items:center; background:color-mix(in srgb,var(--bg-surface-solid) 55%,transparent); }
 .product-preview__header { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--space-3); padding-bottom:var(--space-3); }
 .product-preview__meta,.product-preview__actions { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }
+.product-preview__predictions { display:flex; gap:var(--space-2); flex-wrap:wrap; }
 .product-preview__meta { color:var(--text-secondary); font-size:var(--font-size-secondary); }
 .product-preview__tabs { flex:0 0 auto; }
 .product-preview__content { min-width:0; min-height:0; flex:1; overflow:auto; padding:var(--space-3) var(--space-1) var(--space-3) 0; scrollbar-gutter:stable; }

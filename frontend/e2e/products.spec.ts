@@ -655,10 +655,70 @@ test('非抖音来源不会把原平台类目当作抖店类目', async ({ page 
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
-  await expect(dialog.getByText('平台推荐类目尚未接通，可手动选择类目')).toBeVisible()
+  await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   await expect(dialog.getByText('请先选择抖店类目')).toBeVisible()
   expect(calls).toEqual([])
+})
+
+test('拼多多预检展示候选，确认类目和属性后保存到当前商品', async ({ page }) => {
+  await fixtures(page)
+  const shop = '00000000-0000-4000-8000-000000000111'
+  let version = 'a'.repeat(64)
+  let targetCategory: Array<{ id: string; name: string }> = []
+  let targetAttributes: Array<{ id: string; name: string; values: string[] }> = []
+  let payload: Record<string, unknown> | null = null
+  let predictionCount = 0
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version, specImageGroup: '', specImages: [], skus: [],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON() as Record<string, unknown>
+      const update = payload as unknown as ProductPatch
+      targetCategory = update.category ?? targetCategory
+      targetAttributes = (update.attributes ?? []).map((item) => ({ id: item.id, name: item.name,
+        values: item.values.map((value) => value.name) }))
+      version = 'b'.repeat(64)
+      return route.fulfill({ json: { version } })
+    }
+    return route.fulfill({ json: { product: product(firstId, 'pinduoduo'), sourceCategoryId: null,
+      targetCategory, targetAttributes, skus: [], images: [] } })
+  })
+  await page.route('**/api/v1/category-lookup/predict', (route) => {
+    predictionCount++
+    return route.fulfill({ json: {
+      status: predictionCount === 1 ? 'no_recommendation' : 'needs_category_confirmation',
+      sourceVersion: version, missing: [], shopId: shop, recommendedId: null,
+      candidates: predictionCount === 1 ? [] : [{ id: '102', name: '收纳架', path: '居家日用 > 收纳工具 > 收纳架', selectable: true,
+        levels: [{ id: '100', name: '居家日用' }, { id: '101', name: '收纳工具' }, { id: '102', name: '收纳架' }] }],
+    } })
+  })
+  await page.route('**/api/v1/category-lookup/schema**', (route) => route.fulfill({ json: {
+    shopId: shop, categoryId: '102', attributes: [{ id: '501', label: '材质', required: true, options: [] }],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: '预检类目' }).click()
+  await expect(dialog.getByText('未找到推荐类目，请手动选择')).toBeVisible()
+  await dialog.getByRole('button', { name: '预检类目' }).click()
+  await expect(dialog.getByText('请选择合适的推荐类目')).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
+  await dialog.getByRole('button', { name: '居家日用 > 收纳工具 > 收纳架' }).click()
+  const material = dialog.locator('.n-form-item').filter({ hasText: '材质' }).locator('input')
+  await expect(material).toBeEditable()
+  await expect(dialog.getByText('还有 1 项必填属性未填写')).toBeVisible()
+  await material.fill('塑料')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).not.toBeNull()
+  expect(payload).toMatchObject({ expectedVersion: 'a'.repeat(64),
+    category: [{ id: '100', name: '居家日用' }, { id: '101', name: '收纳工具' }, { id: '102', name: '收纳架' }],
+    attributes: [{ id: '501', name: '材质', values: [{ name: '塑料', valueId: '0' }] }] })
+  await expect(material).toHaveValue('塑料')
 })
 
 test('编辑商品保存原包字段，规格图在两个页签共用', async ({ page }) => {

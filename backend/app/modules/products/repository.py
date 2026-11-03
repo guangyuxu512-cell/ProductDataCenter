@@ -78,6 +78,7 @@ class ProductRepository:
                 return None
             source_category_id = None
             attributes = []
+            target_category, target_attributes = [], []
             if product["source_platform"] == "douyin":
                 # Read only the original category and attribute fields for this exact product;
                 # the paginated product list must not load package JSON.
@@ -88,12 +89,35 @@ class ProductRepository:
                     {"id": product_id}).one()
                 source_category_id = _original_category_id(levels[:4])
                 attributes = source_attributes(levels[4], levels[5])
+            elif product["source_platform"] == "pinduoduo":
+                target = conn.execute(text("SELECT uu_json #> '{douyinTarget}' FROM products WHERE product_id=:id"),
+                                      {"id": product_id}).scalar_one()
+                if isinstance(target, dict):
+                    parts = target.get("category")
+                    if isinstance(parts, list) and 0 < len(parts) <= 4 and all(
+                        isinstance(item, dict) and isinstance(item.get("id"), str)
+                        and re.fullmatch(r"[0-9]{1,20}", item["id"]) and item["id"].strip("0")
+                        and isinstance(item.get("name"), str) and 0 < len(item["name"]) <= 200 for item in parts
+                    ):
+                        target_category = [{"id": item["id"], "name": item["name"]} for item in parts]
+                    stored = target.get("attributes")
+                    if target_category and isinstance(stored, dict):
+                        for identity, item in list(stored.items())[:300]:
+                            if not isinstance(identity, str) or not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                                continue
+                            values = item.get("values")
+                            if isinstance(values, list):
+                                names = [value["name"] for value in values[:30]
+                                         if isinstance(value, dict) and isinstance(value.get("name"), str)]
+                                if names:
+                                    target_attributes.append({"id": identity, "name": item["name"], "values": names})
             skus = conn.execute(text("""SELECT sku_id, sku_name, current_price, image_rel_path, sort_order
                 FROM product_skus WHERE product_id=:id ORDER BY sort_order, sku_id"""), {"id": product_id}).mappings().all()
             images = conn.execute(text("""SELECT image_type, sort_order, rel_path, source_url
                 FROM product_images WHERE product_id=:id ORDER BY image_type, sort_order"""), {"id": product_id}).mappings().all()
             return {"product": product, "skus": skus, "images": images,
-                    "sourceCategoryId": source_category_id, "sourceAttributes": attributes}
+                    "sourceCategoryId": source_category_id, "sourceAttributes": attributes,
+                    "targetCategory": target_category, "targetAttributes": target_attributes}
 
     def groups(self) -> list[dict]:
         with self.engine.connect() as conn:
@@ -242,7 +266,7 @@ class ProductRepository:
             sql = "UPDATE products SET uu_json=CAST(:package AS jsonb), title_status=:status"
             if edit.title is not None:
                 sql += ", title=:title"
-            if edit.category is not None:
+            if edit.category is not None and row["source_platform"] == "douyin":
                 for index in range(1, 5):
                     params[f"level{index}"] = edit.category[index - 1].name if index <= len(edit.category) else ""
                     sql += f", category_level_{index}=:level{index}"

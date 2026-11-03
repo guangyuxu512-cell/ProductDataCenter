@@ -54,7 +54,11 @@ describe('采集字段适配', () => {
     expect(detailView(detail).sourceCategoryId).toBe('1000010075')
     expect(detailView(detail).attributes).toEqual([{ id: '501', name: '材质', value: '棉、麻' }])
     detail.product.source_platform = 'pinduoduo'
+    detail.targetCategory = [{ id: '100', name: '家居' }, { id: '101', name: '收纳' }]
+    detail.targetAttributes = [{ id: '502', name: '材质', values: ['塑料'] }]
     expect(detailView(detail).sourceCategoryId).toBeNull()
     expect(detailView(detail).attributes).toEqual([])
+    expect(detailView(detail).targetCategory).toEqual(detail.targetCategory)
+    expect(detailView(detail).targetAttributes).toEqual(detail.targetAttributes)
   })
 })

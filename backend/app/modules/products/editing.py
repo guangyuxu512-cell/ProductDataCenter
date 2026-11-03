@@ -440,8 +440,33 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                                            or str(item.get("property_id", "")) not in edited_ids]
     elif platform in {"pinduoduo", "pdd"}:
         product = _mapping(data.get("product"), "拼多多商品数据包缺少商品信息")
-        if edit.category is not None or edit.attributes is not None or edit.specImages is not None or edit.specImageGroupIndex is not None or edit.skus is not None or edit.specStructure is not None:
-            raise ProductRequestError("拼多多数据包的抖店类目转换尚未接入")
+        if edit.specImages is not None or edit.specImageGroupIndex is not None or edit.skus is not None or edit.specStructure is not None:
+            raise ProductRequestError("拼多多数据包的规格编辑尚未接入")
+        if edit.category is not None or edit.attributes is not None:
+            target = _mapping(data.setdefault("douyinTarget", {}), "抖店类目数据格式无效")
+            if edit.category is not None:
+                levels = [{"id": item.id, "name": item.name.strip()} for item in edit.category]
+                if any(not level["name"] or not int(level["id"]) for level in levels):
+                    raise ProductRequestError("抖店类目无效")
+                old_parts = target.get("category")
+                old_ids = [item.get("id") for item in old_parts if isinstance(item, dict)] if isinstance(old_parts, list) else []
+                if old_ids != [level["id"] for level in levels]:
+                    target["attributes"] = {}
+                target["category"] = levels
+            if edit.attributes is not None:
+                parts = target.get("category")
+                if (not isinstance(parts, list) or not 1 <= len(parts) <= 4 or any(
+                    not isinstance(part, dict) or not isinstance(part.get("id"), str)
+                    or not re.fullmatch(r"[0-9]{1,20}", part["id"]) or not part["id"].strip("0")
+                    or not isinstance(part.get("name"), str) or not part["name"].strip() for part in parts
+                )):
+                    raise ProductRequestError("请先选择抖店类目")
+                values = _mapping(target.setdefault("attributes", {}), "抖店属性数据格式无效")
+                for item in edit.attributes:
+                    if item.values:
+                        values[item.id] = {"name": item.name, "values": [value.model_dump() for value in item.values]}
+                    else:
+                        values.pop(item.id, None)
         if edit.title is not None:
             product["title"] = edit.title
         if edit.mainImages is not None or edit.detailImages is not None:
