@@ -51,7 +51,7 @@ export function detailView(detail: NasDetail): LibraryProduct {
       const linkedImage = sku.image_rel_path && detail.images.find((image) =>
         image.image_type === 'sku' && image.rel_path && image.rel_path === sku.image_rel_path)
       return {
-        draftKey: sku.sku_id, sourceSkuId: sku.sku_id, name: sku.sku_name,
+        draftKey: sku.sku_id, sourceSkuId: sku.sku_id.startsWith('local-') ? null : sku.sku_id, name: sku.sku_name,
         currentPrice: sku.current_price, stockLabel: null, specValues: {},
         imageUrl: linkedImage ? imageUrl(linkedImage) : null,
       }

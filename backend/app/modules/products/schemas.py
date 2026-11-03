@@ -188,6 +188,68 @@ class SkuEdit(BaseModel):
         return self
 
 
+class StructureValue(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(default="", max_length=10000)
+
+    @field_validator("id")
+    @classmethod
+    def valid_id(cls, value: str) -> str:
+        if "_" in value:
+            raise ValueError("规格标识无效")
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("规格名称不能为空")
+        return value
+
+    @field_validator("url")
+    @classmethod
+    def valid_url(cls, value: str) -> str:
+        return SpecImageEdit.valid_url(value)
+
+
+class StructureGroup(BaseModel):
+    sourceIndex: int | None = Field(default=None, ge=0, le=2)
+    name: str = Field(min_length=1, max_length=200)
+    values: list[StructureValue] = Field(min_length=1, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("规格类型不能为空")
+        return value
+
+
+class StructureSku(BaseModel):
+    sourceSpecIds: list[str] | None = Field(default=None, min_length=1, max_length=3)
+    specIds: list[str] = Field(min_length=1, max_length=3)
+    price: str = Field(default="", max_length=40)
+    stock: str = Field(default="", max_length=20)
+    merchantCode: str = Field(default="", max_length=200)
+    enabled: bool | None = None
+
+    @field_validator("sourceSpecIds", "specIds")
+    @classmethod
+    def valid_ids(cls, values: list[str] | None) -> list[str] | None:
+        if values is not None and (any(not value or len(value) > 200 or "_" in value for value in values) or
+                                   len(values) != len(set(values))):
+            raise ValueError("SKU 规格标识无效")
+        return values
+
+
+class SpecStructureEdit(BaseModel):
+    groups: list[StructureGroup] = Field(min_length=1, max_length=3)
+    skus: list[StructureSku] = Field(min_length=1, max_length=2000)
+
+
 class ProductEdit(BaseModel):
     expectedVersion: str = Field(pattern=r"^[a-f0-9]{64}$")
     title: str | None = Field(default=None, min_length=1, max_length=10000)
@@ -198,6 +260,7 @@ class ProductEdit(BaseModel):
     specImages: list[SpecImageEdit] | None = Field(default=None, max_length=500)
     specImageGroupIndex: int | None = Field(default=None, ge=1, le=2)
     skus: list[SkuEdit] | None = Field(default=None, max_length=2000)
+    specStructure: SpecStructureEdit | None = None
 
     @field_validator("title")
     @classmethod
@@ -224,8 +287,10 @@ class ProductEdit(BaseModel):
 
     @model_validator(mode="after")
     def valid_edit(self):
-        if all(value is None for value in (self.title, self.category, self.attributes, self.mainImages, self.detailImages, self.specImages, self.specImageGroupIndex, self.skus)):
+        if all(value is None for value in (self.title, self.category, self.attributes, self.mainImages, self.detailImages, self.specImages, self.specImageGroupIndex, self.skus, self.specStructure)):
             raise ValueError("没有需要保存的修改")
+        if self.specStructure is not None and any(value is not None for value in (self.skus, self.specImages, self.specImageGroupIndex)):
+            raise ValueError("规格结构和单项规格修改不能同时提交")
         if self.attributes is not None and len({item.id for item in self.attributes}) != len(self.attributes):
             raise ValueError("属性 ID 不能重复")
         if self.specImages is not None and len({item.specId for item in self.specImages}) != len(self.specImages):

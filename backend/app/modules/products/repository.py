@@ -4,12 +4,13 @@ import hashlib
 import json
 import re
 from copy import deepcopy
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import Connection, Engine, text
 
 from .queries import ProductListOptions, build_product_list_queries
 from .source_attributes import source_attributes
-from .editing import apply_edit, move_spec_image_group
+from .editing import _sku_key, apply_edit, move_spec_image_group
 from .errors import ProductEditConflict, ProductNotFound, ProductRequestError
 
 
@@ -194,7 +195,7 @@ class ProductRepository:
                 source = sku_map.get(key)
                 if not ids or not isinstance(source, dict):
                     continue
-                source_id = source.get("sku_id") or source.get("skuId") or source.get("id") or key
+                source_id = _sku_key(source, key)
                 stock = item.get("stock_info")
                 sku_rows.append({"skuId": str(source_id), "specIds": ids, "price": str(item.get("price") or ""),
                     "stock": stock.get("stock_num") if isinstance(stock, dict) else None,
@@ -217,6 +218,22 @@ class ProductRepository:
                 raise ProductEditConflict()
             original_package = json.loads(row["package"])
             package = apply_edit(original_package, row["source_platform"], edit)
+            original_sku_paths = {}
+            original_sku_urls = {}
+            if edit.specStructure is not None:
+                original_sku_paths = {item["sku_id"]: item["image_rel_path"] for item in conn.execute(text(
+                    "SELECT sku_id,image_rel_path FROM product_skus WHERE product_id=:id"), {"id": product_id}).mappings()}
+                original_groups = original_package.get("spec_detail_value", {}).get("value", [])
+                original_info = original_package.get("goodsSkuInfo", {})
+                first_images = {item["id"]: item["url"] for item in
+                    _spec_image_values(original_groups, original_info.get("sku_detail", []), 0)}
+                original_map = original_package.get("goodsInfo", {}).get("skuInfoMap", {})
+                for item in original_info.get("spec_detail", {}).get("value", []):
+                    ids = [str(value) for value in item.get("spec_detail_ids", [])]
+                    key = "_".join(ids)
+                    source = original_map.get(key)
+                    if ids and isinstance(source, dict):
+                        original_sku_urls[_sku_key(source, key)] = first_images.get(ids[0], "")
             status = row["title_status"] or ""
             if not status.endswith("商品库已修改"):
                 status = f"{status} | 商品库已修改" if status else "商品库已修改"
@@ -246,7 +263,7 @@ class ProductRepository:
                         {"id": product_id, "kind": kind, "position": index, "path": paths.get(url, ""), "url": url})
                 params[f"{kind}_count"] = len(urls)
                 sql += f", {kind}_image_count=:{kind}_count"
-            if edit.specImages is not None or edit.specImageGroupIndex is not None:
+            if edit.specImages is not None or edit.specImageGroupIndex is not None or edit.specStructure is not None:
                 groups = package["spec_detail_value"]["value"]
                 sku_groups = package["goodsSkuInfo"]["sku_detail"]
                 image_groups = [_spec_image_values(groups, sku_groups, index) for index in range(len(groups))]
@@ -270,11 +287,11 @@ class ProductRepository:
                     ids = [str(value) for value in sku_row["spec_detail_ids"]]
                     changed = spec_to_url.get(ids[0]) if ids else None
                     source = sku_map.get("_".join(ids), {}) if isinstance(sku_map, dict) else {}
-                    source_id = source.get("sku_id") or source.get("skuId") or source.get("id") if isinstance(source, dict) else None
+                    source_id = _sku_key(source, "_".join(ids)) if isinstance(source, dict) else None
                     if changed is not None and source_id is not None:
                         conn.execute(text("UPDATE product_skus SET image_rel_path=:path WHERE product_id=:id AND sku_id=:sku_id"),
                                      {"id": product_id, "sku_id": str(source_id), "path": paths.get(changed, "")})
-            if edit.skus is not None:
+            if edit.skus is not None or edit.specStructure is not None:
                 params["sku_count"] = len(package["goodsSkuInfo"]["spec_detail"]["value"])
                 sql += ", sku_count=:sku_count"
                 if not package["goodsInfo"]["skuInfoMap"]:
@@ -283,12 +300,12 @@ class ProductRepository:
             saved = conn.execute(text(sql), params).scalar_one()
             if edit.skus is not None:
                 source_map = original_package["goodsInfo"]["skuInfoMap"]
-                ids = [str(value.get("sku_id") or value.get("skuId") or value.get("id") or key)
+                ids = [_sku_key(value, key)
                        for key, value in source_map.items() if isinstance(value, dict)]
                 for change in edit.skus:
                     key = "_".join(change.specIds)
                     source = source_map[key]
-                    source_id = str(source.get("sku_id") or source.get("skuId") or source.get("id") or key)
+                    source_id = _sku_key(source, key)
                     if ids.count(source_id) != 1:
                         raise ProductRequestError("SKU 来源标识不唯一，无法安全保存")
                     if change.delete:
@@ -297,6 +314,45 @@ class ProductRepository:
                     elif change.price is not None:
                         conn.execute(text("UPDATE product_skus SET current_price=:price WHERE product_id=:id AND sku_id=:sku_id"),
                                      {"id": product_id, "sku_id": source_id, "price": change.price})
+            if edit.specStructure is not None:
+                old_map = original_package["goodsInfo"]["skuInfoMap"]
+                old_rows = original_package["goodsSkuInfo"]["spec_detail"]["value"]
+                old_ids = [_sku_key(old_map["_".join(map(str, item["spec_detail_ids"]))],
+                                    "_".join(map(str, item["spec_detail_ids"]))) for item in old_rows]
+                new_map = package["goodsInfo"]["skuInfoMap"]
+                new_rows = package["goodsSkuInfo"]["spec_detail"]["value"]
+                new_ids = [_sku_key(new_map["_".join(map(str, item["spec_detail_ids"]))],
+                                    "_".join(map(str, item["spec_detail_ids"]))) for item in new_rows]
+                if len(set(old_ids)) != len(old_ids) or len(set(new_ids)) != len(new_ids):
+                    raise ProductRequestError("SKU 来源标识不唯一，无法安全保存")
+                if any(sku_id in original_sku_paths for sku_id in set(new_ids) - set(old_ids)):
+                    raise ProductRequestError("新增 SKU 与已有记录冲突，无法安全保存")
+                for sku_id in set(old_ids) - set(new_ids):
+                    conn.execute(text("DELETE FROM product_skus WHERE product_id=:id AND sku_id=:sku_id"),
+                                 {"id": product_id, "sku_id": sku_id})
+                value_names = [{value["id"]: value["name"] for value in group["spec_values"]}
+                               for group in package["spec_detail_value"]["value"]]
+                group_names = [group["name"] for group in package["spec_detail_value"]["value"]]
+                for index, (sku_id, item) in enumerate(zip(new_ids, new_rows, strict=True)):
+                    ids = [str(value) for value in item["spec_detail_ids"]]
+                    name = " / ".join(f"{group_names[i]}: {value_names[i][value]}" for i, value in enumerate(ids))
+                    image_url = spec_to_url.get(ids[0], "")
+                    price = item.get("price")
+                    try:
+                        price = Decimal(str(price))
+                        if not price.is_finite() or price < 0:
+                            price = None
+                    except InvalidOperation:
+                        price = None
+                    image_path = paths.get(image_url)
+                    if image_path is None and original_sku_urls.get(sku_id) == image_url:
+                        image_path = original_sku_paths.get(sku_id, "")
+                    conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,image_rel_path,sort_order)
+                        VALUES (:id,:sku_id,:name,:price,:path,:position)
+                        ON CONFLICT (product_id,sku_id) DO UPDATE SET sku_name=excluded.sku_name,
+                        current_price=excluded.current_price,image_rel_path=excluded.image_rel_path,sort_order=excluded.sort_order"""),
+                        {"id": product_id, "sku_id": sku_id, "name": name, "price": price,
+                         "path": image_path or "", "position": index})
             saved_version = hashlib.sha256(saved.encode("utf-8")).hexdigest()
             conn.execute(text("UPDATE products SET uu_sha256=:version WHERE product_id=:id"),
                          {"id": product_id, "version": saved_version})

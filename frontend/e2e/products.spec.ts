@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import type { ProductPatch } from '../src/features/product-library/api/products'
 
 const firstId = '3760269504500859111'
 const image = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#e2e8f0"/><rect x="30" y="25" width="60" height="75" rx="8" fill="#94a3b8"/></svg>')
@@ -773,4 +774,63 @@ test('切换规格图的组会置顶，图片与对应规格一起保存', async
   await expect.poll(() => payload).not.toBeNull()
   expect(payload).toMatchObject({ specImageGroupIndex: 1, specImages: [{ specId: '21', url: 'https://example.test/long.jpg' }] })
   expect(payload).not.toHaveProperty('skus')
+})
+
+test('规格增改会生成新 SKU，保留原有稀疏组合和来源 ID', async ({ page }) => {
+  await fixtures(page)
+  let payload: ProductPatch | null = null
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false,
+  } }))
+  await page.route('**/api/v1/products/' + firstId + '/edit', (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '颜色', specImages: [],
+    specGroups: [
+      { index: 0, name: '颜色', movable: false, values: [{ id: '11', name: '黑色', url: '' }, { id: '12', name: '白色', url: '' }] },
+      { index: 1, name: '尺码', movable: true, values: [{ id: '21', name: '大', url: '' }, { id: '22', name: '小', url: '' }] },
+    ],
+    skus: [{ skuId: 'sku-1', specIds: ['11', '21'], price: '19.99', stock: 9, enabled: true, merchantCode: 'first' },
+      { skuId: 'sku-2', specIds: ['12', '22'], price: '21.99', stock: 0, enabled: false, merchantCode: 'second' }],
+  } }))
+  await page.route('**/api/v1/products/' + firstId, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON() as ProductPatch
+      return route.fulfill({ json: { version: 'b'.repeat(64) } })
+    }
+    return route.fulfill({ json: { product: product(firstId), skus: [
+      { sku_id: 'sku-1', sku_name: '颜色: 黑色 / 尺码: 大', current_price: '19.99', image_rel_path: '', sort_order: 0 },
+      { sku_id: 'sku-2', sku_name: '颜色: 白色 / 尺码: 小', current_price: '21.99', image_rel_path: '', sort_order: 1 },
+    ], images: [] } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  await expect(dialog.getByRole('button', { name: '添加规格类型' })).toBeEnabled()
+  await dialog.getByLabel('颜色规格值').first().fill('深黑色')
+  page.once('dialog', (prompt) => prompt.accept('红色'))
+  await dialog.getByRole('button', { name: '添加规格值' }).first().click()
+  await expect(dialog.locator('.n-data-table-tbody .n-data-table-tr')).toHaveCount(4)
+  const prompts = ['包装', '常规']
+  const answerPrompt = (prompt: import('@playwright/test').Dialog) => { void prompt.accept(prompts.shift()) }
+  page.on('dialog', answerPrompt)
+  await dialog.getByRole('button', { name: '添加规格类型' }).click()
+  page.off('dialog', answerPrompt)
+  await expect(dialog.locator('.product-preview__axis')).toHaveCount(3)
+  await expect(dialog.locator('.n-data-table-tbody .n-data-table-tr')).toHaveCount(4)
+  await dialog.getByLabel('SKU 价格').nth(2).fill('25.00')
+  await dialog.getByLabel('SKU 价格').nth(3).fill('26.00')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).not.toBeNull()
+  const structure = payload!.specStructure!
+  expect(structure.groups[0].values.map((value) => value.name)).toEqual(['深黑色', '白色', '红色'])
+  expect(structure.groups[2]).toMatchObject({ sourceIndex: null, name: '包装', values: [{ name: '常规' }] })
+  const addedDimension = structure.groups[2].values[0].id
+  expect(structure.skus).toHaveLength(4)
+  expect(structure.skus[0]).toMatchObject({ sourceSpecIds: ['11', '21'], specIds: ['11', '21', addedDimension],
+    price: '19.99', stock: '9', merchantCode: 'first', enabled: true })
+  expect(structure.skus[1]).toMatchObject({ sourceSpecIds: ['12', '22'], enabled: false, stock: '0' })
+  expect(structure.skus[2]).toMatchObject({ sourceSpecIds: null, price: '25.00', stock: '0' })
+  expect(structure.skus[2].specIds[0]).toMatch(/^local-/)
+  expect(structure.skus.map((row) => row.specIds.slice(0, 2).join('_'))).not.toContain('11_22')
+  expect(structure.skus.map((row) => row.specIds.slice(0, 2).join('_'))).not.toContain('12_21')
 })

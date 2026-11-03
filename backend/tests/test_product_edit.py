@@ -174,3 +174,132 @@ def test_move_image_group_rejects_ambiguous_sku_without_changing_source(douyin):
     with pytest.raises(ProductRequestError):
         apply_edit(douyin, "douyin", ProductEdit(expectedVersion=VERSION, specImageGroupIndex=1))
     assert douyin == original
+
+
+@pytest.fixture
+def sparse_specs(douyin):
+    douyin["spec_detail_value"] = {"value": [
+        {"name": "颜色", "spec_values": [{"id": "11", "name": "黑", "img_url": "https://example.test/black"},
+                                          {"id": "12", "name": "白", "img_url": ""}]},
+        {"name": "尺码", "spec_values": [{"id": "21", "name": "大", "img_url": ""},
+                                          {"id": "22", "name": "小", "img_url": ""}]},
+    ]}
+    douyin["goodsSkuInfo"]["sku_detail"] = [
+        {"name": "颜色", "spec_index": 0, "spec_item_list": [
+            {"spec_item_id": "11", "name": "黑", "big_pic": "https://example.test/black", "marker": "keep"},
+            {"spec_item_id": "12", "name": "白", "big_pic": ""}]},
+        {"name": "尺码", "spec_index": 1, "spec_item_list": [
+            {"spec_item_id": "21", "name": "大", "big_pic": ""},
+            {"spec_item_id": "22", "name": "小", "big_pic": ""}]},
+    ]
+    douyin["goodsSkuInfo"]["spec_detail"]["value"] = [
+        {"spec_detail_ids": ["11", "21"], "price": "12.00", "sku_status": True,
+         "stock_info": {"stock_num": 5}, "merchant_code": "original", "unknown": 7},
+        {"spec_detail_ids": ["12", "22"], "price": "16.00", "sku_status": False, "stock_info": {"stock_num": 0}},
+    ]
+    douyin["goodsInfo"]["skuInfoMap"] = {"11_21": {"sku_id": "12345678901", "note": "keep"},
+                                            "12_22": {"sku_id": "12345678902"}}
+    douyin["_source_sku_prices"] = {"11_21": {"original": 1200}, "12_22": {"original": 1600}}
+    return douyin
+
+
+def test_structure_edits_retain_source_skus_and_add_only_requested_combinations(sparse_specs):
+    before = deepcopy(sparse_specs)
+    structure = {"groups": [
+        {"sourceIndex": 0, "name": "颜色", "values": [
+            {"id": "11", "name": "深黑", "url": "https://example.test/black"},
+            {"id": "12", "name": "白", "url": ""},
+            {"id": "local-new", "name": "红", "url": "https://example.test/red"}]},
+        {"sourceIndex": 1, "name": "尺码", "values": [{"id": "21", "name": "大"}, {"id": "22", "name": "小"}]},
+    ], "skus": [
+        {"sourceSpecIds": ["11", "21"], "specIds": ["11", "21"], "price": "12.00", "stock": "5",
+         "merchantCode": "original", "enabled": True},
+        {"sourceSpecIds": ["12", "22"], "specIds": ["12", "22"], "price": "16.00", "stock": "0", "enabled": False},
+        {"specIds": ["local-new", "21"], "price": "20.50", "stock": "3", "enabled": True},
+        {"specIds": ["local-new", "22"], "price": "21", "stock": "0", "enabled": True},
+    ]}
+    result = apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+    assert sparse_specs == before
+    values = result["spec_detail_value"]["value"]
+    assert [v["name"] for v in values[0]["spec_values"]] == ["深黑", "白", "红"]
+    assert result["goodsSkuInfo"]["sku_detail"][0]["spec_item_list"][0]["marker"] == "keep"
+    sku_map = result["goodsInfo"]["skuInfoMap"]
+    assert set(sku_map) == {"11_21", "12_22", "local-new_21", "local-new_22"}
+    assert sku_map["11_21"]["sku_id"] == "12345678901" and sku_map["11_21"]["note"] == "keep"
+    assert sku_map["local-new_21"]["_local_sku_key"].startswith("local-")
+    assert "sku_id" not in sku_map["local-new_21"]
+    rows = result["goodsSkuInfo"]["spec_detail"]["value"]
+    assert rows[0]["unknown"] == 7 and rows[0]["merchant_code"] == "original"
+    assert rows[1]["sku_status"] is False and rows[1]["stock_info"]["stock_num"] == 0
+    assert rows[2]["price"] == "20.50" and rows[2]["stock_info"]["stock_num"] == 3
+    assert "11_22" not in sku_map and "12_21" not in sku_map
+
+
+def test_structure_reorders_adds_dimension_and_rekeys_source_prices(sparse_specs):
+    structure = {"groups": [
+        {"sourceIndex": 1, "name": "尺码", "values": [{"id": "21", "name": "大"}, {"id": "22", "name": "小"}]},
+        {"sourceIndex": 0, "name": "颜色", "values": [{"id": "11", "name": "黑"}, {"id": "12", "name": "白"}]},
+        {"sourceIndex": None, "name": "款式", "values": [{"id": "local-style", "name": "常规"}]},
+    ], "skus": [
+        {"sourceSpecIds": ["11", "21"], "specIds": ["21", "11", "local-style"],
+         "price": "12.00", "stock": "5", "merchantCode": "original", "enabled": True},
+        {"sourceSpecIds": ["12", "22"], "specIds": ["22", "12", "local-style"],
+         "price": "16.00", "stock": "0", "enabled": False},
+    ]}
+    result = apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+    assert list(result["goodsInfo"]["skuInfoMap"]) == ["21_11_local-style", "22_12_local-style"]
+    assert result["goodsInfo"]["skuInfoMap"]["22_12_local-style"]["sku_id"] == "12345678902"
+    assert set(result["_source_sku_prices"]) == {"21_11_local-style", "22_12_local-style"}
+    assert result["goodsSkuInfo"]["spec_detail"]["value"][1]["sku_status"] is False
+
+
+def test_structure_rejects_duplicate_or_unpriced_new_sku_without_mutation(sparse_specs):
+    before = deepcopy(sparse_specs)
+    structure = {"groups": [{"sourceIndex": 0, "name": "颜色", "values": [
+        {"id": "11", "name": "黑"}, {"id": "local-red", "name": "红"}]}],
+        "skus": [{"specIds": ["local-red"], "price": "", "stock": "0", "enabled": True}]}
+    with pytest.raises(ProductRequestError, match="新增 SKU 必须填写价格和库存"):
+        apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+    assert sparse_specs == before
+    structure["groups"][0]["values"].append({"id": "local-another", "name": "红"})
+    with pytest.raises(ProductRequestError, match="不能重复"):
+        apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+
+
+def test_structure_deleting_value_removes_only_its_sku_and_source_prices(sparse_specs):
+    structure = {"groups": [
+        {"sourceIndex": 0, "name": "颜色", "values": [{"id": "12", "name": "白"}]},
+        {"sourceIndex": 1, "name": "尺码", "values": [{"id": "21", "name": "大"}, {"id": "22", "name": "小"}]},
+    ], "skus": [
+        {"sourceSpecIds": ["12", "22"], "specIds": ["12", "22"],
+         "price": "16.00", "stock": "0", "enabled": False},
+    ]}
+    result = apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+    assert set(result["goodsInfo"]["skuInfoMap"]) == {"12_22"}
+    assert set(result["_source_sku_prices"]) == {"12_22"}
+    assert result["goodsInfo"]["skuInfoMap"]["12_22"]["sku_id"] == "12345678902"
+    assert result["goodsSkuInfo"]["spec_detail"]["value"][0]["sku_status"] is False
+
+
+def test_structure_refuses_to_drop_hidden_source_records(sparse_specs):
+    sparse_specs["goodsInfo"]["skuInfoMap"]["11_22"] = {"sku_id": "hidden"}
+    structure = {"groups": [
+        {"sourceIndex": 0, "name": "颜色", "values": [{"id": "12", "name": "白"}]},
+        {"sourceIndex": 1, "name": "尺码", "values": [{"id": "21", "name": "大"}, {"id": "22", "name": "小"}]},
+    ], "skus": [
+        {"sourceSpecIds": ["12", "22"], "specIds": ["12", "22"],
+         "price": "16.00", "stock": "0", "enabled": False},
+    ]}
+    original = deepcopy(sparse_specs)
+    with pytest.raises(ProductRequestError, match="其他来源记录使用"):
+        apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
+    assert sparse_specs == original
+
+
+def test_structure_cannot_map_one_existing_sku_to_another_value(sparse_specs):
+    structure = {"groups": [
+        {"sourceIndex": 0, "name": "颜色", "values": [{"id": "11", "name": "黑"}, {"id": "12", "name": "白"}]},
+        {"sourceIndex": 1, "name": "尺码", "values": [{"id": "21", "name": "大"}, {"id": "22", "name": "小"}]},
+    ], "skus": [{"sourceSpecIds": ["11", "21"], "specIds": ["12", "21"], "price": "12.00", "stock": "5"}]}
+    with pytest.raises(ProductRequestError, match="不能指向其他规格值"):
+        apply_edit(sparse_specs, "douyin", ProductEdit(expectedVersion=VERSION, specStructure=structure))
