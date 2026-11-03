@@ -145,7 +145,7 @@ function specImageIndex(name: string) {
 function setSpecImageGroup(index: number, value: boolean) {
   if (!canEdit.value) return
   if (value && index !== imageGroupIndex.value) {
-    if (index !== 0 && !specGroups.value[index]?.movable) return
+    if (index !== 0 && !specGroups.value[index]?.movable && !structureDirty.value) return
     const hasOldImages = specGroups.value.some((group, groupIndex) => groupIndex !== index && group.values.some((item) => item.url))
     const note = hasOldImages ? '原规格组的规格图将在保存后移除。' : ''
     if (!window.confirm(`开启后该规格组将置顶展示。${note}`)) return
@@ -253,7 +253,8 @@ function moveSpecGroup(index: number, offset: number) {
   }
   ;[specGroups.value[index], specGroups.value[target]] = [specGroups.value[target], specGroups.value[index]]
   for (const row of skuDrafts.value) [row.specIds[index], row.specIds[target]] = [row.specIds[target], row.specIds[index]]
-  if (imageGroupIndex.value === index) imageGroupIndex.value = target
+  if (!specImageEnabled.value) imageGroupIndex.value = 0
+  else if (imageGroupIndex.value === index) imageGroupIndex.value = target
   else if (imageGroupIndex.value === target) imageGroupIndex.value = index
   reindexGroups()
 }
@@ -694,7 +695,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   @update:model-value="specGroups[axisIndex] && (specGroups[axisIndex].name = $event)" />
                 <span class="product-preview__status"><NSwitch
                   :value="axisIndex === imageGroupIndex && specImageEnabled"
-                  :disabled="!canEdit || !specGroups[axisIndex]?.values.length || (axisIndex !== imageGroupIndex && axisIndex !== 0 && !specGroups[axisIndex]?.movable)"
+                  :disabled="!canEdit || !specGroups[axisIndex]?.values.length || (axisIndex !== imageGroupIndex && axisIndex !== 0 && !specGroups[axisIndex]?.movable && !structureDirty)"
                   :aria-label="`${axis.name}规格图开关`" @update:value="setSpecImageGroup(axisIndex, $event)" />添加规格图</span>
                 <div class="product-preview__actions">
                   <AppButton tone="link" size="small" :disabled="!canStructure || axisIndex === 0" @click="moveSpecGroup(axisIndex, -1)">上移</AppButton>
