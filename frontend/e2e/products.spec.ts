@@ -664,6 +664,8 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
   await fixtures(page)
   let title = '原商品标题', edited = false
   let payload: Record<string, unknown> | null = null
+  await page.route('https://example.test/**', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="gray"/></svg>' }))
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
   } }))
@@ -694,8 +696,17 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
   await dialog.getByRole('button', { name: '更换', exact: true }).click()
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
   await expect(dialog.getByRole('switch', { name: '颜色规格图开关' })).toBeChecked()
-  const skuImage = dialog.getByRole('button', { name: '更换白色规格图片' }).locator('img')
+  const skuImage = dialog.getByRole('img', { name: '白色规格图片' })
   await expect(skuImage).toHaveAttribute('src', 'https://example.test/new-white.jpg')
+  await skuImage.click()
+  const preview = page.locator('.n-image-preview-container')
+  await expect(preview).toBeVisible()
+  await expect(preview.locator('img.n-image-preview')).toHaveAttribute('src', 'https://example.test/new-white.jpg')
+  await preview.locator('.n-image-preview-overlay').click({ position: { x: 10, y: 10 } })
+  await expect(preview).not.toBeVisible()
+  page.once('dialog', (prompt) => prompt.accept('https://example.test/final-white.jpg'))
+  await dialog.getByRole('button', { name: '更换白色规格图片' }).click()
+  await expect(skuImage).toHaveAttribute('src', 'https://example.test/final-white.jpg')
   await dialog.getByRole('textbox', { name: 'SKU 价格' }).fill('25.50')
   await dialog.getByRole('textbox', { name: 'SKU 库存' }).fill('8')
   await dialog.getByRole('textbox', { name: 'SKU 商家编码' }).fill('sku-001')
@@ -703,7 +714,7 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => payload).not.toBeNull()
   expect(payload).toMatchObject({ expectedVersion: 'a'.repeat(64), title: '修改后的商品',
-    specImages: [{ specId: '9007199254740993123', url: 'https://example.test/new-white.jpg' }],
+    specImages: [{ specId: '9007199254740993123', url: 'https://example.test/final-white.jpg' }],
     skus: [{ specIds: ['11', '22'], price: '25.50', stock: 8, merchantCode: 'sku-001', enabled: false }] })
   await expect(dialog.getByText('已修改', { exact: true })).toBeVisible()
 })
@@ -711,6 +722,8 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
 test('切换规格图的组会置顶，图片与对应规格一起保存', async ({ page }) => {
   await fixtures(page)
   let payload: Record<string, unknown> | null = null
+  await page.route('https://example.test/**', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="gray"/></svg>' }))
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false,
   } }))
@@ -742,7 +755,7 @@ test('切换规格图的组会置顶，图片与对应规格一起保存', async
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
   await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).toBeChecked()
-  await expect(dialog.getByRole('button', { name: '更换黑色规格图片' }).locator('img'))
+  await expect(dialog.getByRole('img', { name: '黑色规格图片' }))
     .toHaveAttribute('src', 'https://example.test/black.jpg')
   page.once('dialog', (confirmation) => confirmation.dismiss())
   await dialog.getByRole('switch', { name: '款式规格图开关' }).click()

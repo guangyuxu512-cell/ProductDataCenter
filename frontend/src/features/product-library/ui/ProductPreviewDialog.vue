@@ -582,13 +582,23 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               </div>
               <div class="product-preview__values">
                 <div v-for="value in axis.values" :key="value" class="product-preview__value">
-                  <button v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0"
-                    type="button" class="product-preview__spec-image" :disabled="!canEdit"
-                    :aria-label="`更换${value}规格图片`" @click="changeImage('sku', specImageIndex(value))">
-                    <img v-if="specImages[specImageIndex(value)]?.url" :src="specImages[specImageIndex(value)].url" :alt="`${value}规格图片`" />
-                    <span v-else>＋</span>
-                  </button>
+                  <div v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0"
+                    class="product-preview__spec-image">
+                    <NImage v-if="specImages[specImageIndex(value)]?.url"
+                      :key="imageRetries[`spec:${axisIndex}:${specImageIndex(value)}`] ?? 0"
+                      :src="imageSource(`spec:${axisIndex}:${specImageIndex(value)}`, specImages[specImageIndex(value)].url)"
+                      :preview-src="specImages[specImageIndex(value)].url" :alt="`${value}规格图片`"
+                      :img-props="{ referrerpolicy: 'no-referrer' }" :previewed-img-props="{ referrerpolicy: 'no-referrer' }" object-fit="contain"
+                      @error="fallbackImage(`spec:${axisIndex}:${specImageIndex(value)}`, specImages[specImageIndex(value)].url)">
+                      <template #error><AppButton size="small" @click.stop="retryImage(`spec:${axisIndex}:${specImageIndex(value)}`)">重试</AppButton></template>
+                    </NImage>
+                    <button v-else type="button" class="product-preview__spec-image-add" :disabled="!canEdit"
+                      :aria-label="`更换${value}规格图片`" @click="changeImage('sku', specImageIndex(value))">＋</button>
+                  </div>
                   <AppInput :model-value="value" :aria-label="`${axis.name}规格值`" readonly />
+                  <AppButton v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0 && specImages[specImageIndex(value)]?.url"
+                    tone="link" size="small" :disabled="!canEdit" :aria-label="`更换${value}规格图片`"
+                    @click="changeImage('sku', specImageIndex(value))">更换</AppButton>
                   <AppButton tone="link" size="small" disabled>删除</AppButton>
                 </div>
                 <AppButton size="small" disabled>添加规格值</AppButton>
@@ -636,8 +646,9 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 .product-preview__axis-heading > :first-child { width:150px; }
 .product-preview__axis-heading > .product-preview__actions { margin-left:auto; }
 .product-preview__value > :deep(.n-input) { width:140px; }
-.product-preview__spec-image { width:40px; height:40px; padding:0; border:1px dashed var(--border-subtle); border-radius:var(--radius-card); background:transparent; cursor:pointer; }
-.product-preview__spec-image img { width:100%; height:100%; object-fit:contain; }
+.product-preview__spec-image { display:grid; place-items:center; width:40px; height:40px; border:1px dashed var(--border-subtle); border-radius:var(--radius-card); }
+.product-preview__spec-image :deep(.n-image),.product-preview__spec-image :deep(img) { width:100%; height:100%; object-fit:contain; }
+.product-preview__spec-image-add { width:100%; height:100%; padding:0; border:0; background:transparent; cursor:pointer; }
 .product-preview__status { display:flex; align-items:center; gap:var(--space-2); color:var(--text-secondary); }
 .product-preview__content :deep(.product-preview__sku) { display:flex; align-items:center; gap:var(--space-3); }
 .product-preview__content :deep(.product-preview__sku .deferred-preview-thumbnail) { width:64px; height:64px; flex:0 0 64px; }
