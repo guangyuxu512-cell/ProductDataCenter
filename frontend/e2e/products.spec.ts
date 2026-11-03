@@ -538,6 +538,7 @@ test('直接展开完整类目并手动更新缓存，切换商品后不沿用�
   await dialog.getByRole('textbox', { name: '抖店类目' }).click()
   const categoryDialog = page.getByRole('dialog', { name: '选择抖店类目' })
   await expect(categoryDialog.locator('.category-picker__column')).toHaveCount(4)
+  await expect.poll(async () => (await categoryDialog.boundingBox())!.width).toBeLessThanOrEqual(960)
   await expect(categoryDialog.getByRole('button', { name: '确认' })).toBeDisabled()
   await page.getByRole('button', { name: '餐饮厨具', exact: true }).click()
   await page.getByRole('button', { name: '餐具', exact: true }).click()
@@ -667,7 +668,7 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
     groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
   } }))
   await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
-    version: 'a'.repeat(64), specImageGroup: '颜色',
+    version: 'a'.repeat(64), specImageGroup: '',
     specImages: [{ id: '9007199254740993123', name: '白色', url: 'https://example.test/white.jpg' }],
     skus: [{ skuId: 'sku-1', specIds: ['11', '22'], price: '19.99', stock: 999, enabled: true, merchantCode: '' }],
   } }))
@@ -692,6 +693,7 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
   page.once('dialog', (prompt) => prompt.accept('https://example.test/new-white.jpg'))
   await dialog.getByRole('button', { name: '更换', exact: true }).click()
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  await expect(dialog.getByRole('switch', { name: '颜色规格图开关' })).toBeChecked()
   const skuImage = dialog.getByRole('button', { name: '更换白色规格图片' }).locator('img')
   await expect(skuImage).toHaveAttribute('src', 'https://example.test/new-white.jpg')
   await dialog.getByRole('textbox', { name: 'SKU 价格' }).fill('25.50')
@@ -704,4 +706,58 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
     specImages: [{ specId: '9007199254740993123', url: 'https://example.test/new-white.jpg' }],
     skus: [{ specIds: ['11', '22'], price: '25.50', stock: 8, merchantCode: 'sku-001', enabled: false }] })
   await expect(dialog.getByText('已修改', { exact: true })).toBeVisible()
+})
+
+test('切换规格图的组会置顶，图片与对应规格一起保存', async ({ page }) => {
+  await fixtures(page)
+  let payload: Record<string, unknown> | null = null
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '',
+    specImages: [{ id: '11', name: '黑色', url: 'https://example.test/black.jpg' },
+      { id: '12', name: '白色', url: '' }],
+    specGroups: [
+      { index: 0, name: '规格（2）', movable: false, values: [{ id: '11', name: '黑色', url: 'https://example.test/black.jpg' },
+        { id: '12', name: '白色', url: '' }] },
+      { index: 1, name: '款式', movable: true, values: [{ id: '21', name: '长款', url: '' },
+        { id: '22', name: '短款', url: '' }] },
+    ],
+    skus: [{ skuId: 'sku-1', specIds: ['11', '21'], price: '19.99', stock: 999, enabled: true, merchantCode: '' },
+      { skuId: 'sku-2', specIds: ['12', '22'], price: '19.99', stock: 0, enabled: false, merchantCode: '' }],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ json: { version: 'b'.repeat(64) } })
+    }
+    return route.fulfill({ json: { product: product(firstId),
+      skus: [{ sku_id: 'sku-1', sku_name: '规格: 黑色 / 款式: 长款', current_price: '19.99', image_rel_path: '', sort_order: 0 },
+        { sku_id: 'sku-2', sku_name: '规格: 白色 / 款式: 短款', current_price: '19.99', image_rel_path: '', sort_order: 1 }],
+      images: [] } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).toBeChecked()
+  await expect(dialog.getByRole('button', { name: '更换黑色规格图片' }).locator('img'))
+    .toHaveAttribute('src', 'https://example.test/black.jpg')
+  page.once('dialog', (confirmation) => confirmation.dismiss())
+  await dialog.getByRole('switch', { name: '款式规格图开关' }).click()
+  await expect(dialog.locator('.product-preview__axis').first().getByRole('textbox', { name: '规格类型' })).toHaveValue('规格')
+  await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).toBeChecked()
+  page.once('dialog', (confirmation) => confirmation.accept())
+  await dialog.getByRole('switch', { name: '款式规格图开关' }).click()
+  await expect(dialog.locator('.product-preview__axis').first().getByRole('textbox', { name: '规格类型' })).toHaveValue('款式')
+  await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).not.toBeChecked()
+  page.once('dialog', (prompt) => prompt.accept('https://example.test/long.jpg'))
+  await dialog.getByRole('button', { name: '更换长款规格图片' }).click()
+  await dialog.getByRole('tab', { name: '图文信息' }).click()
+  await expect(dialog.getByText('长款', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).not.toBeNull()
+  expect(payload).toMatchObject({ specImageGroupIndex: 1, specImages: [{ specId: '21', url: 'https://example.test/long.jpg' }] })
+  expect(payload).not.toHaveProperty('skus')
 })

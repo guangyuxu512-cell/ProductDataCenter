@@ -80,6 +80,7 @@ function confirm() {
     <template #suffix><span aria-hidden="true">⌄</span></template>
   </NInput>
   <NModal :show="show" preset="card" title="选择抖店类目" aria-label="选择抖店类目" class="category-picker" :to="APP_OVERLAY_HOST_SELECTOR"
+    :style="{ width: 'min(960px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 48px)' }"
     :mask-closable="false" @update:show="!$event && close()">
     <div class="category-picker__header"><NText depth="3">选择完整类目后确认；已读取的类目优先使用缓存</NText>
       <AppButton size="small" :loading="busy" @click="loadRoot(true)">更新类目</AppButton>
@@ -94,7 +95,7 @@ function confirm() {
         <div class="category-picker__list">
           <button v-for="item in visibleItems(columnNumber - 1)" :key="item.id" type="button" class="category-picker__item"
             :class="{ 'category-picker__item--active': path[columnNumber - 1]?.id === item.id }"
-            :disabled="!item.enabled || busy" @click="choose(item, columnNumber - 1)">
+            :disabled="!item.enabled || busy" :title="item.name" @click="choose(item, columnNumber - 1)">
             <span>{{ item.name }}</span><span v-if="!item.isLeaf" aria-hidden="true">›</span>
           </button>
           <NText v-if="columns[columnNumber - 1] && !visibleItems(columnNumber - 1).length" depth="3">没有匹配的类目</NText>
@@ -113,11 +114,10 @@ function confirm() {
 </template>
 
 <style scoped>
-.category-picker { width:min(1200px,calc(100vw - 48px)); max-height:calc(100vh - 48px); }
 .category-picker__header,.category-picker__footer { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); }
 .category-picker__header { margin-bottom:var(--space-3); }
 .category-picker__columns { position:relative; display:flex; height:min(420px,50vh); min-height:220px; overflow-x:auto; border:1px solid var(--border-subtle); }
-.category-picker__column { display:flex; flex-direction:column; flex:1 0 25%; min-width:200px; border-right:1px solid var(--border-subtle); }
+.category-picker__column { display:flex; flex-direction:column; flex:0 0 25%; min-width:180px; border-right:1px solid var(--border-subtle); }
 .category-picker__search { width:calc(100% - 24px); margin:var(--space-3); flex:none; }
 .category-picker__list { flex:1; min-height:0; overflow-y:auto; }
 .category-picker__item { display:flex; justify-content:space-between; gap:var(--space-2); width:100%; padding:var(--space-2) var(--space-3); text-align:left; border:0; background:transparent; color:var(--text-primary); cursor:pointer; }
