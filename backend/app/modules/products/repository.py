@@ -5,11 +5,14 @@ import json
 import re
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
+from uuid import uuid4
 
 from sqlalchemy import Connection, Engine, text
 
 from .queries import ProductListOptions, build_product_list_queries
+from .pdd_categories import source_category_path
 from .source_attributes import source_attributes
+from .manual import manual_package
 from .editing import _sku_key, apply_edit, move_spec_image_group
 from .errors import ProductEditConflict, ProductNotFound, ProductRequestError
 
@@ -55,6 +58,18 @@ class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
+    def create_manual(self, title: str) -> str:
+        product_id = "manual:" + str(uuid4().int)
+        package, sku_id = manual_package(title)
+        with self.engine.begin() as conn:
+            conn.execute(text("""INSERT INTO products
+                (product_id, source_platform, source_product_id, title, title_status, sku_count, captured_at, uu_json)
+                VALUES (:id, 'douyin', NULL, :title, '手动创建', 1, now(), CAST(:package AS jsonb))"""),
+                {"id": product_id, "title": title, "package": json.dumps(package, ensure_ascii=False)})
+            conn.execute(text("""INSERT INTO product_skus(product_id, sku_id, sku_name, sort_order)
+                VALUES (:id, :sku, '规格: 默认', 0)"""), {"id": product_id, "sku": sku_id})
+        return product_id
+
     def list(self, options: ProductListOptions) -> dict:
         listing, count = build_product_list_queries(options)
         with self.engine.connect().execution_options(
@@ -62,8 +77,15 @@ class ProductRepository:
         ) as conn, conn.begin():
             items = conn.exec_driver_sql(*listing.dbapi()).mappings().all()
             total = conn.exec_driver_sql(*count.dbapi()).scalar_one() if count else None
-        return {"items": items, "total": total, "totalIncluded": count is not None,
+        return {"items": [self._display_source_category(item) for item in items],
+                "total": total, "totalIncluded": count is not None,
                 "limit": options.limit, "offset": options.offset}
+
+    @staticmethod
+    def _display_source_category(row) -> dict:
+        product = dict(row)
+        product["category_path"] = source_category_path(product["source_platform"], product["category_path"] or "")
+        return product
 
     def detail(self, product_id: str) -> dict | None:
         listing, _ = build_product_list_queries(ProductListOptions(product_id=product_id, include_total=False))
@@ -76,6 +98,7 @@ class ProductRepository:
             product = conn.exec_driver_sql(*Query(sql, listing.params).dbapi()).mappings().first()
             if product is None:
                 return None
+            product = self._display_source_category(product)
             source_category_id = None
             attributes = []
             target_category, target_attributes = [], []

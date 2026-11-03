@@ -72,6 +72,159 @@ def test_exact_id_and_second_precision(engine):
     assert "uu_json" not in detail["product"]
 
 
+def test_pdd_category_display_does_not_change_saved_ids(engine):
+    product_id = "pdd:3760269504500859111"
+    with engine.begin() as conn:
+        original = conn.execute(text("SELECT category_path FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one()
+        conn.execute(text("UPDATE products SET category_path=:path WHERE product_id=:id"),
+                     {"id": product_id, "path": "9323 → 9481 → 10417 → 11366"})
+    try:
+        repo = ProductRepository(engine)
+        expected = "五金工具 → 手动工具 → 扳手 → 梅花扳手"
+        assert repo.detail(product_id)["product"]["category_path"] == expected
+        row = next(item for item in repo.list(parse_product_list_options({"productId": product_id}))["items"]
+                   if item["product_id"] == product_id)
+        assert row["category_path"] == expected
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT category_path FROM products WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == "9323 → 9481 → 10417 → 11366"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET category_path=:path WHERE product_id=:id"),
+                         {"id": product_id, "path": original})
+
+
+def test_manual_product_can_be_edited_and_read_by_rpa(engine, tmp_path):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.products.api import get_service
+    from app.modules.products.schemas import ProductEdit
+
+    repo = ProductRepository(engine)
+    product_id = repo.create_manual("手动新建商品")
+    try:
+        snapshot = repo.edit_snapshot(product_id)
+        spec_id = snapshot["specGroups"][0]["values"][0]["id"]
+        repo.save_edit(product_id, ProductEdit(expectedVersion=snapshot["version"],
+            category=[{"id": "100", "name": "家居"}], mainImages=["https://fixture.invalid/main.png"],
+            skus=[{"specIds": [spec_id], "price": "9.90", "stock": 5, "enabled": True}]))
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_settings] = lambda: settings
+        app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            response = client.get(f"/rpa/v1/products/{product_id}/uu", headers={"Authorization": "Bearer rpa-test"})
+        assert response.status_code == 200
+        package = response.json()
+        assert package["goodsInfo"]["goodsName"] == "手动新建商品"
+        assert package["goodsInfo"]["catId1"] == "100"
+        assert package["goodsSkuInfo"]["spec_detail"]["value"][0]["stock_info"]["stock_num"] == 5
+        assert repo.detail(product_id)["product"]["title_status"].startswith("手动创建")
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
+def test_automatic_precheck_tracks_committed_package_revisions(engine):
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    repo, queue = ProductRepository(engine), PrecheckQueue(engine)
+    product_id = repo.create_manual("自动预检隔离商品")
+    try:
+        initial = queue.results([product_id])[0]
+        assert initial["state"] == "pending" and initial["result"] is None
+        first = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET uu_json=uu_json || '{\"testRevision\": 2}'::jsonb WHERE product_id=:id"),
+                         {"id": product_id})
+        assert queue.complete(first, {"status": "ready", "issues": []}) is False
+        queue.retry(first)
+        second = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert second["revision"] == first["revision"] + 1
+        assert queue.complete(second, {"productId": product_id, "status": "needs_completion", "issues": ["商品主图"]})
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET uu_json=uu_json WHERE product_id=:id"), {"id": product_id})
+        final = queue.results([product_id])[0]
+        assert final["state"] == "done" and final["result"]["issues"] == ["商品主图"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+        assert queue.results([product_id]) == []
+
+
+def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engine, tmp_path):
+    from uuid import uuid4
+    from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession
+    from app.modules.prechecks.queue import PrecheckQueue
+    from app.modules.prechecks.runner import PrecheckRunner
+
+    product_id = "pdd:1234567890123456789"
+    shop_id = uuid4()
+    title = "完整拼多多标题" * 4
+    image = "https://fixture.invalid/main.png"
+    package = {"product": {"title": title}, "images": {"main": [{"url": image}]}}
+    settings = Settings(data_root=tmp_path, douyin_category_lookup_enabled=True)
+    class Central:
+        def list_shops(self):
+            return [CentralShop(shop_id=shop_id, display_name="隔离店铺", platform="douyin", session_status="valid")]
+        def read_session(self, requested, expected_platform):
+            return CentralShopSession(shop_id=requested, platform=expected_platform, session_version=1,
+                cookies=(CentralCookie(name="sessionid", value="synthetic", domain=".jinritemai.com"),))
+    class Lookup:
+        def __init__(self): self.settings = settings
+        def predict(self, session, actual_title, image_url):
+            assert actual_title == title and image_url == image
+            return {"recommendedId": "102", "candidates": [{"id": "102", "name": "收纳架", "path": "居家 > 收纳架",
+                "selectable": True, "levels": [{"id": "100", "name": "居家"}, {"id": "102", "name": "收纳架"}]}]}
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""INSERT INTO products(product_id, source_platform, title, captured_at, uu_json)
+                VALUES (:id, 'pinduoduo', :title, now(), CAST(:package AS jsonb))"""),
+                {"id": product_id, "title": title, "package": json.dumps(package, ensure_ascii=False)})
+            conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,sort_order)
+                VALUES (:id,'sku-1','默认',9.90,0)"""), {"id": product_id})
+            conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+                VALUES (:id,'main',0,'',:image)"""), {"id": product_id, "image": image})
+        queue = PrecheckQueue(engine)
+        claim = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        runner = PrecheckRunner(engine, settings)
+        runner.central, runner.lookup = Central(), Lookup()
+        runner.process(claim)
+        record = queue.results([product_id])[0]
+        assert record["state"] == "done" and record["result"]["status"] == "needs_category"
+        assert record["result"]["prediction"]["recommendedId"] == "102"
+        assert ProductRepository(engine).detail(product_id)["targetCategory"] == []
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
+def test_product_writes_do_not_require_direct_queue_insert_permission(engine):
+    role = "pdc_precheck_writer_test"
+    product_id = "pdd:1234567890123456790"
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN")
+            conn.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {role}")
+            conn.exec_driver_sql(f"GRANT INSERT ON products TO {role}")
+            assert not conn.execute(text("SELECT has_table_privilege(:role, 'product_prechecks', 'INSERT')"),
+                                    {"role": role}).scalar_one()
+            conn.exec_driver_sql(f"SET LOCAL ROLE {role}")
+            conn.execute(text("""INSERT INTO products(product_id,source_platform,title,uu_json)
+                VALUES (:id,'pinduoduo','权限测试','{}'::jsonb)"""), {"id": product_id})
+            conn.exec_driver_sql("RESET ROLE")
+            assert conn.execute(text("SELECT state FROM product_prechecks WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == "pending"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+            if conn.execute(text("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=:role)"), {"role": role}).scalar_one():
+                conn.exec_driver_sql(f"DROP OWNED BY {role}")
+                conn.exec_driver_sql(f"DROP ROLE {role}")
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, tmp_path, legacy):
     from uuid import uuid4

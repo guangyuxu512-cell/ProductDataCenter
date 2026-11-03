@@ -335,7 +335,9 @@ def normalize_candidates(value) -> list[dict]:
 
 def normalize_fields(items: list) -> list[dict]:
     fields = []
-    for item in items[:1000]:
+    # The platform response is already capped by MAX_BYTES. Do not silently
+    # discard later attributes or options from an otherwise valid response.
+    for item in items:
         if not isinstance(item, dict) or item.get("hidden") is True or item.get("available") is False:
             continue
         key = item.get("id")
@@ -353,5 +355,5 @@ def normalize_fields(items: list) -> list[dict]:
             if isinstance(name, str) and isinstance(val, (str, int)) and not isinstance(val, bool):
                 options.append({"label": name[:200], "value": str(val)[:200]})
         fields.append({"id": str(key)[:100], "label": label[:200], "required": item.get("required") in (True, 1),
-                       "options": options[:500]})
+                       "options": options})
     return fields

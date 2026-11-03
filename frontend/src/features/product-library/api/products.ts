@@ -1,5 +1,6 @@
 import { http } from '@/shared/api/http-client'
 import type { Capabilities, NasDetail, ProductFilters, ProductGroup, ProductListResponse } from '../model/nas-contracts'
+import type { AutoPrecheck } from '../model/precheck'
 
 const EXACT_PRODUCT_ID = /^(?:\d{8,}|[a-z][a-z0-9_-]{1,63}:\d{8,})$/i
 
@@ -29,6 +30,14 @@ export async function fetchEditSnapshot(id: string) {
 
 export async function saveProduct(id: string, patch: ProductPatch) {
   return (await http.patch<{ version: string }>(`/products/${encodeURIComponent(id)}`, patch)).data
+}
+
+export async function createManualProduct(title: string) {
+  return (await http.post<{ productId: string }>('/products', { title })).data
+}
+
+export async function fetchAutoPrechecks(productIds: string[], signal?: AbortSignal) {
+  return (await http.post<{ items: AutoPrecheck[] }>('/prechecks/query', { productIds }, { signal })).data.items
 }
 
 export function productListParams(filters: ProductFilters, includeTotal: boolean) {

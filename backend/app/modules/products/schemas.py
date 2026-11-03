@@ -140,6 +140,7 @@ class Capabilities(BaseModel):
     productEdit: bool = False
     importProducts: bool = False
     categoryLookup: bool = False
+    autoPrecheck: bool = False
 
 
 class CategoryPart(BaseModel):
@@ -255,6 +256,18 @@ class StructureSku(BaseModel):
 class SpecStructureEdit(BaseModel):
     groups: list[StructureGroup] = Field(min_length=1, max_length=3)
     skus: list[StructureSku] = Field(min_length=1, max_length=2000)
+
+
+class ManualProductCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=10000)
+
+    @field_validator("title")
+    @classmethod
+    def valid_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value or sum(2 if ord(character) > 127 else 1 for character in value) > 60:
+            raise ValueError("商品标题不能为空，长度不能超过 60")
+        return value
 
 
 class ProductEdit(BaseModel):
