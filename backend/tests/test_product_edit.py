@@ -72,7 +72,29 @@ def test_pdd_title_and_images_preserve_source_shape():
     assert result["images"]["main"][0]["tag"] == 1
     assert result["skus"][0]["onSale"] is False
     with pytest.raises(ProductRequestError):
-        apply_edit(package, "pinduoduo", ProductEdit(expectedVersion=VERSION, category=[{"id": "1", "name": "类目"}]))
+        apply_edit(package, "pinduoduo", ProductEdit(expectedVersion=VERSION,
+            attributes=[{"id": "8", "name": "材质", "values": [{"valueId": "3", "name": "棉"}]}]))
+
+
+def test_pdd_target_category_and_attributes_save_without_losing_source_data():
+    package = {"product": {"title": "拼多多商品", "categoryIds": ["7"], "properties": [{"key": "材质", "values": ["棉"]}]},
+               "images": {"main": [{"url": "https://example.test/a"}], "detail": []},
+               "skus": [{"skuId": "123", "onSale": False}], "unknown": {"keep": True}}
+    original = deepcopy(package)
+    edit = ProductEdit(expectedVersion=VERSION, category=[{"id": "1", "name": "家居"}, {"id": "2", "name": "收纳"}],
+                       attributes=[{"id": "8", "name": "材质", "values": [{"valueId": "3", "name": "棉"}]}])
+    saved = apply_edit(package, "pinduoduo", edit)
+    assert package == original
+    assert saved["product"] == original["product"] and saved["skus"] == original["skus"]
+    assert saved["unknown"] == original["unknown"]
+    assert saved["douyinTarget"]["category"][-1] == {"id": "2", "name": "收纳"}
+    assert saved["douyinTarget"]["attributes"]["8"]["values"] == [{"valueId": "3", "name": "棉"}]
+    same = apply_edit(saved, "pinduoduo", ProductEdit(expectedVersion=VERSION,
+        category=[{"id": "1", "name": "家居"}, {"id": "2", "name": "收纳用品"}]))
+    assert same["douyinTarget"]["attributes"] == saved["douyinTarget"]["attributes"]
+    changed = apply_edit(saved, "pinduoduo", ProductEdit(expectedVersion=VERSION,
+        category=[{"id": "9", "name": "新类目"}]))
+    assert changed["douyinTarget"]["attributes"] == {} and changed["product"] == original["product"]
 
 
 def test_invalid_title_and_image_are_rejected():
