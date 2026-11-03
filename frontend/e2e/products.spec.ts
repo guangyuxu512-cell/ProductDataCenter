@@ -721,6 +721,44 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
   await expect(material).toHaveValue('塑料')
 })
 
+test('拼多多无推荐时可以手动选择类目并保存', async ({ page }) => {
+  await fixtures(page)
+  const shop = '00000000-0000-4000-8000-000000000111'
+  let payload: Record<string, unknown> | null = null
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '', specImages: [], skus: [],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON() as Record<string, unknown>
+      return route.fulfill({ json: { version: 'b'.repeat(64) } })
+    }
+    return route.fulfill({ json: { product: product(firstId, 'pinduoduo'), skus: [], images: [] } })
+  })
+  await page.route('**/api/v1/category-lookup/predict', (route) => route.fulfill({ json: {
+    status: 'no_recommendation', sourceVersion: 'a'.repeat(64), missing: [], shopId: shop,
+    recommendedId: null, candidates: [],
+  } }))
+  await page.route('**/api/v1/category-lookup/tree', (route) => route.fulfill({ json: {
+    shopId: shop, parentId: '0', items: [{ id: '100', name: '收纳用品', isLeaf: true, enabled: true }], fromCache: true,
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: '预检类目' }).click()
+  await expect(dialog.getByText('未找到推荐类目，请手动选择')).toBeVisible()
+  await dialog.getByRole('textbox', { name: '抖店类目' }).click()
+  const categoryDialog = page.getByRole('dialog', { name: '选择抖店类目' })
+  await categoryDialog.getByRole('button', { name: '收纳用品', exact: true }).click()
+  await categoryDialog.getByRole('button', { name: '确认' }).click()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).toMatchObject({ expectedVersion: 'a'.repeat(64),
+    category: [{ id: '100', name: '收纳用品' }] })
+})
+
 test('编辑商品保存原包字段，规格图在两个页签共用', async ({ page }) => {
   await fixtures(page)
   let title = '原商品标题', edited = false
