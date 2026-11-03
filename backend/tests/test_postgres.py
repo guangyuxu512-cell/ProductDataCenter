@@ -72,7 +72,8 @@ def test_exact_id_and_second_precision(engine):
     assert "uu_json" not in detail["product"]
 
 
-def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, tmp_path):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, tmp_path, legacy):
     from uuid import uuid4
     from unittest.mock import patch
     from fastapi.testclient import TestClient
@@ -85,6 +86,8 @@ def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, 
     product_id = "pdd:3760269504500859111"
     title = "拼多多完整标题" * 12
     package = {"product": {"title": title}, "images": {"main": [{"url": "https://fixture.invalid/main.png"}]}}
+    if legacy:
+        package = {"goodsInfo": {"goodsName": title, "goodsImageList": ["https://fixture.invalid/main.png"]}}
     with engine.begin() as conn:
         original = conn.execute(text("SELECT uu_json::text FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one()
         conn.execute(text("UPDATE products SET uu_json=CAST(:package AS jsonb) WHERE product_id=:id"),
