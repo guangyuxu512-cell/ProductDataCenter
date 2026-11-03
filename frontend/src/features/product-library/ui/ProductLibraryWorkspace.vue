@@ -9,7 +9,8 @@ import { ContextSwitchBar, DataTable, FilterBar, FilterField, FormDialog,
 import { AppButton, AppDialog, AppInput, AppSelect } from '@/shared/ui'
 import { useProductLibrary } from '../model/useProductLibrary'
 import { capturedTime, platformCode, priceRange } from '../model/format'
-import { createManualProduct, exportProducts, fetchAutoPrechecks, moveProducts } from '../api/products'
+import { exportProducts, fetchAutoPrechecks, moveProducts } from '../api/products'
+import type { LibraryProduct } from '../model/contracts'
 import type { ProductRow } from '../model/nas-contracts'
 import { batchPrecheck, type PrecheckResult } from '../model/precheck'
 import ProductPreviewDialog from './ProductPreviewDialog.vue'
@@ -19,7 +20,8 @@ const { filters, selected, detailId, list, groups, capabilities, detail, total, 
 const message = useMessage()
 const keyword = ref(''), capturedFrom = ref<string | null>(null), capturedTo = ref<string | null>(null)
 const managerOpen = ref(false), moveOpen = ref(false), moveTarget = ref('ungrouped'), moveIds = ref<string[]>([]), busy = ref(false)
-const manualOpen = ref(false), manualTitle = ref('')
+const manualOpen = ref(false), manualSeed = ref('')
+const manualProduct = ref<LibraryProduct | null>(null)
 const precheckOpen = ref(false), precheckRunning = ref(false)
 const precheckIds = ref<string[]>([]), precheckResults = ref<Record<string, PrecheckResult>>({})
 const rows = computed(() => list.data.value?.items ?? [])
@@ -97,19 +99,23 @@ async function groupsChanged() {
   }
 }
 
-async function createManual() {
-  const title = manualTitle.value.trim()
-  const length = Array.from(title).reduce((sum, char) => sum + ((char.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0)
-  if (!title || length > 60) { message.error('商品标题不能为空，长度不能超过 60'); return }
-  busy.value = true
-  try {
-    const created = await createManualProduct(title)
-    manualOpen.value = false; manualTitle.value = ''
-    await refresh()
-    detailId.value = created.productId
-    message.success('商品草稿已创建')
-  } catch (error) { message.error(errorText(error)) }
-  finally { busy.value = false }
+function openManual() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  manualSeed.value = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
+  const skuId = `local-${manualSeed.value}-sku`
+  manualProduct.value = { id: 'manual-draft', productId: '', platform: 'douyin', title: '', groupId: null,
+    groupName: null, category: null, currentPrice: null, collectedAt: '', sourceUrl: null, mainImageUrl: null,
+    detailImageUrls: [], specDimensions: [], skus: [{ draftKey: skuId, sourceSkuId: null, name: '规格: 默认',
+      currentPrice: null, stockLabel: null, imageUrl: null, specValues: {} }], attributes: [],
+    mockEditedAt: null, packageFiles: [], history: [] }
+  manualOpen.value = true
+}
+
+async function manualCreated(id: string) {
+  manualOpen.value = false
+  manualProduct.value = null
+  await refresh()
+  detailId.value = id
 }
 
 async function startPrecheck() {
@@ -195,7 +201,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       <TableToolbar density="compact">
         <span v-if="selected.length">已选 {{ selected.length }} 项</span>
         <template #actions>
-          <AppButton size="small" :disabled="busy || !capabilities.data.value?.productEdit" @click="manualOpen = true">手动新建商品</AppButton>
+          <AppButton size="small" :disabled="busy || !capabilities.data.value?.productEdit" @click="openManual">手动新建商品</AppButton>
           <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出商品数据包</AppButton>
           <AppButton size="small" :disabled="!selected.length || precheckRunning || !capabilities.data.value?.categoryLookup" @click="startPrecheck">批量预检</AppButton>
           <AppButton v-if="precheckIds.length" size="small" @click="precheckOpen = true">预检结果 {{ Object.keys(precheckResults).length }}/{{ precheckIds.length }}</AppButton>
@@ -225,9 +231,10 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       @retry="detail.refetch()"
       @export="download([$event.id])" @group="openMove([$event.id])" />
     <ProductGroupManager v-model:show="managerOpen" :groups="groupItems" :writable="canWriteGroups" @changed="groupsChanged" />
-    <FormDialog v-model:show="manualOpen" title="手动新建商品" submit-text="创建" :submitting="busy" @submit="createManual">
-      <NFormItem label="商品标题" required><AppInput v-model="manualTitle" aria-label="新商品标题" /></NFormItem>
-    </FormDialog>
+    <ProductPreviewDialog :show="manualOpen" :product="manualProduct" :manual-seed="manualSeed"
+      creating :editable="capabilities.data.value?.productEdit === true"
+      :category-lookup-enabled="capabilities.data.value?.categoryLookup === true"
+      @update:show="manualOpen = $event" @created="manualCreated" />
     <AppDialog v-model:show="precheckOpen" title="批量预检" size="lg" positive-text="关闭" :show-negative="false" @confirm="precheckOpen = false">
       <p>已完成 {{ Object.keys(precheckResults).length }} / {{ precheckIds.length }}</p>
       <p>检查标题、主图、SKU 价格及已选类目的必填属性。</p>

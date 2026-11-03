@@ -32,8 +32,8 @@ export async function saveProduct(id: string, patch: ProductPatch) {
   return (await http.patch<{ version: string }>(`/products/${encodeURIComponent(id)}`, patch)).data
 }
 
-export async function createManualProduct(title: string) {
-  return (await http.post<{ productId: string }>('/products', { title })).data
+export async function createManualProduct(title: string, draftSeed?: string, edit?: ProductPatch) {
+  return (await http.post<{ productId: string }>('/products', { title, draftSeed, edit })).data
 }
 
 export async function fetchAutoPrechecks(productIds: string[], signal?: AbortSignal) {

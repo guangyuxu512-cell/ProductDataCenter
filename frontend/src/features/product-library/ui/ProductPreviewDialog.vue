@@ -10,7 +10,7 @@ import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
 import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictProductCategory,
   type CategoryAttribute, type CategoryTreeItem, type PredictedCategory } from '../api/category-lookup'
-import { fetchEditSnapshot, saveProduct, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
+import { createManualProduct, fetchEditSnapshot, saveProduct, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
@@ -32,12 +32,15 @@ const props = withDefaults(defineProps<{
   groupable?: boolean
   categoryLookupEnabled?: boolean
   editable?: boolean
+  creating?: boolean
+  manualSeed?: string
   batchPrediction?: CategoryPrediction
   autoResult?: AutoPrecheck
   navigationItems?: ReadonlyArray<{ id: string; title: string; subtitle: string; imageUrl: string | null }>
 }>(), {
   loading: false, error: null, canPrevious: false, canNext: false,
-  positionLabel: '', exportable: true, groupable: true, categoryLookupEnabled: false, editable: false, navigationItems: () => [],
+  positionLabel: '', exportable: true, groupable: true, categoryLookupEnabled: false, editable: false,
+  creating: false, manualSeed: '', navigationItems: () => [],
 })
 const emit = defineEmits<{
   'update:show': [value: boolean]
@@ -47,6 +50,7 @@ const emit = defineEmits<{
   navigate: [direction: 'previous' | 'next']
   'navigate-to': [id: string]
   saved: []
+  created: [id: string]
 }>()
 
 const message = useMessage()
@@ -107,6 +111,15 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
   draftDetail.value = [...product.detailImageUrls]
   initialMain.value = [...draftMain.value]; initialDetail.value = [...draftDetail.value]
   if (!props.editable) return
+  if (props.creating) {
+    const specId = `local-${props.manualSeed}-spec`
+    const specImages = [{ id: specId, name: '默认', url: '' }]
+    setEditSnapshot({ version: '0'.repeat(64), specImageGroup: '规格', specImages,
+      specGroups: [{ index: 0, name: '规格', values: specImages, movable: false }],
+      skus: [{ skuId: `local-${props.manualSeed}-sku`, specIds: [specId], price: '', stock: null,
+        enabled: false, merchantCode: '' }] })
+    return
+  }
   editBusy.value = true
   void fetchEditSnapshot(product.id).then((result) => {
     if (request !== editRequest) return
@@ -322,11 +335,11 @@ function moveImage(kind: 'main' | 'detail', index: number, offset: number) {
 async function submitEdit() {
   const product = props.product
   if (!product || !canEdit.value || !dirty.value) return
-  if (draftTitle.value !== initialTitle.value && (titleLength.value > 60 || !draftTitle.value.trim())) {
+  if ((props.creating || draftTitle.value !== initialTitle.value) && (titleLength.value > 60 || !draftTitle.value.trim())) {
     message.error('商品标题不能为空，长度不能超过 60'); tab.value = 'base'; return
   }
   const patch: ProductPatch = { expectedVersion: editVersion.value }
-  if (draftTitle.value !== initialTitle.value) patch.title = draftTitle.value
+  if (props.creating || draftTitle.value !== initialTitle.value) patch.title = draftTitle.value.trim()
   if (selectedParts.value) patch.category = selectedParts.value.map(({ id, name }) => ({ id, name }))
   if (JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value)) patch.mainImages = [...draftMain.value]
   if (JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value)) patch.detailImages = [...draftDetail.value]
@@ -405,6 +418,12 @@ async function submitEdit() {
   })
   saving.value = true
   try {
+    if (props.creating) {
+      const result = await createManualProduct(draftTitle.value.trim(), props.manualSeed, patch)
+      message.success('商品已创建')
+      emit('created', result.productId)
+      return
+    }
     const result = await saveProduct(product.id, patch)
     editVersion.value = result.version; initialTitle.value = draftTitle.value
     message.success('商品已保存')
@@ -471,8 +490,8 @@ async function loadAttributes(refresh = false) {
   categoryBusy.value = true; categoryError.value = false
   try {
     const result = categoryShop.value
-      ? await fetchCategoryAttributes(categoryShop.value, categoryId, product.title, refresh)
-      : await fetchOriginalCategoryAttributes(categoryId, product.title, refresh)
+      ? await fetchCategoryAttributes(categoryShop.value, categoryId, props.creating ? draftTitle.value : product.title, refresh)
+      : await fetchOriginalCategoryAttributes(categoryId, props.creating ? draftTitle.value : product.title, refresh)
     if (request !== categoryRequest) return
     if ('shopId' in result && typeof result.shopId === 'string') categoryShop.value = result.shopId
     categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true
@@ -660,29 +679,29 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 </script>
 
 <template>
-  <AppDialog :show="show" title="编辑商品" size="workspace" :content-scrollable="false"
+  <AppDialog :show="show" :title="creating ? '手动新建商品' : '编辑商品'" size="workspace" :content-scrollable="false"
     positive-text="保存" negative-text="关闭" :loading="saving" :positive-disabled="!canEdit || !dirty"
     :positive-disabled-reason="!editable ? '商品编辑尚未启用' : null"
     @confirm="submitEdit" @update:show="!$event && closeEditor()">
     <ErrorState v-if="error" :description="error" retryable @retry="emit('retry')" />
     <LoadingState v-else-if="!product" />
-    <div v-else class="product-preview__layout" :aria-busy="loading">
+    <div v-else class="product-preview__layout" :class="{ 'product-preview__layout--creating': creating }" :aria-busy="loading">
       <div v-if="loading" class="product-preview__loading-mask" role="status" aria-label="加载中"><NSpin size="small" /></div>
-      <ProductRangeNavigator :items="navigationItems" :selected-id="product.id" :position-label="positionLabel"
+      <ProductRangeNavigator v-if="!creating" :items="navigationItems" :selected-id="product.id" :position-label="positionLabel"
         :can-previous="canPrevious" :can-next="canNext" :disabled="loading"
         @navigate="navigateEditor" @navigate-to="navigateTo" />
       <section class="product-preview__main" :inert="loading || undefined">
         <header class="product-preview__header">
           <div class="product-preview__meta">
             <PlatformDisplay :code="product.platform" />
-            <span v-if="product.id.startsWith('manual:')">手动创建</span>
-            <span>商品 ID {{ product.productId }}</span>
+            <span v-if="creating || product.id.startsWith('manual:')">手动创建</span>
+            <span v-if="!creating">商品 ID {{ product.productId }}</span>
             <span v-if="product.shopName">来源店铺 {{ product.shopName }}</span>
             <span>分组 {{ product.groupName ?? '未分组' }}</span>
             <NText v-if="product.edited" type="warning">已修改</NText>
             <NText v-if="editable && dirty" type="warning">有未保存的修改</NText>
           </div>
-          <div class="product-preview__actions">
+          <div v-if="!creating" class="product-preview__actions">
             <NDropdown trigger="click" :options="[{ label: '复制标题', key: 'title' }, { label: '复制基础信息', key: 'basic' }]" @select="copyFromMenu">
               <AppButton size="small">更多</AppButton>
             </NDropdown>
@@ -862,6 +881,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 <style scoped>
 .product-preview__attribute-input { width: 100%; }
 .product-preview__layout { position:relative; display:grid; grid-template-columns:clamp(260px,20vw,320px) minmax(0,1fr); gap:var(--space-4); height:100%; min-height:0; overflow:hidden; }
+.product-preview__layout--creating { grid-template-columns:minmax(0,1fr); }
 .product-preview__main { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
 .product-preview__loading-mask { position:absolute; inset:0; z-index:2; display:grid; place-items:center; background:color-mix(in srgb,var(--bg-surface-solid) 55%,transparent); }
 .product-preview__header { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--space-3); padding-bottom:var(--space-3); }

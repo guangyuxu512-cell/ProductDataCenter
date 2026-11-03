@@ -127,6 +127,72 @@ def test_manual_product_can_be_edited_and_read_by_rpa(engine, tmp_path):
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
 
 
+def test_manual_create_saves_complete_package_atomically_with_restricted_role(engine):
+    from contextlib import contextmanager
+    from decimal import Decimal
+    from uuid import uuid4
+    from app.modules.products.errors import ProductRequestError
+    from app.modules.products.schemas import ProductEdit
+
+    role = "manual_test_" + uuid4().hex[:12]
+    seed = uuid4().hex
+    title = "手动创建完整测试"
+    spec = f"local-{seed}-spec"
+    with engine.begin() as conn:
+        conn.exec_driver_sql(f'CREATE ROLE "{role}" NOLOGIN')
+        conn.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO "{role}"')
+        conn.exec_driver_sql(f'GRANT SELECT ON products, product_skus, product_images TO "{role}"')
+        conn.exec_driver_sql(f'GRANT INSERT ON products, product_skus, product_images TO "{role}"')
+        conn.exec_driver_sql(f'''GRANT UPDATE (uu_json, uu_sha256, title, title_status,
+            category_level_1, category_level_2, category_level_3, category_level_4,
+            category_path, category_leaf_id, main_image_count, detail_image_count,
+            sku_image_count, sku_count, current_price_min, current_price_max) ON products TO "{role}"''')
+        conn.exec_driver_sql(f'GRANT UPDATE (sku_name, current_price, image_rel_path, sort_order) ON product_skus TO "{role}"')
+        conn.exec_driver_sql(f'GRANT DELETE ON product_skus, product_images TO "{role}"')
+
+    class RestrictedEngine:
+        @contextmanager
+        def begin(self):
+            with engine.begin() as conn:
+                conn.exec_driver_sql(f'SET LOCAL ROLE "{role}"')
+                yield conn
+
+    repo = ProductRepository(RestrictedEngine())
+    patch = ProductEdit(expectedVersion="0" * 64, title=title,
+        category=[{"id": "100", "name": "家居"}], mainImages=["https://fixture.invalid/main.png"],
+        specStructure={"groups": [{"sourceIndex": 0, "name": "颜色", "values": [
+            {"id": spec, "name": "白色", "url": "https://fixture.invalid/white.png"},
+            {"id": "local-blue", "name": "蓝色", "url": "https://fixture.invalid/blue.png"}]}],
+            "skus": [{"sourceSpecIds": [spec], "specIds": [spec], "price": "9.90", "stock": "5", "enabled": True},
+                     {"sourceSpecIds": None, "specIds": ["local-blue"], "price": "12.00", "stock": "3", "enabled": True}]})
+    product_id = None
+    try:
+        product_id = repo.create_manual(title, seed, patch)
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT uu_json, category_path FROM products WHERE product_id=:id"),
+                               {"id": product_id}).mappings().one()
+            assert row["category_path"] == "家居"
+            assert row["uu_json"]["goodsInfo"]["goodsImageList"] == ["https://fixture.invalid/main.png"]
+            assert row["uu_json"]["goodsSkuInfo"]["spec_detail"]["value"][0]["stock_info"]["stock_num"] == 5
+            prices = conn.execute(text("SELECT current_price FROM product_skus WHERE product_id=:id ORDER BY sort_order"),
+                                  {"id": product_id}).scalars().all()
+            assert prices == [Decimal("9.90"), Decimal("12.00")]
+        bad_title = "失败回滚测试"
+        bad = ProductEdit(expectedVersion="0" * 64, title=bad_title,
+                          skus=[{"specIds": ["does-not-exist"], "price": "1.00"}])
+        with pytest.raises(ProductRequestError):
+            repo.create_manual(bad_title, seed, bad)
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM products WHERE title=:title"),
+                                {"title": bad_title}).scalar_one() == 0
+    finally:
+        with engine.begin() as conn:
+            if product_id:
+                conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+            conn.exec_driver_sql(f'DROP OWNED BY "{role}"')
+            conn.exec_driver_sql(f'DROP ROLE "{role}"')
+
+
 def test_automatic_precheck_tracks_committed_package_revisions(engine):
     from app.modules.prechecks.queue import PrecheckQueue
 
