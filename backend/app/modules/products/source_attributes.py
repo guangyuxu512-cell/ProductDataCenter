@@ -1,4 +1,4 @@
-"""Read the explicit product attributes in a Douyin source package."""
+"""Read explicit attributes from the source package without guessing values."""
 
 from itertools import islice
 
@@ -10,7 +10,7 @@ def _text(value, limit: int) -> str:
     return result if len(result) <= limit else ""
 
 
-def source_attributes(category_values, format_groups) -> list[dict]:
+def source_attributes(category_values, format_groups, properties=None) -> list[dict]:
     """Return source facts only, without inferring missing or target values."""
     result: list[dict] = []
     by_id: dict[str, dict] = {}
@@ -52,4 +52,9 @@ def source_attributes(category_values, format_groups) -> list[dict]:
                     continue
                 values = [message.get("desc") for message in field["message"][:30] if isinstance(message, dict)]
                 add(field.get("property_id"), field.get("name"), values)
+    # Newer PDD source packages carry properties in product.properties.
+    if isinstance(properties, list):
+        for item in properties[:300]:
+            if isinstance(item, dict) and isinstance(item.get("values"), list):
+                add(item.get("propertyId"), item.get("key"), item["values"])
     return result

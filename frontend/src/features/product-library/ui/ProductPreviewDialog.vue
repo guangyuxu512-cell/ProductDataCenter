@@ -14,7 +14,7 @@ import { fetchEditSnapshot, saveProduct, type EditSnapshot, type ProductPatch, t
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
-import { originalAttributeValue } from '../model/source-attributes'
+import { originalAttributeValue, pddAttributeValue } from '../model/source-attributes'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
@@ -109,7 +109,9 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
     if (request !== editRequest) return
     setEditSnapshot(result)
   }).catch(() => { if (request === editRequest) message.error('读取编辑数据失败，请刷新商品后重试') })
-    .finally(() => { if (request === editRequest) editBusy.value = false })
+    .finally(() => {
+      if (request === editRequest) { editBusy.value = false; applyPddSourceAttributes() }
+    })
 }, { immediate: true })
 
 function setEditSnapshot(result: EditSnapshot) {
@@ -133,6 +135,17 @@ function navigateTo(id: string) { if (!saving.value && allowLeave()) emit('navig
 function setAttribute(item: CategoryAttribute, value: string) {
   attributeInputs.value[item.id] = value
   if (!touchedAttributes.value.includes(item.id)) touchedAttributes.value.push(item.id)
+}
+function applyPddSourceAttributes() {
+  const product = props.product
+  if (!props.show || !product || product.platform !== 'pdd' || !canEdit.value || !categorySchemaLoaded.value) return
+  const sameTarget = product.targetCategory?.at(-1)?.id === selectedCategory.value && !selectedParts.value
+  for (const field of categoryAttributes.value) {
+    if (touchedAttributes.value.includes(field.id) ||
+        (sameTarget && product.targetAttributes?.some((attribute) => attribute.id === field.id))) continue
+    const value = pddAttributeValue(field, categoryAttributes.value, product)
+    if (value) setAttribute(field, value)
+  }
 }
 function attributeValue(item: CategoryAttribute) {
   if (Object.hasOwn(attributeInputs.value, item.id)) return attributeInputs.value[item.id]
@@ -452,6 +465,7 @@ async function loadAttributes(refresh = false) {
     if (request !== categoryRequest) return
     if ('shopId' in result && typeof result.shopId === 'string') categoryShop.value = result.shopId
     categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true
+    applyPddSourceAttributes()
   } catch {
     if (request === categoryRequest) {
       if (categorySchemaLoaded.value) message.error('更新属性失败，仍显示之前的属性')
