@@ -2,6 +2,12 @@ import { http } from '@/shared/api/http-client'
 import type { Capabilities, NasDetail, ProductFilters, ProductGroup, ProductListResponse } from '../model/nas-contracts'
 import type { AutoPrecheck } from '../model/precheck'
 
+export async function uploadProductImage(file: File) {
+  return (await http.post<{ url: string }>('/product-images', file, {
+    headers: { 'Content-Type': file.type || 'application/octet-stream' }, timeout: 120_000,
+  })).data
+}
+
 const EXACT_PRODUCT_ID = /^(?:\d{8,}|[a-z][a-z0-9_-]{1,63}:\d{8,})$/i
 
 export interface SpecImage { id: string; name: string; url: string }

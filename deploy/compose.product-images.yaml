@@ -1,0 +1,9 @@
+# Set the image directory to a dedicated subdirectory on the existing NAS image
+# storage. PRODUCT_IMAGE_PUBLIC_BASE_URL is the externally reachable origin.
+services:
+  product-api:
+    environment:
+      BACKEND_IMAGE_STORAGE_DIR: /product-images
+      BACKEND_IMAGE_PUBLIC_BASE_URL: ${PRODUCT_IMAGE_PUBLIC_BASE_URL:?external image origin required}
+    volumes:
+      - ${PRODUCT_IMAGE_STORAGE_DIR:?persistent NAS image directory required}:/product-images

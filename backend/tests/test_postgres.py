@@ -580,6 +580,47 @@ def test_sku_changes_and_image_are_consistent_in_database_package_and_projection
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
 
 
+def test_uploaded_image_urls_round_trip_through_postgres_and_rpa(engine, tmp_path):
+    import base64
+    from unittest.mock import patch
+    from urllib.parse import urlsplit
+
+    from fastapi.testclient import TestClient
+    from app.main import create_application
+    from app.modules.products.api import get_service
+    from app.modules.products.schemas import ProductEdit
+
+    image = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/CZYAAAAASUVORK5CYII=")
+    settings = Settings(_env_file=None, api_token="admin-test", rpa_api_token="rpa-test", enable_product_writes=True,
+                        image_storage_dir=tmp_path, image_public_base_url="https://images.example.test")
+    repo = ProductRepository(engine)
+    product_id = repo.create_manual("图片上传隔离商品")
+    app = create_application()
+    app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+    try:
+        with patch("app.core.security.access.get_settings", return_value=settings), \
+             patch("app.modules.product_images.api.get_settings", return_value=settings), TestClient(app) as client:
+            uploaded = client.post('/api/v1/product-images', content=image,
+                                   headers={"Authorization": "Bearer admin-test", "Content-Type": "image/png"})
+            assert uploaded.status_code == 201
+            url = uploaded.json()["url"]
+            snapshot = repo.edit_snapshot(product_id)
+            spec_id = snapshot["specImages"][0]["id"]
+            repo.save_edit(product_id, ProductEdit(expectedVersion=snapshot["version"], mainImages=[url], detailImages=[url],
+                                                  specImages=[{"specId": spec_id, "url": url}]))
+            response = client.get(f"/rpa/v1/products/{product_id}/uu", headers={"Authorization": "Bearer rpa-test"})
+            assert response.status_code == 200
+            package = response.json()
+            assert package["goodsInfo"]["goodsImageList"] == [url]
+            assert package["goodsDetailInfo"]["detail_imgs"][0]["url_list"] == [url]
+            assert package["goodsSkuInfo"]["sku_detail"][0]["spec_item_list"][0]["big_pic"] == url
+            assert client.get(urlsplit(url).path).content == image
+        assert [x["source_url"] for x in repo.detail(product_id)["images"]].count(url) == 3
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
 def test_moved_spec_image_group_is_visible_to_rpa_without_losing_off_sale_skus(engine, tmp_path):
     from unittest.mock import patch
     from fastapi.testclient import TestClient

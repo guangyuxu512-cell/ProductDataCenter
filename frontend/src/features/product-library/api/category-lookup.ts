@@ -13,15 +13,21 @@ export interface PredictedCategory extends CategoryCandidate {
   selectable: boolean | null
 }
 
-export async function predictProductCategory(productId: string) {
-  return (await http.post<{
+interface PredictionResult {
     status: 'missing_data' | 'no_recommendation' | 'needs_category_confirmation' | 'recommended'
     sourceVersion: string
     missing: string[]
     shopId: string | null
     candidates: PredictedCategory[]
     recommendedId: string | null
-  }>('/category-lookup/predict', { productId })).data
+}
+
+export async function predictProductCategory(productId: string) {
+  return (await http.post<PredictionResult>('/category-lookup/predict', { productId })).data
+}
+
+export async function predictManualCategory(title: string, imageUrl: string) {
+  return (await http.post<PredictionResult>('/category-lookup/predict/manual', { title, imageUrl })).data
 }
 
 export async function fetchCategoryTree(parentId = '0', shopId: string | null = null, refresh = false) {

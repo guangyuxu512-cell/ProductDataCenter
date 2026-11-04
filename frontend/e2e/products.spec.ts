@@ -849,6 +849,91 @@ test('手动新建打开完整弹窗，仅保存时创建商品', async ({ page 
   expect(created?.draftSeed).toMatch(/^[a-f0-9]{32}$/)
 })
 
+test('手动草稿可上传主图并预检类目，选择后才保存商品', async ({ page }) => {
+  await fixtures(page)
+  const shop = '00000000-0000-4000-8000-000000000111'
+  const imageUrl = 'https://example.test/rpa/v1/product-images/0123456789abcdef0123456789abcdef.png'
+  let created: { edit: ProductPatch } | null = null
+  let prediction: { title: string; imageUrl: string } | null = null
+  await page.route('https://example.test/**', (route) => route.fulfill({ status: 200, contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/CZYAAAAASUVORK5CYII=', 'base64') }))
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route('**/api/v1/product-images', (route) => route.fulfill({ status: 201, json: { url: imageUrl } }))
+  await page.route('**/api/v1/products', (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    created = route.request().postDataJSON()
+    return route.fulfill({ json: { productId: 'manual:12345678' } })
+  })
+  await page.route('**/api/v1/category-lookup/predict/manual', (route) => {
+    prediction = route.request().postDataJSON()
+    return route.fulfill({ json: { status: 'recommended', sourceVersion: 'a'.repeat(64), missing: [], shopId: shop,
+      recommendedId: '100', candidates: [{ id: '100', name: '家居', path: '家居', selectable: true,
+        levels: [{ id: '100', name: '家居' }] }] } })
+  })
+  await page.route('**/api/v1/category-lookup/schema', (route) => route.fulfill({ json: {
+    categoryId: '100', attributes: [{ id: '1', label: '材质', required: true, options: [] }],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '手动新建商品' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('textbox', { name: '商品标题', exact: true }).fill('我的手动商品')
+  await dialog.getByRole('tab', { name: '图文信息' }).click()
+  const chooser = page.waitForEvent('filechooser')
+  await dialog.getByRole('button', { name: '上传本地图片' }).first().click()
+  await (await chooser).setFiles({ name: 'main.png', mimeType: 'image/png', buffer: Buffer.from('test image') })
+  await expect(dialog.locator('.product-preview__image-card').first().locator('img')).toHaveAttribute('src', imageUrl)
+  await dialog.getByRole('tab', { name: '基本信息' }).click()
+  await dialog.getByRole('button', { name: '预检类目' }).click()
+  await expect.poll(() => prediction).toEqual({ title: '我的手动商品', imageUrl })
+  expect(created).toBeNull()
+  await dialog.getByRole('button', { name: '家居', exact: true }).click()
+  await expect(dialog.getByText('待完善必填属性：材质')).toBeVisible()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => created).toMatchObject({ edit: { mainImages: [imageUrl], category: [{ id: '100', name: '家居' }] } })
+})
+
+test('编辑现有商品可上传主图和规格图并把地址写入保存请求', async ({ page }) => {
+  await fixtures(page)
+  const mainUrl = 'https://example.test/rpa/v1/product-images/11111111111111111111111111111111.png'
+  const skuUrl = 'https://example.test/rpa/v1/product-images/22222222222222222222222222222222.png'
+  let uploads = 0
+  let payload: ProductPatch | null = null
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false,
+  } }))
+  await page.route('**/api/v1/product-images', (route) => route.fulfill({ status: 201, json: { url: uploads++ ? skuUrl : mainUrl } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '颜色', specImages: [{ id: '11', name: '白色', url: '' }],
+    skus: [{ skuId: 'sku-1', specIds: ['11'], price: '19.99', stock: 9, enabled: true, merchantCode: '' }],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON()
+      return route.fulfill({ json: { version: 'b'.repeat(64) } })
+    }
+    return route.fulfill({ json: { product: product(firstId), sourceCategoryId: null, sourceAttributes: [],
+      skus: [{ sku_id: 'sku-1', sku_name: '颜色: 白色', current_price: '19.99', image_rel_path: '', sort_order: 0 }], images: [] } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '图文信息' }).click()
+  let chooser = page.waitForEvent('filechooser')
+  await dialog.getByRole('button', { name: '上传本地图片' }).first().click()
+  await (await chooser).setFiles({ name: 'main.png', mimeType: 'image/png', buffer: Buffer.from('main') })
+  await expect.poll(() => uploads).toBe(1)
+  await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  await dialog.getByRole('switch', { name: '颜色规格图开关' }).click()
+  chooser = page.waitForEvent('filechooser')
+  await dialog.getByRole('button', { name: '上传白色规格图片', exact: true }).first().click()
+  await (await chooser).setFiles({ name: 'sku.png', mimeType: 'image/png', buffer: Buffer.from('sku') })
+  await expect.poll(() => uploads).toBe(2)
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).toMatchObject({ mainImages: [mainUrl], specImages: [{ specId: '11', url: skuUrl }] })
+})
+
 test('自动预检的结果在列表和商品中显示具体待完善项', async ({ page }) => {
   await fixtures(page)
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {

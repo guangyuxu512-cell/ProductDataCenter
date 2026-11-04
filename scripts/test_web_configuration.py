@@ -43,7 +43,11 @@ class WebConfigurationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         config = self.output.read_text()
         self.assertIn('auth_basic off;', config)
-        self.assertEqual(config.count('allow 192.168.0.0/24; deny all;'), 3)
+        self.assertEqual(config.count('allow 192.168.0.0/24; deny all;'), 4)
+        upload = config.split('location = /api/v1/product-images {', 1)[1].split('}', 1)[0]
+        self.assertIn('allow 192.168.0.0/24; deny all;', upload)
+        self.assertIn('proxy_set_header Authorization $product_web_authorization', upload)
+        self.assertIn('client_max_body_size 15m;', upload)
         rpa = config.split('location /rpa/v1/ {', 1)[1].split('}', 1)[0]
         self.assertNotIn('deny all', rpa)
         self.assertIn('proxy_set_header Authorization $http_authorization', rpa)
