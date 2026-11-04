@@ -233,6 +233,27 @@ def test_automatic_precheck_tracks_committed_package_revisions(engine):
         assert queue.results([product_id]) == []
 
 
+def test_manual_enqueue_invalidates_an_inflight_precheck(engine):
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    repo, queue = ProductRepository(engine), PrecheckQueue(engine)
+    product_id = repo.create_manual("手动预检隔离商品")
+    try:
+        first = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        queued = queue.enqueue([product_id, "missing-product"])
+        assert len(queued) == 1
+        assert queued[0]["productId"] == product_id
+        assert queued[0]["revision"] == first["revision"] + 1
+        assert queued[0]["state"] == "pending" and queued[0]["result"] is None
+        assert queue.complete(first, {"productId": product_id, "status": "ready", "issues": []}) is False
+        second = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert second["revision"] == queued[0]["revision"]
+        assert queue.complete(second, {"productId": product_id, "status": "ready", "issues": []}) is True
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
 def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engine, tmp_path):
     from uuid import uuid4
     from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession

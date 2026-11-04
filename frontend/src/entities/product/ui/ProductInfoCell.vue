@@ -101,6 +101,7 @@ async function copyId() {
             ></template>
             复制商品ID
           </NTooltip>
+          <slot name="id-after" />
         </div>
       </div>
     </NConfigProvider>
@@ -140,11 +141,9 @@ async function copyId() {
 }
 .product-info-cell__id {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--product-id-copy-size);
+  grid-template-columns: minmax(0, 1fr) var(--product-id-copy-size) auto;
   width: 100%;
-  max-width: calc(
-    var(--field-width-sm) + var(--space-1) + var(--product-id-copy-size)
-  );
+  max-width: 100%;
   min-width: 0;
   align-items: center;
   gap: var(--space-1);

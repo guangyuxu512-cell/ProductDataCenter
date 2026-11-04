@@ -2,7 +2,7 @@
 import hashlib
 import json
 from threading import BoundedSemaphore, Lock
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -128,6 +128,8 @@ class Attribute(BaseModel):
     label: str
     required: bool
     options: list[Option]
+    control: Literal["single", "multi", "text", "number"] = "text"
+    allowCustom: bool = False
 
 
 class SearchResponse(BaseModel):

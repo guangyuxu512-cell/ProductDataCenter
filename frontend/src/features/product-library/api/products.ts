@@ -46,6 +46,10 @@ export async function fetchAutoPrechecks(productIds: string[], signal?: AbortSig
   return (await http.post<{ items: AutoPrecheck[] }>('/prechecks/query', { productIds }, { signal })).data.items
 }
 
+export async function queuePrechecks(productIds: string[]) {
+  return (await http.post<{ items: AutoPrecheck[]; missing: string[] }>('/prechecks/run', { productIds })).data
+}
+
 export function productListParams(filters: ProductFilters, includeTotal: boolean) {
   return {
     q: filters.query.trim(),

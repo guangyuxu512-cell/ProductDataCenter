@@ -11,7 +11,6 @@
     "frontend/src/stores/theme.ts": "7be4a61b87dba671e4a5e281bd7b09d19d0aadb0e43fe24f73b880e51717442c",
     "frontend/src/entities/platform/ui/PlatformIcon.vue": "81561fd0ca3837453f1dbdfc34a3e67efbe3bdbbc152f1b6e896321c67642c5d",
     "frontend/src/entities/platform/ui/PlatformDisplay.vue": "f73eaa079895ff439c0b4be76a3d184df59b1e0dd030c198806966eb6b5ad8ee",
-    "frontend/src/shared/ui/AppInput.vue": "7aafbc5e7128c73d83fc999fb3f098f5d33f39996fb5a91fd43cdc00f2940d60",
     "frontend/src/shared/ui/AppNumberInput.vue": "e97eaeae061d7d4abc40099561a5fbf0e6db19da2137d122dd4990bee69bd459",
     "frontend/src/shared/ui/AppOverlayHost.vue": "1409ce86f347730b4567701134b6f98c3bbc28abc01a064e8e5dce4af433832f",
     "frontend/src/shared/ui/AppCheckbox.vue": "d2dc9b1ae02c00ab776c298c92a5b11f518f91efa6d0d53b462e589b6c178eb0",
@@ -19,10 +18,8 @@
     "frontend/src/shared/ui/AppSwitch.vue": "9e928deca322ef52f09aa614484472c46114df79319e1e668cc29c7c4a9b1c07",
     "frontend/src/shared/ui/AppTabs.vue": "74db3dc4e82cd399ffb2f0249c1109ad1321f861c9ca6b554f1e910f167ea84c",
     "frontend/src/shared/ui/AppButton.vue": "c4f03413e6d30353a70e501b143696081ccab323c6efe8cd09ca0b8c58a3c6e6",
-    "frontend/src/shared/ui/AppDialog.vue": "0fc41cb9fd4b3c99a2ecf903239cf9522f66c9ff89d489596c3f3c5380787fa7",
     "frontend/src/shared/ui/AppTable.vue": "56374e0571cf4b8a94d721ac8aef36d8d0bfb24bc1c1ca531ac14f300b7deb3c",
     "frontend/src/shared/ui/AppRadio.vue": "dd7cec0823b69544e5a098e87c11d46a836925a3bb132cc5c8f20b5e6b1fe20a",
-    "frontend/src/shared/ui/AppSelect.vue": "0dbea2c1e4e242810a617a01b749773ba1374b82accd80f10ec1c51df7986a72",
     "frontend/src/shared/ui/AppPagination.vue": "e4dfacb71a3e525c894651045988a6837585adb8c5124d6060f18e55fbc1385b",
     "frontend/src/shared/ui/AppDrawer.vue": "74e6556fa48ecebecc57e0b8c78024ef98aef984354ecdde5f9ad010bf348308",
     "frontend/src/shared/ui/AppDatePicker.vue": "107accc768c64b0a66267a3fcd8a43c9bff48c0001c7e71573d650de44923322",
@@ -60,7 +57,6 @@
     "frontend/src/stores/theme.ts": "4c48e4920d4c210a6832462c6df4e5cfeb2890d3",
     "frontend/src/entities/platform/ui/PlatformIcon.vue": "372ef4302bc09aaaaa04bbb055cbdecc47efc452",
     "frontend/src/entities/platform/ui/PlatformDisplay.vue": "3ddf1a5bb277efbeb227858715ca1691d876b7ac",
-    "frontend/src/shared/ui/AppInput.vue": "0e2e859e51e6941e6e57283d6541b5aeece4aec9",
     "frontend/src/shared/ui/AppNumberInput.vue": "19d800e32b1c02f1512b5a23038f5e565211cf65",
     "frontend/src/shared/ui/AppOverlayHost.vue": "a353ef3a56fb161adefc956eca8511126d3001e3",
     "frontend/src/shared/ui/AppCheckbox.vue": "8250a22caf50595a96ed96d55c8f076df6ffea03",
@@ -68,10 +64,8 @@
     "frontend/src/shared/ui/AppSwitch.vue": "c863cd06dc4455d09558adac3a6fd57b357bf4b1",
     "frontend/src/shared/ui/AppTabs.vue": "a4f1f9394b1a7ca58bfc6eab980a3336cd2f73ce",
     "frontend/src/shared/ui/AppButton.vue": "3effec4c4e08d890d709582242bc104f659e4ea1",
-    "frontend/src/shared/ui/AppDialog.vue": "069d9da4dab94941122a37b17ceb9489c4a4cd9b",
     "frontend/src/shared/ui/AppTable.vue": "9fd21eb8b913a4240e0c06ba2831cd7ae3371ea3",
     "frontend/src/shared/ui/AppRadio.vue": "92a653ebf7c38fd639c85f3203b18341b7339149",
-    "frontend/src/shared/ui/AppSelect.vue": "586f0911224b5c0d83a927f21204d605cc559d41",
     "frontend/src/shared/ui/AppPagination.vue": "4bfc888887f057929e19ad91e0745398b40678a6",
     "frontend/src/shared/ui/AppDrawer.vue": "4ef812752b861a0d55a5129ea8f4d0587e8906c1",
     "frontend/src/shared/ui/AppDatePicker.vue": "a05d19b065965a030055c0b633cd50187dbde939",
@@ -100,6 +94,21 @@
     "frontend/src/assets/brand/siyu-ai-mark.png": "c4aa1f4b5b67f8747cfa250ae70bdf60092b6b87"
   },
   "adapted_files": {
+    "frontend/src/shared/ui/AppInput.vue": {
+      "source_sha256": "7aafbc5e7128c73d83fc999fb3f098f5d33f39996fb5a91fd43cdc00f2940d60",
+      "source_git_blob": "0e2e859e51e6941e6e57283d6541b5aeece4aec9",
+      "reason": "复用原输入组件，仅透传 inputmode，供平台数字属性在移动端显示合适键盘；布局、样式和默认行为未改。"
+    },
+    "frontend/src/shared/ui/AppDialog.vue": {
+      "source_sha256": "0fc41cb9fd4b3c99a2ecf903239cf9522f66c9ff89d489596c3f3c5380787fa7",
+      "source_git_blob": "069d9da4dab94941122a37b17ceb9489c4a4cd9b",
+      "reason": "复用原弹窗组件，仅透传 Naive UI 的 close-on-esc，以便图片预览作为顶层弹层时只关闭自身；默认值保持原行为。"
+    },
+    "frontend/src/shared/ui/AppSelect.vue": {
+      "source_sha256": "0dbea2c1e4e242810a617a01b749773ba1374b82accd80f10ec1c51df7986a72",
+      "source_git_blob": "586f0911224b5c0d83a927f21204d605cc559d41",
+      "reason": "复用原选择组件及其浮层定位，仅透传平台表单需要的 tag、onCreate 和 showOnFocus；默认值保持原行为。"
+    },
     "frontend/src/entities/product/ui/ProductInfoCell.vue": {
       "source_sha256": "f450b81fd92f8f2d073c2a9dd622d0d1781bb09eaad2d9549a1e0f947acb3832",
       "source_git_blob": "733c18f51583d1b73e530238e7d49f11a2919676",

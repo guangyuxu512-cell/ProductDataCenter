@@ -18,6 +18,7 @@ withDefaults(
     autocomplete?: 'username' | 'current-password' | 'off'
     autofocus?: boolean
     ariaLabel?: string
+    inputmode?: 'text' | 'decimal' | 'numeric' | 'search' | 'email' | 'tel' | 'url'
   }>(),
   {
     modelValue: null,
@@ -33,6 +34,7 @@ withDefaults(
     autocomplete: undefined,
     autofocus: false,
     ariaLabel: undefined,
+    inputmode: undefined,
   },
 )
 
@@ -55,7 +57,7 @@ defineEmits<{
     :loading="loading"
     :maxlength="maxlength"
     :autofocus="autofocus"
-    :input-props="{ name, autocomplete, 'aria-label': ariaLabel }"
+    :input-props="{ name, autocomplete, inputmode, 'aria-label': ariaLabel }"
     @update:value="$emit('update:modelValue', $event)"
   />
 </template>

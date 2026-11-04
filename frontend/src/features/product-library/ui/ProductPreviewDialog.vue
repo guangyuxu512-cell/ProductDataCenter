@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, h, ref, watch } from 'vue'
+import { computed, h, nextTick, ref, watch } from 'vue'
 import {
-  NAutoComplete, NDropdown, NFormItem, NImage, NSpin, NSwitch, NTab, NText,
-  type DataTableColumns, useMessage,
+  NDropdown, NFormItem, NImage, NImagePreview, NSpin, NSwitch, NTab, NText,
+  type DataTableColumns, type SelectOption, type SelectProps, useMessage,
 } from 'naive-ui'
 import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState } from '@/shared/components'
-import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
+import { AppButton, AppDialog, AppInput, AppSelect, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
 import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictManualCategory, predictProductCategory,
   type CategoryAttribute, type CategoryTreeItem, type PredictedCategory } from '../api/category-lookup'
@@ -15,7 +15,7 @@ import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
 import { originalAttributeValue, pddAttributeValue } from '../model/source-attributes'
-import type { AutoPrecheck, CategoryPrediction } from '../model/precheck'
+import type { AutoPrecheck, CategoryPrediction, PrecheckIssue } from '../model/precheck'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
@@ -36,11 +36,15 @@ const props = withDefaults(defineProps<{
   manualSeed?: string
   batchPrediction?: CategoryPrediction
   autoResult?: AutoPrecheck
+  precheckPending?: boolean
+  precheckRequestError?: string
+  focusIssue?: PrecheckIssue | null
   navigationItems?: ReadonlyArray<{ id: string; title: string; subtitle: string; imageUrl: string | null }>
 }>(), {
   loading: false, error: null, canPrevious: false, canNext: false,
   positionLabel: '', exportable: true, groupable: true, categoryLookupEnabled: false, editable: false,
-  creating: false, manualSeed: '', navigationItems: () => [],
+  creating: false, manualSeed: '', precheckPending: false, precheckRequestError: '', focusIssue: null,
+  navigationItems: () => [],
 })
 const emit = defineEmits<{
   'update:show': [value: boolean]
@@ -49,7 +53,7 @@ const emit = defineEmits<{
   retry: []
   navigate: [direction: 'previous' | 'next']
   'navigate-to': [id: string]
-  saved: []
+  saved: [id: string]
   created: [id: string]
 }>()
 
@@ -89,8 +93,12 @@ type SkuDraft = { skuId: string; sourceSpecIds: string[] | null; specIds: string
 const skuDrafts = ref<SkuDraft[]>([])
 const initialSkuDrafts = ref<SkuDraft[]>([])
 const selectedParts = ref<CategoryTreeItem[] | null>(null)
-const attributeInputs = ref<Record<string, string>>({})
+const attributeInputs = ref<Record<string, string[]>>({})
 const touchedAttributes = ref<string[]>([])
+const imagePreviewSource = ref('')
+const draggedMainIndex = ref<number | null>(null)
+const mainDropIndex = ref<number | null>(null)
+let suppressImagePreview = false
 let editRequest = 0
 const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value && !uploading.value)
 const dirty = computed(() => !!props.product && (
@@ -105,6 +113,7 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
   const product = props.product
   editVersion.value = ''; editBusy.value = false; saving.value = false
   selectedParts.value = null; attributeInputs.value = {}; touchedAttributes.value = []
+  imagePreviewSource.value = ''; draggedMainIndex.value = null; mainDropIndex.value = null
   specGroups.value = []; initialSpecGroups.value = []; imageGroupIndex.value = 0; specImageEnabled.value = false
   skuDrafts.value = []; initialSkuDrafts.value = []
   if (!props.show || !product) return
@@ -150,8 +159,17 @@ function closeEditor() { if (!saving.value && !uploading.value && allowLeave()) 
 function navigateEditor(direction: 'previous' | 'next') { if (!saving.value && !uploading.value && allowLeave()) emit('navigate', direction) }
 function navigateTo(id: string) { if (!saving.value && !uploading.value && allowLeave()) emit('navigate-to', id) }
 
-function setAttribute(item: CategoryAttribute, value: string) {
-  attributeInputs.value[item.id] = value
+function attributeControl(item: CategoryAttribute) {
+  return item.control ?? (item.options.length ? 'single' : 'text')
+}
+function splitAttributeValue(item: CategoryAttribute, value: string) {
+  const text = value.trim()
+  if (!text) return []
+  return attributeControl(item) === 'multi' ? text.split('、').map((part) => part.trim()).filter(Boolean) : [text]
+}
+function setAttribute(item: CategoryAttribute, value: string | number | Array<string | number> | null) {
+  const raw = Array.isArray(value) ? value : value === null ? [] : [value]
+  attributeInputs.value[item.id] = raw.map(String).map((part) => part.trim()).filter(Boolean)
   if (!touchedAttributes.value.includes(item.id)) touchedAttributes.value.push(item.id)
 }
 function applyPddSourceAttributes() {
@@ -162,27 +180,46 @@ function applyPddSourceAttributes() {
     if (touchedAttributes.value.includes(field.id) ||
         (sameTarget && product.targetAttributes?.some((attribute) => attribute.id === field.id))) continue
     const value = pddAttributeValue(field, categoryAttributes.value, product)
-    if (value) setAttribute(field, value)
+    if (value) setAttribute(field, splitAttributeValue(field, value))
   }
 }
-function attributeValue(item: CategoryAttribute) {
+function attributeValues(item: CategoryAttribute): string[] {
   if (item.id in attributeInputs.value) return attributeInputs.value[item.id]
   const product = props.product
   if (product?.platform === 'pdd') {
     const current = product.targetCategory?.at(-1)?.id
     if (current && current === selectedCategory.value && !selectedParts.value) {
-      return product.targetAttributes?.find((attribute) => attribute.id === item.id)?.values.join('、') ?? ''
+      return [...(product.targetAttributes?.find((attribute) => attribute.id === item.id)?.values ?? [])]
     }
-    return ''
+    return []
   }
-  return product ? originalAttributeValue(item, categoryAttributes.value, product, selectedCategory.value) : ''
+  const value = product ? originalAttributeValue(item, categoryAttributes.value, product, selectedCategory.value) : ''
+  return splitAttributeValue(item, value)
 }
-function hasCustomAttributeValue(item: CategoryAttribute) {
-  if (!touchedAttributes.value.includes(item.id) || !item.options.length) return false
-  const values = attributeValue(item).split('、').map((value) => value.trim()).filter(Boolean)
-  return values.some((value) => !item.options.some((option) => option.label === value))
+function attributeTextValue(item: CategoryAttribute) {
+  return attributeValues(item).join(attributeControl(item) === 'multi' ? '、' : '')
 }
-const missingAttributes = computed(() => categoryAttributes.value.filter((item) => item.required && !attributeValue(item).trim()))
+function attributeProblem(item: CategoryAttribute): string | null {
+  const values = attributeValues(item)
+  if (!values.length) return item.required ? '未填写' : null
+  if (attributeControl(item) === 'single' && values.length !== 1) return '只能选择一项'
+  if (attributeControl(item) === 'number' && values.some((value) => !value.trim() || !Number.isFinite(Number(value)))) return '数字无效'
+  if (item.options.length && item.allowCustom !== true && values.some((value) =>
+    item.options.filter((option) => option.label === value).length !== 1)) return '包含无效选项'
+  return null
+}
+function attributeOptions(item: CategoryAttribute): SelectOption[] {
+  return item.options.map((option) => ({ label: option.label, value: option.label }))
+}
+function createAttributeOption(label: string): SelectOption {
+  return { label: `添加『${label}』`, value: label, __customCreate: true, __customLabel: label }
+}
+const renderAttributeLabel: SelectProps['renderLabel'] = (option, selected) => {
+  const custom = option as SelectOption & { __customCreate?: boolean; __customLabel?: string }
+  if (custom.__customCreate && selected) return custom.__customLabel ?? String(custom.value ?? '')
+  return String(custom.label ?? custom.value ?? '')
+}
+const missingAttributes = computed(() => categoryAttributes.value.filter((item) => attributeProblem(item) === '未填写'))
 const missingRequired = computed(() => missingAttributes.value.length)
 function validImageUrl(value: string) {
   try { return ['http:', 'https:'].includes(new URL(value).protocol) } catch { return false }
@@ -370,6 +407,44 @@ function moveImage(kind: 'main' | 'detail', index: number, offset: number) {
   ;[images[index], images[next]] = [images[next], images[index]]
 }
 
+function openImagePreview(source: string) {
+  if (!source || suppressImagePreview) return
+  imagePreviewSource.value = source
+}
+function closeImagePreview(show: boolean) {
+  if (!show) imagePreviewSource.value = ''
+}
+function beginMainDrag(index: number, event: DragEvent) {
+  if (!canEdit.value) { event.preventDefault(); return }
+  draggedMainIndex.value = index
+  mainDropIndex.value = index
+  suppressImagePreview = true
+  event.dataTransfer?.setData('text/plain', String(index))
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+function hoverMainDrop(index: number, event: DragEvent) {
+  if (draggedMainIndex.value === null || !canEdit.value) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  mainDropIndex.value = index
+}
+function dropMainImage(index: number, event: DragEvent) {
+  event.preventDefault()
+  const from = draggedMainIndex.value
+  if (from !== null && from !== index && draftMain.value[from] !== undefined) {
+    const next = [...draftMain.value]
+    const [moved] = next.splice(from, 1)
+    next.splice(index, 0, moved)
+    draftMain.value = next
+  }
+  finishMainDrag()
+}
+function finishMainDrag() {
+  draggedMainIndex.value = null
+  mainDropIndex.value = null
+  window.setTimeout(() => { suppressImagePreview = false }, 0)
+}
+
 async function submitEdit() {
   const product = props.product
   if (!product || !canEdit.value || !dirty.value) return
@@ -446,10 +521,17 @@ async function submitEdit() {
     }
     if (changedSkus.length) patch.skus = changedSkus
   }
+  const invalidSelection = touchedAttributes.value.map((id) => categoryAttributes.value.find((item) => item.id === id))
+    .find((field) => field && attributeProblem(field) === '包含无效选项')
+  if (invalidSelection) {
+    message.error(`${invalidSelection.label}不允许自定义值，请从平台选项中选择`)
+    tab.value = 'attributes'
+    return
+  }
   if (touchedAttributes.value.length) patch.attributes = touchedAttributes.value.flatMap((id) => {
     const field = categoryAttributes.value.find((item) => item.id === id)
     if (!field) return []
-    const values = (attributeInputs.value[id] ?? '').split('、').map((value) => value.trim()).filter(Boolean)
+    const values = attributeInputs.value[id] ?? []
     return [{ id, name: field.label, values: values.map((name) => ({
       name, valueId: field.options.find((option) => option.label === name)?.value ?? '0',
     })) }]
@@ -463,10 +545,12 @@ async function submitEdit() {
       return
     }
     const result = await saveProduct(product.id, patch)
+    draftTitle.value = draftTitle.value.trim()
     editVersion.value = result.version; initialTitle.value = draftTitle.value
     message.success('商品已保存')
     selectedParts.value = null; touchedAttributes.value = []
     initialMain.value = [...draftMain.value]; initialDetail.value = [...draftDetail.value]
+    emit('saved', product.id)
     try {
       const snapshot = await fetchEditSnapshot(product.id)
       if (props.product?.id === product.id) setEditSnapshot(snapshot)
@@ -474,7 +558,6 @@ async function submitEdit() {
       editVersion.value = ''
       message.warning('已保存，请刷新后继续编辑')
     }
-    emit('saved')
   } catch (error) { message.error(error instanceof Error ? error.message : '保存失败，请重试') }
   finally { saving.value = false }
 }
@@ -615,6 +698,70 @@ async function runPrediction() {
   } finally { if (request === predictionRequest) predictionBusy.value = false }
 }
 
+function skuPriceValid(value: string | null | undefined) {
+  const price = String(value ?? '').trim()
+  return /^\d+(?:\.\d{1,2})?$/.test(price) && Number(price) > 0 && Number(price) <= 9999999999
+}
+const draftIssues = computed<PrecheckIssue[]>(() => {
+  const product = props.product
+  if (!product) return []
+  const issues: PrecheckIssue[] = []
+  if (!draftTitle.value.trim()) issues.push({ code: 'title_missing', message: '商品标题未填写', tab: 'base', fieldId: 'title' })
+  if (!draftMain.value.length) issues.push({ code: 'main_image_missing', message: '商品主图未填写', tab: 'images', fieldId: 'mainImages' })
+  const active = skuDrafts.value.filter((item) => !item.deleted)
+  if (!active.length) issues.push({ code: 'sku_missing', message: 'SKU 规格未填写', tab: 'sku', fieldId: 'skus' })
+  else active.forEach((item, index) => {
+    if (!skuPriceValid(item.price)) issues.push({ code: 'sku_price_invalid', message: `第 ${index + 1} 个 SKU 价格无效`,
+      tab: 'sku', fieldId: 'price', skuIndex: index, skuId: item.skuId })
+  })
+  if (props.categoryLookupEnabled && !selectedCategory.value) {
+    issues.push({ code: 'category_missing', message: '类目未选择', tab: 'base', fieldId: 'category' })
+  }
+  if (categorySchemaLoaded.value) for (const field of categoryAttributes.value) {
+    const problem = attributeProblem(field)
+    if (problem) issues.push({ code: problem === '未填写' ? 'attribute_missing' : 'attribute_invalid',
+      message: `${field.label}${problem}`, tab: 'attributes', fieldId: field.id })
+  }
+  return issues
+})
+const serverIssues = computed<PrecheckIssue[]>(() => {
+  const result = props.autoResult?.result
+  if (!result) return []
+  return result.issueDetails?.length
+    ? result.issueDetails
+    : result.issues.map((message) => ({ code: 'precheck_issue', message, tab: 'base' as const }))
+})
+const localPrecheckMode = computed(() => dirty.value || props.creating || (!props.autoResult && !!editVersion.value))
+const displayedPrecheckIssues = computed(() => localPrecheckMode.value ? draftIssues.value : serverIssues.value)
+const precheckSummary = computed(() => {
+  if (props.precheckPending) return { text: '自动预检：排队中', tone: 'default' as const }
+  if (props.precheckRequestError) return { text: `商品已保存；预检请求失败：${props.precheckRequestError}`, tone: 'error' as const }
+  if (localPrecheckMode.value) return displayedPrecheckIssues.value.length
+    ? { text: `当前草稿待完善：${displayedPrecheckIssues.value.map((item) => item.message).join('；')}`, tone: 'warning' as const }
+    : { text: '当前草稿未发现可直接判断的缺项，保存后将自动预检', tone: 'default' as const }
+  const record = props.autoResult
+  if (!record) return null
+  if (record.error) return { text: `自动预检失败：${record.error}`, tone: 'error' as const }
+  if (record.state !== 'done') return { text: `自动预检：${record.state === 'running' ? '预检中' : '排队中'}`, tone: 'default' as const }
+  return displayedPrecheckIssues.value.length
+    ? { text: `自动预检待处理：${displayedPrecheckIssues.value.map((item) => item.message).join('；')}`, tone: 'warning' as const }
+    : { text: '自动预检：已通过', tone: 'success' as const }
+})
+
+async function focusPrecheckIssue(issue: PrecheckIssue | null | undefined) {
+  if (!issue) return
+  tab.value = issue.tab
+  await nextTick()
+  await nextTick()
+  const candidates = [...document.querySelectorAll<HTMLElement>('[data-precheck-field]')]
+  const target = candidates.find((element) => element.dataset.precheckField === issue.fieldId &&
+    (issue.skuIndex === undefined || element.dataset.precheckSkuIndex === String(issue.skuIndex)))
+  target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  const focusable = target?.matches('input,button,[tabindex]') ? target : target?.querySelector<HTMLElement>('input,button,[tabindex]')
+  focusable?.focus({ preventScroll: true })
+}
+watch(() => props.focusIssue, (issue) => { if (props.show && issue) void focusPrecheckIssue(issue) }, { immediate: true })
+
 const imageSections = computed(() => {
   const product = props.product
   if (!product) return []
@@ -699,9 +846,12 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
     ...specColumns,
     { title: '价格', key: 'price', width: 130, render: (row) => {
       const draft = skuDraft(row)
-      return h(AppInput, { modelValue: draft?.price ?? (row.currentPrice === null ? '' : `¥${row.currentPrice}`),
-        disabled: !canEdit.value || !draft, ariaLabel: 'SKU 价格',
-        'onUpdate:modelValue': (value: string) => { if (draft) draft.price = value } })
+      const index = visibleSkus.value.findIndex((item) => item.draftKey === row.draftKey)
+      return h('div', { 'data-precheck-field': 'price', 'data-precheck-sku-index': String(index) }, [
+        h(AppInput, { modelValue: draft?.price ?? (row.currentPrice === null ? '' : `¥${row.currentPrice}`),
+          disabled: !canEdit.value || !draft, ariaLabel: `第 ${index + 1} 个 SKU 价格`, inputmode: 'decimal',
+          'onUpdate:modelValue': (value: string) => { if (draft) draft.price = value } }),
+      ])
     } },
     { title: '库存', key: 'stock', width: 120, render: (row) => {
       const draft = skuDraft(row)
@@ -728,6 +878,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 
 <template>
   <AppDialog :show="show" :title="creating ? '手动新建商品' : '编辑商品'" size="workspace" :content-scrollable="false"
+    :close-on-esc="!imagePreviewSource"
     positive-text="保存" negative-text="关闭" :loading="saving" :positive-disabled="!canEdit || !dirty"
     :positive-disabled-reason="!editable ? '商品编辑尚未启用' : null"
     @confirm="submitEdit" @update:show="!$event && closeEditor()">
@@ -764,25 +915,21 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
           <NTab name="attributes" role="tab" :aria-selected="tab === 'attributes'">商品属性</NTab>
           <NTab name="sku" role="tab" :aria-selected="tab === 'sku'">规格与 SKU</NTab>
         </AppTabs>
-        <div v-if="autoResult && !dirty" class="product-preview__missing" role="status">
-          <NText v-if="autoResult.error" type="warning">自动预检：{{ autoResult.error }}</NText>
-          <NText v-else-if="autoResult.state !== 'done'" depth="3">自动预检：{{ autoResult.state === 'running' ? '预检中' : '等待预检' }}</NText>
-          <NText v-else-if="autoResult.result?.issues.length" type="warning">自动预检待处理：{{ autoResult.result.issues.join('；') }}</NText>
-          <NText v-else depth="3">自动预检：已检查</NText>
-        </div>
-        <div v-if="!categoryBusy && categorySchemaLoaded && missingRequired" class="product-preview__missing" role="status">
-          <NText type="warning">待完善必填属性：{{ missingAttributes.map((item) => item.label).join('、') }}</NText>
-          <AppButton v-if="tab !== 'attributes'" tone="link" size="small" @click="tab = 'attributes'">去完善</AppButton>
+        <div v-if="precheckSummary" class="product-preview__missing" role="status">
+          <NSpin v-if="autoResult?.state === 'running' && !localPrecheckMode && !precheckPending" size="small" />
+          <NText :type="precheckSummary.tone === 'default' ? undefined : precheckSummary.tone">{{ precheckSummary.text }}</NText>
+          <AppButton v-if="displayedPrecheckIssues.length" tone="link" size="small"
+            @click="focusPrecheckIssue(displayedPrecheckIssues[0])">定位问题</AppButton>
         </div>
         <div class="product-preview__content" :inert="loading || undefined">
           <section v-if="tab === 'base'" class="product-preview__section">
-            <NFormItem label="商品标题" required>
+            <NFormItem label="商品标题" required data-precheck-field="title">
               <AppInput :model-value="editable ? draftTitle : product.title" aria-label="商品标题"
                 :readonly="!canEdit" @update:model-value="draftTitle = $event" />
               <span class="product-preview__count">{{ titleLength }}/60</span>
               <AppButton size="small" disabled>AI 优化</AppButton>
             </NFormItem>
-            <NFormItem label="抖店类目" required>
+            <NFormItem label="抖店类目" required data-precheck-field="category">
               <template v-if="categoryLookupEnabled">
                 <CategoryPicker :key="product.id" :label="categoryLabel"
                   :disabled="categoryBusy || (editable && (!canEdit || !['douyin', 'pdd'].includes(product.platform)))" @select="selectCategory" />
@@ -803,9 +950,11 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             </div>
           </section>
           <section v-if="tab === 'images'" class="product-preview__image-workspace">
-            <article v-for="section in imageSections" :key="section.key" class="product-preview__image-section">
+            <article v-for="section in imageSections" :key="section.key" class="product-preview__image-section"
+              :data-precheck-field="section.key === 'main' ? 'mainImages' : undefined">
               <header class="product-preview__image-section-header">
                 <strong>{{ section.label }}</strong>
+                <NText v-if="section.key === 'main' && canEdit && section.images.length > 1" depth="3">拖拽缩略图可排序</NText>
                 <div v-if="section.key !== 'sku'" class="product-preview__actions">
                   <AppButton size="small" disabled title="AI 改图尚未接入">AI 创作</AppButton>
                   <AppButton size="small" :loading="uploading" :disabled="!canEdit" @click="chooseLocalImage(section.key)">上传本地图片</AppButton>
@@ -814,12 +963,23 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                 <AppButton v-else tone="link" size="small" @click="tab = 'sku'">在规格与 SKU 中设置</AppButton>
               </header>
               <div class="product-preview__image-strip">
-                <div v-for="(image, index) in section.images" :key="image.skuKey ?? `${section.key}:${image.src}:${index}`" class="product-preview__image-card">
+                <div v-for="(image, index) in section.images" :key="image.skuKey ?? `${section.key}:${image.src}:${index}`"
+                  class="product-preview__image-card"
+                  :class="{ 'product-preview__image-card--draggable': section.key === 'main' && canEdit,
+                    'product-preview__image-card--dragging': section.key === 'main' && draggedMainIndex === index,
+                    'product-preview__image-card--drop': section.key === 'main' && mainDropIndex === index && draggedMainIndex !== index }"
+                  :draggable="section.key === 'main' && canEdit"
+                  :aria-grabbed="section.key === 'main' ? draggedMainIndex === index : undefined"
+                  @dragstart="section.key === 'main' && beginMainDrag(index, $event)"
+                  @dragover="section.key === 'main' && hoverMainDrop(index, $event)"
+                  @drop="section.key === 'main' && dropMainImage(index, $event)"
+                  @dragend="section.key === 'main' && finishMainDrag()">
                   <div class="product-preview__image-canvas">
                     <NImage v-if="image.src" :key="imageRetries[`${section.key}:${index}`] ?? 0"
-                      :src="imageSource(`${section.key}:${index}`, image.src)" :preview-src="image.src"
+                      :src="imageSource(`${section.key}:${index}`, image.src)" preview-disabled
                       :alt="`${product.title} ${image.label}`" lazy object-fit="contain"
                       :img-props="{ referrerpolicy: 'no-referrer' }"
+                      @click="openImagePreview(image.src)"
                       @error="fallbackImage(`${section.key}:${index}`, image.src)">
                       <template #error><AppButton size="small" @click.stop="retryImage(`${section.key}:${index}`)">重试</AppButton></template>
                     </NImage>
@@ -827,8 +987,8 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   </div>
                   <div v-if="section.key !== 'sku'" class="product-preview__image-actions">
                     <AppButton tone="link" size="small" :disabled="!canEdit" @click="chooseLocalImage(section.key, index)">本地替换</AppButton>
-                    <AppButton tone="link" size="small" :disabled="!canEdit || index === 0" @click="moveImage(section.key, index, -1)">上移</AppButton>
-                    <AppButton tone="link" size="small" :disabled="!canEdit || index === section.images.length - 1" @click="moveImage(section.key, index, 1)">下移</AppButton>
+                    <AppButton v-if="section.key === 'detail'" tone="link" size="small" :disabled="!canEdit || index === 0" @click="moveImage(section.key, index, -1)">上移</AppButton>
+                    <AppButton v-if="section.key === 'detail'" tone="link" size="small" :disabled="!canEdit || index === section.images.length - 1" @click="moveImage(section.key, index, 1)">下移</AppButton>
                     <AppButton tone="link" size="small" :disabled="!canEdit" @click="removeImage(section.key, index)">删除</AppButton>
                   </div>
                   <template v-else>
@@ -857,15 +1017,22 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <NText v-else-if="categorySchemaLoaded && product.platform !== 'pdd'" depth="3">当前类目的属性尚未从原包自动对应</NText>
             <NText v-if="editable && categorySchemaLoaded && missingRequired" type="warning">还有 {{ missingRequired }} 项必填属性未填写</NText>
             <div class="product-preview__attributes">
-              <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required">
+              <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required"
+                :data-precheck-field="item.id">
                 <div v-if="editable && item.options.length" class="product-preview__attribute-input">
-                  <NAutoComplete :value="attributeValue(item)"
-                    :options="item.options.map((option) => ({ label: option.label, value: option.label }))"
-                    :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)" placeholder="请选择或输入"
-                    @update:value="setAttribute(item, $event)" />
-                  <NText v-if="hasCustomAttributeValue(item)" depth="3">自定义值是否可用，以抖店校验为准</NText>
+                  <AppSelect :model-value="attributeControl(item) === 'multi' ? attributeValues(item) : (attributeValues(item)[0] ?? null)"
+                    :options="attributeOptions(item)" clearable filterable show-on-focus
+                    :multiple="attributeControl(item) === 'multi'" :max-tag-count="2"
+                    :tag="item.allowCustom === true" :on-create="item.allowCustom === true ? createAttributeOption : undefined"
+                    :render-label="renderAttributeLabel"
+                    :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)"
+                    :placeholder="item.allowCustom === true ? '请选择、搜索或添加自定义值' : '请选择或搜索平台选项'"
+                    @update:model-value="setAttribute(item, $event)" @update:values="setAttribute(item, $event)" />
+                  <NText v-if="attributeProblem(item) === '包含无效选项'" type="error">该值不是平台允许的选项</NText>
                 </div>
-                <AppInput v-else :model-value="attributeValue(item)" :readonly="!canEdit || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
+                <AppInput v-else :model-value="attributeTextValue(item)" :aria-label="item.label"
+                  :inputmode="attributeControl(item) === 'number' ? 'decimal' : undefined"
+                  :readonly="!canEdit || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
@@ -897,8 +1064,9 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                     <NImage v-if="specImages[specImageIndex(value)]?.url"
                       :key="imageRetries[`spec:${axisIndex}:${specImageIndex(value)}`] ?? 0"
                       :src="imageSource(`spec:${axisIndex}:${specImageIndex(value)}`, specImages[specImageIndex(value)].url)"
-                      :preview-src="specImages[specImageIndex(value)].url" :alt="`${value}规格图片`"
-                      :img-props="{ referrerpolicy: 'no-referrer' }" :previewed-img-props="{ referrerpolicy: 'no-referrer' }" object-fit="contain"
+                      preview-disabled :alt="`${value}规格图片`"
+                      :img-props="{ referrerpolicy: 'no-referrer' }" object-fit="contain"
+                      @click="openImagePreview(specImages[specImageIndex(value)].url)"
                       @error="fallbackImage(`spec:${axisIndex}:${specImageIndex(value)}`, specImages[specImageIndex(value)].url)">
                       <template #error><AppButton size="small" @click.stop="retryImage(`spec:${axisIndex}:${specImageIndex(value)}`)">重试</AppButton></template>
                     </NImage>
@@ -931,10 +1099,11 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
       </section>
     </div>
   </AppDialog>
+  <NImagePreview :show="!!imagePreviewSource" :src="imagePreviewSource" @update:show="closeImagePreview" />
 </template>
 
 <style scoped>
-.product-preview__attribute-input { width: 100%; }
+.product-preview__attribute-input { display:grid; width:100%; gap:var(--space-1); }
 .product-preview__layout { position:relative; display:grid; grid-template-columns:clamp(260px,20vw,320px) minmax(0,1fr); gap:var(--space-4); height:100%; min-height:0; overflow:hidden; }
 .product-preview__layout--creating { grid-template-columns:minmax(0,1fr); }
 .product-preview__main { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
@@ -950,14 +1119,19 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 .product-preview__section :deep(.n-form-item-feedback-wrapper) { min-height:0; }
 .product-preview__section :deep(.n-form-item-blank) { gap:var(--space-2); }
 .product-preview__count { white-space:nowrap; color:var(--text-secondary); }
-.product-preview__section-heading,.product-preview__image-section-header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
+.product-preview__section-heading,.product-preview__image-section-header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); flex-wrap:wrap; }
 .product-preview__image-section { display:grid; gap:var(--space-2); min-width:0; }
 .product-preview__image-strip { display:flex; gap:var(--space-3); overflow-x:auto; padding-bottom:var(--space-2); }
-.product-preview__image-card { flex:0 0 128px; min-width:0; padding:var(--space-2); border:1px solid var(--border-subtle); border-radius:var(--radius-card); text-align:center; }
+.product-preview__image-card { flex:0 0 168px; min-width:0; padding:var(--space-2); border:1px solid var(--border-subtle); border-radius:var(--radius-card); background:var(--bg-surface-solid); text-align:center; transition:border-color .15s ease,box-shadow .15s ease,opacity .15s ease; }
+.product-preview__image-card--draggable { cursor:grab; }
+.product-preview__image-card--draggable:active { cursor:grabbing; }
+.product-preview__image-card--dragging { opacity:.45; }
+.product-preview__image-card--drop { border-color:var(--color-primary); box-shadow:0 0 0 2px var(--color-primary-soft); }
 .product-preview__image-card strong,.product-preview__image-caption { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.product-preview__image-canvas { display:grid; place-items:center; width:112px; height:112px; margin-bottom:var(--space-2); }
+.product-preview__image-canvas { display:grid; place-items:center; width:100%; height:112px; margin-bottom:var(--space-2); }
 .product-preview__image-canvas :deep(img) { width:112px; height:112px; object-fit:contain; }
-.product-preview__image-actions { display:flex; justify-content:center; gap:var(--space-1); }
+.product-preview__image-actions { display:flex; min-height:var(--control-height-compact); align-content:flex-start; justify-content:center; gap:var(--space-1) var(--space-2); flex-wrap:wrap; overflow:hidden; }
+.product-preview__image-actions > * { flex:0 0 auto; }
 .product-preview__attributes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-3); }
 .product-preview__axis { display:grid; gap:var(--space-3); padding:var(--space-3); background:var(--bg-surface-raised); border:1px solid var(--border-subtle); border-radius:var(--radius-card); }
 .product-preview__axis-heading,.product-preview__values,.product-preview__value { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }

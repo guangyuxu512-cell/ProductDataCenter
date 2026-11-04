@@ -354,6 +354,16 @@ def normalize_fields(items: list) -> list[dict]:
             val = option.get("value_id", option.get("value", option.get("id")))
             if isinstance(name, str) and isinstance(val, (str, int)) and not isinstance(val, bool):
                 options.append({"label": name[:200], "value": str(val)[:200]})
+        # ``type``, ``multiple`` and ``allow_create`` are fields from the
+        # platform schema consumed by the already shipped package editor.  Do
+        # not infer a control from a Chinese label: the same property can have
+        # different rules in different categories.
+        field_type = item.get("type")
+        if options:
+            control = "multi" if item.get("multiple") is True else "single"
+        else:
+            control = "number" if field_type == "number" else "text"
         fields.append({"id": str(key)[:100], "label": label[:200], "required": item.get("required") in (True, 1),
-                       "options": options})
+                       "options": options, "control": control,
+                       "allowCustom": bool(options and item.get("allow_create") is True)})
     return fields
