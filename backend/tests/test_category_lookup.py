@@ -326,6 +326,35 @@ def test_prediction_auto_distributes_and_reports_no_recommendation(settings, mon
     get_settings.cache_clear()
 
 
+def test_manual_draft_prediction_uses_current_title_and_image_without_creating_product(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    seen = []
+    class Predictor(FakeLookup):
+        def predict(self, session, title, image_url):
+            seen.append((session.shop_id, title, image_url))
+            return {"recommendedId": "11", "candidates": [{"id": "11", "name": "汤勺", "path": "餐具 > 汤勺",
+                    "levels": [{"id": "10", "name": "餐具"}, {"id": "11", "name": "汤勺"}], "selectable": True}]}
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: FakeCentral([shop_id])
+    app.dependency_overrides[get_lookup] = lambda: Predictor(settings)
+    title = "完整手动商品标题" * 20
+    image = "https://images.example.test/rpa/v1/product-images/test.jpg"
+    with TestClient(app) as client:
+        headers = {"Authorization": "Bearer " + PRODUCT_KEY}
+        missing = client.post('/api/v1/category-lookup/predict/manual', json={'title': ' ', 'imageUrl': ''}, headers=headers)
+        assert missing.status_code == 200 and missing.json()['missing'] == ['商品标题', '商品主图']
+        assert not seen
+        result = client.post('/api/v1/category-lookup/predict/manual', json={'title': title, 'imageUrl': image}, headers=headers)
+        assert result.status_code == 200 and result.json()['status'] == 'recommended'
+        assert result.json()['candidates'][0]['levels'][-1]['name'] == '汤勺'
+        assert seen == [(shop_id, title, image)]
+        assert result.headers['cache-control'] == 'no-store'
+        assert client.post('/api/v1/category-lookup/predict/manual', json={'title': title, 'imageUrl': image}).status_code == 401
+    get_settings.cache_clear()
+
+
 def test_tree_and_attribute_cache_survive_restart_and_refresh_only_on_request(settings, monkeypatch):
     monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
     monkeypatch.setenv("BACKEND_RPA_API_TOKEN", RPA_KEY)

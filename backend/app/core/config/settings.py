@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     rpa_api_token: SecretStr | None = None
     rpa_api_token_file: Path | None = None
     data_root: Path = Path("/data")
+    # User-uploaded product images live on a persistent NAS mount.  A public
+    # URL is configured explicitly; the incoming Host header is never trusted.
+    image_storage_dir: Path | None = None
+    image_public_base_url: str | None = None
+    image_upload_max_bytes: int = Field(default=15 * 1024 * 1024, ge=1, le=15 * 1024 * 1024)
     enable_group_writes: bool = False
     enable_product_writes: bool = False
     export_max_bytes: int = Field(default=128 * 1024 * 1024, ge=1024)

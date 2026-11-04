@@ -8,9 +8,9 @@ import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
-import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictProductCategory,
+import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictManualCategory, predictProductCategory,
   type CategoryAttribute, type CategoryTreeItem, type PredictedCategory } from '../api/category-lookup'
-import { createManualProduct, fetchEditSnapshot, saveProduct, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
+import { createManualProduct, fetchEditSnapshot, saveProduct, uploadProductImage, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
 import type { LibraryProduct, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
@@ -71,6 +71,8 @@ const predictionMessage = ref('')
 const editVersion = ref('')
 const editBusy = ref(false)
 const saving = ref(false)
+const uploading = ref(false)
+const uploadInput = ref<HTMLInputElement | null>(null)
 const draftTitle = ref('')
 const initialTitle = ref('')
 const draftMain = ref<string[]>([])
@@ -90,7 +92,7 @@ const selectedParts = ref<CategoryTreeItem[] | null>(null)
 const attributeInputs = ref<Record<string, string>>({})
 const touchedAttributes = ref<string[]>([])
 let editRequest = 0
-const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value)
+const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value && !uploading.value)
 const dirty = computed(() => !!props.product && (
   draftTitle.value !== initialTitle.value || selectedParts.value !== null || touchedAttributes.value.length > 0 ||
   JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value) ||
@@ -144,9 +146,9 @@ function setEditSnapshot(result: EditSnapshot) {
 }
 
 function allowLeave() { return !dirty.value || window.confirm('当前商品有未保存的修改，确定放弃吗？') }
-function closeEditor() { if (!saving.value && allowLeave()) emit('update:show', false) }
-function navigateEditor(direction: 'previous' | 'next') { if (!saving.value && allowLeave()) emit('navigate', direction) }
-function navigateTo(id: string) { if (!saving.value && allowLeave()) emit('navigate-to', id) }
+function closeEditor() { if (!saving.value && !uploading.value && allowLeave()) emit('update:show', false) }
+function navigateEditor(direction: 'previous' | 'next') { if (!saving.value && !uploading.value && allowLeave()) emit('navigate', direction) }
+function navigateTo(id: string) { if (!saving.value && !uploading.value && allowLeave()) emit('navigate-to', id) }
 
 function setAttribute(item: CategoryAttribute, value: string) {
   attributeInputs.value[item.id] = value
@@ -320,6 +322,42 @@ function changeImage(kind: 'main' | 'detail' | 'sku', index?: number) {
   else if (images && index === undefined) images.push(url)
   else if (images && index !== undefined) images[index] = url
 }
+type UploadTarget = { kind: 'main' | 'detail' | 'sku'; index?: number; skuId?: string; request: number }
+let uploadTarget: UploadTarget | null = null
+function chooseLocalImage(kind: UploadTarget['kind'], index?: number) {
+  if (!canEdit.value) return
+  if (kind === 'sku' && props.product?.platform === 'pdd') {
+    message.warning('拼多多商品的规格图片编辑尚未接入'); return
+  }
+  const skuId = kind === 'sku' ? specImages.value[index ?? -1]?.id : undefined
+  if (kind === 'sku' && !skuId) return
+  uploadTarget = { kind, index, skuId, request: editRequest }
+  uploadInput.value?.click()
+}
+async function receiveLocalImage(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  const target = uploadTarget
+  input.value = ''
+  uploadTarget = null
+  if (!file || !target || !canEdit.value) return
+  if (file.size > 15 * 1024 * 1024) { message.error('图片大小不能超过 15 MB'); return }
+  uploading.value = true
+  try {
+    const result = await uploadProductImage(file)
+    if (target.request !== editRequest || !props.show) return
+    if (!validImageUrl(result.url)) throw new Error('图片地址无效，请重试')
+    if (target.kind === 'sku') {
+      const spec = specImages.value.find((item) => item.id === target.skuId)
+      if (spec) { spec.url = result.url; specImageEnabled.value = true }
+    } else {
+      const images = target.kind === 'main' ? draftMain.value : draftDetail.value
+      if (target.index === undefined) images.push(result.url)
+      else if (target.index < images.length) images[target.index] = result.url
+    }
+  } catch (error) { message.error(error instanceof Error ? error.message : '图片上传失败，请重试') }
+  finally { uploading.value = false }
+}
 function removeImage(kind: 'main' | 'detail' | 'sku', index: number) {
   if (!canEdit.value) return
   if (kind === 'sku') { if (specImages.value[index]) specImages.value[index].url = ''; return }
@@ -442,6 +480,12 @@ async function submitEdit() {
 }
 let categoryRequest = 0
 let predictionRequest = 0
+const isManualProduct = computed(() => props.creating || !!props.product?.id.startsWith('manual:'))
+watch(() => [draftTitle.value, draftMain.value[0]] as const, () => {
+  if (!isManualProduct.value) return
+  predictionRequest += 1
+  predictionBusy.value = false; predictionCandidates.value = []; predictionShop.value = null; predictionMessage.value = ''
+})
 watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.product?.id,
   props.product?.sourceCategoryId, props.product?.targetCategory] as const, () => {
   imageRetries.value = {}
@@ -490,8 +534,8 @@ async function loadAttributes(refresh = false) {
   categoryBusy.value = true; categoryError.value = false
   try {
     const result = categoryShop.value
-      ? await fetchCategoryAttributes(categoryShop.value, categoryId, props.creating ? draftTitle.value : product.title, refresh)
-      : await fetchOriginalCategoryAttributes(categoryId, props.creating ? draftTitle.value : product.title, refresh)
+      ? await fetchCategoryAttributes(categoryShop.value, categoryId, isManualProduct.value ? draftTitle.value : product.title, refresh)
+      : await fetchOriginalCategoryAttributes(categoryId, isManualProduct.value ? draftTitle.value : product.title, refresh)
     if (request !== categoryRequest) return
     if ('shopId' in result && typeof result.shopId === 'string') categoryShop.value = result.shopId
     categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true
@@ -548,19 +592,23 @@ watch(() => [props.show, props.product?.id, props.batchPrediction, editVersion.v
 
 async function runPrediction() {
   const product = props.product
-  if (!product || product.platform !== 'pdd' || !canEdit.value || predictionBusy.value) return
-  if (dirty.value) { message.warning('请先保存当前修改，再预检类目'); return }
+  const manual = isManualProduct.value
+  if (!product || (!manual && product.platform !== 'pdd') || !canEdit.value || predictionBusy.value) return
+  if (!manual && dirty.value) { message.warning('请先保存当前修改，再预检类目'); return }
+  const title = draftTitle.value
+  const mainImage = draftMain.value[0] ?? ''
   const request = ++predictionRequest
   predictionBusy.value = true; predictionCandidates.value = []; predictionShop.value = null; predictionMessage.value = ''
   try {
-    const result = await predictProductCategory(product.id)
+    const result = manual ? await predictManualCategory(title, mainImage) : await predictProductCategory(product.id)
     if (request !== predictionRequest) return
-    if (result.sourceVersion !== editVersion.value) { message.warning('商品数据已变化，请刷新后重新预检'); return }
+    if (manual && (title !== draftTitle.value || mainImage !== (draftMain.value[0] ?? ''))) return
+    if (!manual && result.sourceVersion !== editVersion.value) { message.warning('商品数据已变化，请刷新后重新预检'); return }
     if (result.missing.length) { predictionMessage.value = `请先完善${result.missing.join('、')}`; return }
     if (!result.candidates.length) { predictionMessage.value = '未找到推荐类目，请手动选择'; return }
     predictionShop.value = result.shopId; predictionCandidates.value = result.candidates
     const recommended = result.candidates.find((candidate) => candidate.id === result.recommendedId && candidate.selectable === true)
-    if (recommended) choosePrediction(recommended)
+    if (recommended && !manual) choosePrediction(recommended)
     else predictionMessage.value = '请选择合适的推荐类目'
   } catch (error) {
     if (request === predictionRequest) predictionMessage.value = error instanceof Error ? error.message : '类目预检失败，请重试'
@@ -686,6 +734,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
     <ErrorState v-if="error" :description="error" retryable @retry="emit('retry')" />
     <LoadingState v-else-if="!product" />
     <div v-else class="product-preview__layout" :class="{ 'product-preview__layout--creating': creating }" :aria-busy="loading">
+      <input ref="uploadInput" type="file" accept="image/jpeg,image/png,image/gif,image/webp" hidden @change="receiveLocalImage">
       <div v-if="loading" class="product-preview__loading-mask" role="status" aria-label="加载中"><NSpin size="small" /></div>
       <ProductRangeNavigator v-if="!creating" :items="navigationItems" :selected-id="product.id" :position-label="positionLabel"
         :can-previous="canPrevious" :can-next="canNext" :disabled="loading"
@@ -737,7 +786,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               <template v-if="categoryLookupEnabled">
                 <CategoryPicker :key="product.id" :label="categoryLabel"
                   :disabled="categoryBusy || (editable && (!canEdit || !['douyin', 'pdd'].includes(product.platform)))" @select="selectCategory" />
-                <AppButton v-if="product.platform === 'pdd' && editable" size="small" :loading="predictionBusy"
+                <AppButton v-if="(product.platform === 'pdd' || isManualProduct) && editable" size="small" :loading="predictionBusy"
                   :disabled="!canEdit || categoryBusy" @click="runPrediction">预检类目</AppButton>
               </template>
               <template v-else>
@@ -759,6 +808,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                 <strong>{{ section.label }}</strong>
                 <div v-if="section.key !== 'sku'" class="product-preview__actions">
                   <AppButton size="small" disabled title="AI 改图尚未接入">AI 创作</AppButton>
+                  <AppButton size="small" :loading="uploading" :disabled="!canEdit" @click="chooseLocalImage(section.key)">上传本地图片</AppButton>
                   <AppButton size="small" :disabled="!canEdit" @click="changeImage(section.key)">添加图片链接</AppButton>
                 </div>
                 <AppButton v-else tone="link" size="small" @click="tab = 'sku'">在规格与 SKU 中设置</AppButton>
@@ -776,6 +826,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                     <NText v-else depth="3">—</NText>
                   </div>
                   <div v-if="section.key !== 'sku'" class="product-preview__image-actions">
+                    <AppButton tone="link" size="small" :disabled="!canEdit" @click="chooseLocalImage(section.key, index)">本地替换</AppButton>
                     <AppButton tone="link" size="small" :disabled="!canEdit || index === 0" @click="moveImage(section.key, index, -1)">上移</AppButton>
                     <AppButton tone="link" size="small" :disabled="!canEdit || index === section.images.length - 1" @click="moveImage(section.key, index, 1)">下移</AppButton>
                     <AppButton tone="link" size="small" :disabled="!canEdit" @click="removeImage(section.key, index)">删除</AppButton>
@@ -783,6 +834,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   <template v-else>
                     <NText class="product-preview__image-caption">{{ image.label }}</NText>
                     <div class="product-preview__image-actions">
+                      <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey || product.platform === 'pdd'" @click="chooseLocalImage('sku', index)">上传</AppButton>
                       <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey" @click="changeImage('sku', index)">更换</AppButton>
                       <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey || !image.src" @click="removeImage('sku', index)">删除</AppButton>
                       <AppButton tone="link" size="small" disabled title="AI 改图尚未接入">AI 改图</AppButton>
@@ -850,7 +902,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                       @error="fallbackImage(`spec:${axisIndex}:${specImageIndex(value)}`, specImages[specImageIndex(value)].url)">
                       <template #error><AppButton size="small" @click.stop="retryImage(`spec:${axisIndex}:${specImageIndex(value)}`)">重试</AppButton></template>
                     </NImage>
-                    <button v-else type="button" class="product-preview__spec-image-add" :disabled="!canEdit"
+                    <button v-else type="button" class="product-preview__spec-image-add" :disabled="!canEdit || product.platform === 'pdd'"
                       :aria-label="`更换${value}规格图片`" @click="changeImage('sku', specImageIndex(value))">＋</button>
                   </div>
                   <AppInput :model-value="value" :aria-label="`${axis.name}规格值`" :readonly="!canStructure"
@@ -858,6 +910,9 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   <AppButton v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0 && specImages[specImageIndex(value)]?.url"
                     tone="link" size="small" :disabled="!canEdit" :aria-label="`更换${value}规格图片`"
                     @click="changeImage('sku', specImageIndex(value))">更换</AppButton>
+                  <AppButton v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0"
+                    tone="link" size="small" :disabled="!canEdit || product.platform === 'pdd'" :aria-label="`上传${value}规格图片`"
+                    @click="chooseLocalImage('sku', specImageIndex(value))">上传</AppButton>
                   <AppButton tone="link" size="small" :disabled="!canStructure" @click="deleteSpecValue(axisIndex, specGroups[axisIndex].values[valueIndex].id)">删除</AppButton>
                 </div>
                 <AppButton size="small" :disabled="!canStructure" @click="addSpecValue(axisIndex)">添加规格值</AppButton>

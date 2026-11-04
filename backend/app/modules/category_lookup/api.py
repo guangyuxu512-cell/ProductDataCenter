@@ -48,6 +48,13 @@ class PredictBody(BaseModel):
         return value
 
 
+class PredictManualBody(BaseModel):
+    # A manual draft has no database product yet. Never create one merely to
+    # look up candidates; use exactly what is currently in the editor.
+    title: str = Field(default="", max_length=10000)
+    imageUrl: str = Field(default="", max_length=10000)
+
+
 def _usable_image_url(value) -> str:
     if isinstance(value, dict):
         value = value.get("url")
@@ -275,6 +282,24 @@ def search(body: SearchBody, response: Response,
     response.headers["Cache-Control"] = "no-store"
     shop_id, candidates = _auto_shop(central, lookup, lambda session: lookup.search(session, body.keyword))
     return SearchResponse(shopId=shop_id, candidates=candidates)
+
+
+@router.post("/predict/manual", response_model=PredictResponse)
+def predict_manual(body: PredictManualBody, response: Response,
+                   central: Annotated[CentralApplicationClient, Depends(get_central)],
+                   lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)]):
+    response.headers["Cache-Control"] = "no-store"
+    title = body.title.strip()
+    image_url = _usable_image_url(body.imageUrl)
+    version = hashlib.sha256(json.dumps([title, image_url], ensure_ascii=False).encode("utf-8")).hexdigest()
+    missing = (["商品标题"] if not title else []) + (["商品主图"] if not image_url else [])
+    if missing:
+        return PredictResponse(status="missing_data", sourceVersion=version, missing=missing,
+                               shopId=None, candidates=[], recommendedId=None)
+    shop_id, result = _auto_shop(central, lookup, lambda session: lookup.predict(session, title, image_url))
+    status = ("recommended" if result["recommendedId"] else
+              "needs_category_confirmation" if result["candidates"] else "no_recommendation")
+    return PredictResponse(status=status, sourceVersion=version, missing=[], shopId=shop_id, **result)
 
 
 @router.post("/predict", response_model=PredictResponse)
