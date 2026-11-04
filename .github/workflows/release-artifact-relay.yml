@@ -1,0 +1,74 @@
+name: Release verified NAS images
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful CI run id that produced the image artifact
+        required: true
+        type: string
+      artifact_name:
+        description: Exact product-workbench-images-<40 character sha> artifact name
+        required: true
+        type: string
+      release_tag:
+        description: GitHub release tag used as the public NAS download location
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate requested CI artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ inputs.run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$ARTIFACT_NAME" =~ ^product-workbench-images-[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" =~ ^[0-9A-Za-z._-]+$ ]]
+          expected_sha="${ARTIFACT_NAME#product-workbench-images-}"
+          run_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq .head_sha)"
+          run_conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq .conclusion)"
+          test "$run_conclusion" = success
+          test "$run_sha" = "$expected_sha"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: release-images
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify and publish release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ inputs.run_id }}
+          ARTIFACT_NAME: ${{ inputs.artifact_name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          test -f release-images/product-workbench-images.tar.gz
+          test -f release-images/SHA256SUMS
+          (cd release-images && sha256sum -c SHA256SUMS)
+          source_sha="${ARTIFACT_NAME#product-workbench-images-}"
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Product Data Center ${source_sha:0:7}" \
+              --notes "Verified NAS image assets from successful CI run ${RUN_ID}, source ${source_sha}."
+          fi
+          gh release upload "$RELEASE_TAG" \
+            release-images/product-workbench-images.tar.gz \
+            release-images/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
