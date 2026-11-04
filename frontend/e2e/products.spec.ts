@@ -798,16 +798,16 @@ test('批量预检保留拼多多推荐，打开商品后由用户选择', async
   await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('')
 })
 
-test('手动新建商品后打开数据库商品草稿', async ({ page }) => {
+test('手动新建打开完整弹窗，仅保存时创建商品', async ({ page }) => {
   await fixtures(page)
   const id = 'manual:12345678'
-  let createdTitle = ''
+  let created: { title: string; draftSeed: string; edit: ProductPatch } | null = null
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
   } }))
   await page.route('**/api/v1/products', (route) => {
     if (route.request().method() !== 'POST') return route.fallback()
-    createdTitle = route.request().postDataJSON().title
+    created = route.request().postDataJSON()
     return route.fulfill({ json: { productId: id } })
   })
   await page.route(`**/api/v1/products/${encodeURIComponent(id)}/edit`, (route) => route.fulfill({ json: {
@@ -817,14 +817,36 @@ test('手动新建商品后打开数据库商品草稿', async ({ page }) => {
     product: { ...product(id), title: '我的手动商品', source_product_id: null, title_status: '手动创建' },
     sourceCategoryId: null, sourceAttributes: [], targetCategory: [], targetAttributes: [], skus: [], images: [],
   } }))
+  await page.route('**/api/v1/category-lookup/tree', (route) => route.fulfill({ json: {
+    shopId: '00000000-0000-4000-8000-000000000111', parentId: '0',
+    items: [{ id: '100', name: '家居', isLeaf: true, enabled: true }], fromCache: true,
+  } }))
+  await page.route('**/api/v1/category-lookup/schema**', (route) => route.fulfill({ json: {
+    shopId: '00000000-0000-4000-8000-000000000111', categoryId: '100', attributes: [],
+  } }))
   await page.goto('/#/products')
   await page.getByRole('button', { name: '手动新建商品' }).click()
-  await page.getByRole('textbox', { name: '新商品标题' }).fill('我的手动商品')
-  await page.getByRole('dialog').getByRole('button', { name: '创建' }).click()
-  await expect.poll(() => createdTitle).toBe('我的手动商品')
   const dialog = page.getByRole('dialog')
-  await expect(dialog.getByText('手动创建', { exact: true })).toBeVisible()
-  await expect(dialog.getByRole('textbox', { name: '商品标题', exact: true })).toHaveValue('我的手动商品')
+  await expect(dialog.getByRole('tab', { name: '图文信息' })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: '商品属性' })).toBeVisible()
+  await expect(dialog.getByRole('tab', { name: '规格与 SKU' })).toBeVisible()
+  await dialog.getByRole('textbox', { name: '商品标题', exact: true }).fill('我的手动商品')
+  await dialog.getByRole('textbox', { name: '请选择抖店类目' }).click()
+  const category = page.getByRole('dialog', { name: '选择抖店类目' })
+  await category.getByRole('button', { name: '家居', exact: true }).click()
+  await category.getByRole('button', { name: '确认' }).click()
+  await dialog.getByRole('tab', { name: '图文信息' }).click()
+  page.once('dialog', (prompt) => prompt.accept('https://example.test/main.jpg'))
+  await dialog.getByRole('button', { name: '添加图片链接' }).first().click()
+  await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  await dialog.getByRole('textbox', { name: 'SKU 价格' }).fill('9.90')
+  await dialog.getByRole('textbox', { name: 'SKU 库存' }).fill('5')
+  expect(created).toBeNull()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => created).toMatchObject({ title: '我的手动商品',
+    edit: { title: '我的手动商品', category: [{ id: '100', name: '家居' }],
+      mainImages: ['https://example.test/main.jpg'], skus: [{ price: '9.90', stock: 5 }] } })
+  expect(created?.draftSeed).toMatch(/^[a-f0-9]{32}$/)
 })
 
 test('自动预检的结果在列表和商品中显示具体待完善项', async ({ page }) => {

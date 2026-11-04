@@ -24,3 +24,15 @@ def test_manual_product_title_uses_editor_length_rules():
     assert ManualProductCreate(title="  新商品  ").title == "新商品"
     with pytest.raises(ValidationError):
         ManualProductCreate(title="商" * 31)
+
+
+def test_manual_creation_requires_matching_seed_and_title():
+    edit = ProductEdit(expectedVersion="0" * 64, title="新商品")
+    with pytest.raises(ValidationError):
+        ManualProductCreate(title="新商品", edit=edit)
+    with pytest.raises(ValidationError):
+        ManualProductCreate(title="其他商品", draftSeed="a" * 32, edit=edit)
+    body = ManualProductCreate(title="新商品", draftSeed="a" * 32, edit=edit)
+    package, sku_id = manual_package(body.title, body.draftSeed)
+    assert package["spec_detail_value"]["value"][0]["spec_values"][0]["id"] == "local-" + "a" * 32 + "-spec"
+    assert sku_id == "local-" + "a" * 32 + "-sku"

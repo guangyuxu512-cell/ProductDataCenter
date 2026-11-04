@@ -3,9 +3,9 @@
 from uuid import uuid4
 
 
-def manual_package(title: str) -> tuple[dict, str]:
-    spec_id = "local-" + uuid4().hex
-    sku_id = "local-" + uuid4().hex
+def manual_package(title: str, draft_seed: str | None = None) -> tuple[dict, str]:
+    spec_id = "local-" + (draft_seed + "-spec" if draft_seed else uuid4().hex)
+    sku_id = "local-" + (draft_seed + "-sku" if draft_seed else uuid4().hex)
     package = {
         "goodsInfo": {"goodsName": title, "goodsImageList": [], "skuInfoMap": {
             spec_id: {"_local_sku_key": sku_id},

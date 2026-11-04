@@ -258,18 +258,6 @@ class SpecStructureEdit(BaseModel):
     skus: list[StructureSku] = Field(min_length=1, max_length=2000)
 
 
-class ManualProductCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=10000)
-
-    @field_validator("title")
-    @classmethod
-    def valid_title(cls, value: str) -> str:
-        value = value.strip()
-        if not value or sum(2 if ord(character) > 127 else 1 for character in value) > 60:
-            raise ValueError("商品标题不能为空，长度不能超过 60")
-        return value
-
-
 class ProductEdit(BaseModel):
     expectedVersion: str = Field(pattern=r"^[a-f0-9]{64}$")
     title: str | None = Field(default=None, min_length=1, max_length=10000)
@@ -317,4 +305,23 @@ class ProductEdit(BaseModel):
             raise ValueError("规格 ID 不能重复")
         if self.skus is not None and len({tuple(item.specIds) for item in self.skus}) != len(self.skus):
             raise ValueError("SKU 规格组合不能重复")
+        return self
+
+
+class ManualProductCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=10000)
+    draftSeed: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    edit: ProductEdit | None = None
+
+    @field_validator("title")
+    @classmethod
+    def valid_title(cls, value: str) -> str:
+        return ProductEdit.valid_title(value)
+
+    @model_validator(mode="after")
+    def valid_draft(self):
+        if self.edit is not None and self.draftSeed is None:
+            raise ValueError("新建商品缺少草稿标识")
+        if self.edit is not None and self.edit.title != self.title:
+            raise ValueError("商品标题不一致")
         return self

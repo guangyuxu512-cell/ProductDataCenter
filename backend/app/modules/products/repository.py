@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import nullcontext
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
@@ -58,16 +59,20 @@ class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def create_manual(self, title: str) -> str:
+    def create_manual(self, title: str, draft_seed: str | None = None, edit=None) -> str:
         product_id = "manual:" + str(uuid4().int)
-        package, sku_id = manual_package(title)
+        package, sku_id = manual_package(title, draft_seed)
         with self.engine.begin() as conn:
-            conn.execute(text("""INSERT INTO products
+            saved = conn.execute(text("""INSERT INTO products
                 (product_id, source_platform, source_product_id, title, title_status, sku_count, captured_at, uu_json)
-                VALUES (:id, 'douyin', NULL, :title, '手动创建', 1, now(), CAST(:package AS jsonb))"""),
-                {"id": product_id, "title": title, "package": json.dumps(package, ensure_ascii=False)})
+                VALUES (:id, 'douyin', NULL, :title, '手动创建', 1, now(), CAST(:package AS jsonb))
+                RETURNING uu_json::text"""),
+                {"id": product_id, "title": title, "package": json.dumps(package, ensure_ascii=False)}).scalar_one()
             conn.execute(text("""INSERT INTO product_skus(product_id, sku_id, sku_name, sort_order)
                 VALUES (:id, :sku, '规格: 默认', 0)"""), {"id": product_id, "sku": sku_id})
+            if edit is not None:
+                version = hashlib.sha256(saved.encode("utf-8")).hexdigest()
+                self.save_edit(product_id, edit.model_copy(update={"expectedVersion": version}), conn=conn, mark_modified=False)
         return product_id
 
     def list(self, options: ProductListOptions) -> dict:
@@ -256,8 +261,8 @@ class ProductRepository:
                 "specImageGroup": str(first.get("name") or ""), "specImages": spec_images,
                 "specGroups": spec_groups, "skus": sku_rows}
 
-    def save_edit(self, product_id: str, edit) -> dict:
-        with self.engine.begin() as conn:
+    def save_edit(self, product_id: str, edit, conn: Connection | None = None, mark_modified: bool = True) -> dict:
+        with (nullcontext(conn) if conn is not None else self.engine.begin()) as conn:
             row = conn.execute(text("""SELECT source_platform, uu_json::text AS package, title_status
                 FROM products WHERE product_id=:id FOR UPDATE"""), {"id": product_id}).mappings().first()
             if row is None:
@@ -286,7 +291,7 @@ class ProductRepository:
                     if ids and isinstance(source, dict):
                         original_sku_urls[_sku_key(source, key)] = first_images.get(ids[0], "")
             status = row["title_status"] or ""
-            if not status.endswith("商品库已修改"):
+            if mark_modified and not status.endswith("商品库已修改"):
                 status = f"{status} | 商品库已修改" if status else "商品库已修改"
             params = {"id": product_id, "package": json.dumps(package, ensure_ascii=False, separators=(",", ":")),
                       "title": edit.title, "status": status}

@@ -37,7 +37,7 @@ def products(request: Request, service: Service):
 
 @router.post("/products", dependencies=[Depends(require_product_writes)])
 def create_manual_product(body: ManualProductCreate, service: Service):
-    return service.create_manual(body.title)
+    return service.create_manual(body.title, body.draftSeed, body.edit)
 
 
 @router.get("/product-groups", response_model=GroupsRead)
