@@ -40,6 +40,7 @@ withDefaults(
     positiveDisabled?: boolean
     positiveDisabledReason?: string | null
     contentScrollable?: boolean
+    closeOnEsc?: boolean
     to?: string | HTMLElement
   }>(),
   {
@@ -51,6 +52,7 @@ withDefaults(
     positiveDisabled: false,
     positiveDisabledReason: null,
     contentScrollable: true,
+    closeOnEsc: true,
     to: APP_OVERLAY_HOST_SELECTOR,
   },
 )
@@ -76,6 +78,7 @@ function cancel(): void {
     :style="dialogStyle(size)"
     :bordered="true"
     :mask-closable="false"
+    :close-on-esc="closeOnEsc"
     :to="to"
     @update:show="$emit('update:show', $event)"
   >

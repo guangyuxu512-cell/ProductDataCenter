@@ -23,7 +23,7 @@ export function pddAttributeValue(target: CategoryAttribute, definitions: Catego
   const matches = product.attributes.filter((item) => item.name.trim() === label)
   if (matches.length !== 1) return ''
   const values = matches[0].value.split('、').map((value) => value.trim()).filter(Boolean)
-  if (!values.length || (target.options.length && values.some((value) =>
+  if (!values.length || (target.options.length && target.allowCustom !== true && values.some((value) =>
     target.options.filter((option) => option.label === value).length !== 1))) return ''
   return values.join('、')
 }

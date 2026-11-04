@@ -3,7 +3,7 @@ import type { CategoryAttribute } from '../api/category-lookup'
 import type { LibraryProduct } from './contracts'
 import { originalAttributeValue, pddAttributeValue } from './source-attributes'
 
-const target: CategoryAttribute = { id: '501', label: '材质', required: true, options: [] }
+const target: CategoryAttribute = { id: '501', label: '材质', required: true, options: [], control: 'text', allowCustom: false }
 const product = { platform: 'douyin', sourceCategoryId: '100', attributes: [
   { id: '501', name: '材质旧名称', value: '304 不锈钢' },
   { id: '502', name: '适用场景', value: '家用、户外' },
@@ -34,7 +34,7 @@ describe('拼多多来源属性匹配', () => {
     { id: '501', name: '材质', value: '玻璃' },
   ] } as LibraryProduct
   const origin: CategoryAttribute = { id: 'target-9', label: '产地', required: false,
-    options: [{ label: '中国大陆', value: 'target-option' }] }
+    options: [{ label: '中国大陆', value: 'target-option' }], control: 'single', allowCustom: false }
   it('按唯一名称和抖店选项的值匹配，不沿用拼多多 ID', () => {
     expect(pddAttributeValue(origin, [origin], pdd)).toBe('中国大陆')
   })
@@ -48,5 +48,9 @@ describe('拼多多来源属性匹配', () => {
     const material = { ...origin, label: '材质', options: [] }
     expect(pddAttributeValue(material, [material], pdd)).toBe('玻璃')
     expect(pddAttributeValue(material, [material], { ...pdd, platform: 'douyin' })).toBe('')
+  })
+  it('平台明确允许自定义值时可以可靠回填同名来源值', () => {
+    const custom = { ...origin, label: '材质', allowCustom: true }
+    expect(pddAttributeValue(custom, [custom], pdd)).toBe('玻璃')
   })
 })

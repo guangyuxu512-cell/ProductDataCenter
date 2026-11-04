@@ -6,6 +6,8 @@ export interface CategoryAttribute {
   label: string
   required: boolean
   options: Array<{ label: string; value: string }>
+  control: 'single' | 'multi' | 'text' | 'number'
+  allowCustom: boolean
 }
 export interface CategoryTreeItem { id: string; name: string; isLeaf: boolean; enabled: boolean }
 export interface PredictedCategory extends CategoryCandidate {

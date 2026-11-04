@@ -96,6 +96,20 @@ def test_schema_keeps_options_beyond_previous_500_item_limit():
         pure_signer.generate("appid=1", "test-agent", body="not bytes")
 
 
+def test_schema_uses_platform_control_metadata_instead_of_guessing_labels():
+    fields = normalize_fields([
+        {"id": 1, "label": "适用场景", "type": "select", "multiple": True, "allow_create": True,
+         "options": [{"value_id": 10, "value_name": "家用"}]},
+        {"id": 2, "label": "型号", "type": "select", "multiple": False, "allow_create": False,
+         "options": [{"value_id": 20, "value_name": "标准"}]},
+        {"id": 3, "label": "容量", "type": "number", "options": []},
+        {"id": 4, "label": "备注", "type": "text", "options": []},
+    ])
+    assert [(field["control"], field["allowCustom"]) for field in fields] == [
+        ("multi", True), ("single", False), ("number", False), ("text", False),
+    ]
+
+
 def test_invalid_signer_mode_does_not_make_a_platform_request(settings):
     config = settings.model_copy(update={"douyin_signer_mode": "unknown"})
     with pytest.raises(LookupError, match="invalid_configuration"):
@@ -134,7 +148,8 @@ def test_signed_search_and_schema_do_not_require_token_and_return_safe_fields(se
     session = make_session()
     assert client.search(session, "勺子") == [{"id": "1000010075", "name": "汤勺", "path": "餐具 > 汤勺"}]
     assert client.schema(session, "1000010075", "不锈钢勺子") == [
-        {"id": "12", "label": "材质", "required": True, "options": [{"label": "不锈钢", "value": "3"}]}]
+        {"id": "12", "label": "材质", "required": True, "options": [{"label": "不锈钢", "value": "3"}],
+         "control": "single", "allowCustom": False}]
     assert [item[0] for item in calls] == ["sign", "sign", "platform", "sign", "sign", "platform"]
 
 

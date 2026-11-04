@@ -20,6 +20,9 @@ const props = withDefaults(
     multiple?: boolean
     maxTagCount?: number | 'responsive'
     renderLabel?: SelectProps['renderLabel']
+    onCreate?: SelectProps['onCreate']
+    tag?: boolean
+    showOnFocus?: boolean
     labelTooltip?: boolean
     filter?: SelectFilter
     menuProps?: SelectProps['menuProps']
@@ -38,6 +41,9 @@ const props = withDefaults(
     multiple: false,
     maxTagCount: undefined,
     renderLabel: undefined,
+    onCreate: undefined,
+    tag: false,
+    showOnFocus: false,
     labelTooltip: false,
     filter: undefined,
     menuProps: undefined,
@@ -157,6 +163,9 @@ function updateValue(value: AppSelectValue | null): void {
     :multiple="multiple"
     :max-tag-count="maxTagCount"
     :render-label="mergedRenderLabel"
+    :on-create="onCreate"
+    :tag="tag"
+    :show-on-focus="showOnFocus"
     :filter="filter"
     :menu-props="mergedMenuProps"
     :placement="placement"

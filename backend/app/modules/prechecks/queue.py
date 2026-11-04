@@ -20,6 +20,28 @@ class PrecheckQueue:
                 RETURNING q.product_id, q.revision, q.attempts"""), {"limit": limit}).mappings().all()
         return [dict(row) for row in rows]
 
+    def enqueue(self, product_ids: list[str]) -> list[dict]:
+        """Queue saved packages through the collector-owned durable queue.
+
+        Bumping the queue revision also invalidates an in-flight claim.  Its
+        eventual completion update is then rejected by ``complete`` instead
+        of replacing the result requested by the user most recently.
+        """
+        if not product_ids:
+            return []
+        with self.engine.begin() as conn:
+            rows = conn.execute(text("""INSERT INTO product_prechecks (product_id)
+                SELECT product_id FROM products
+                WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL
+                ON CONFLICT (product_id) DO UPDATE SET
+                  revision=product_prechecks.revision+1, state='pending', attempts=0,
+                  available_at=now(), lease_until=NULL, result=NULL, last_error=NULL, updated_at=now()
+                RETURNING product_id, revision, state, updated_at"""),
+                {"ids": product_ids}).mappings().all()
+        return [{"productId": row["product_id"], "revision": row["revision"],
+                 "state": row["state"], "result": None, "error": None,
+                 "updatedAt": row["updated_at"]} for row in rows]
+
     def complete(self, claim: dict, result: dict) -> bool:
         with self.engine.begin() as conn:
             done = conn.execute(text("""UPDATE product_prechecks SET state='done', result=CAST(:result AS jsonb),
@@ -43,8 +65,9 @@ class PrecheckQueue:
         if not product_ids:
             return []
         with self.engine.connect() as conn:
-            rows = conn.execute(text("""SELECT product_id, state, result, last_error, updated_at
+            rows = conn.execute(text("""SELECT product_id, revision, state, result, last_error, updated_at
                 FROM product_prechecks WHERE product_id=ANY(CAST(:ids AS text[]))"""),
                 {"ids": product_ids}).mappings().all()
-        return [{"productId": row["product_id"], "state": row["state"], "result": row["result"],
+        return [{"productId": row["product_id"], "revision": row["revision"],
+                 "state": row["state"], "result": row["result"],
                  "error": row["last_error"], "updatedAt": row["updated_at"]} for row in rows]
