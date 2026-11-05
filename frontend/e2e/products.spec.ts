@@ -587,7 +587,8 @@ test('抖音原类目直接取属性，切换商品时不使用旧响应', async
     calls.push({ path, body })
     if (body.categoryId === '1000010075') await firstGate
     await route.fulfill({ json: { shopId: '00000000-0000-4000-8000-000000000111', categoryId: body.categoryId,
-      attributes: [{ id: '12', label: body.categoryId === '1000010075' ? '材质' : '品牌', required: true, options: [] }] } })
+      attributes: [{ id: '12', label: body.categoryId === '1000010075' ? '材质' : '品牌', required: true,
+        options: [], control: 'text', allowCustom: false, ruleStatus: 'confirmed' }] } })
   })
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
@@ -620,9 +621,9 @@ test('抖音商品打开后提示具体缺失属性，填写后更新提示', as
   } }))
   await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
     shopId: '00000000-0000-4000-8000-000000000111', categoryId: '100', attributes: [
-      { id: '501', label: '材质', required: true, options: [] },
-      { id: '502', label: '品牌', required: true, options: [] },
-      { id: '503', label: '产地', required: true, options: [] },
+      { id: '501', label: '材质', required: true, options: [], control: 'text', allowCustom: false, ruleStatus: 'confirmed' },
+      { id: '502', label: '品牌', required: true, options: [], control: 'text', allowCustom: false, ruleStatus: 'confirmed' },
+      { id: '503', label: '产地', required: true, options: [], control: 'text', allowCustom: false, ruleStatus: 'confirmed' },
     ],
   } }))
   await page.goto('/#/products')
@@ -651,7 +652,8 @@ test('抖音原类目回显原包属性，切换类目后不错误沿用', async
   } }))
   await page.route('**/api/v1/category-lookup/schema**', (route) => route.fulfill({ json: {
     shopId: shop, categoryId: route.request().postDataJSON().categoryId,
-    attributes: [{ id: '501', label: '材质', required: true, options: [] }],
+    attributes: [{ id: '501', label: '材质', required: true, options: [], control: 'multi',
+      allowCustom: true, ruleStatus: 'confirmed' }],
   } }))
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
@@ -731,8 +733,11 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
   })
   await page.route('**/api/v1/category-lookup/schema**', (route) => route.fulfill({ json: {
     shopId: shop, categoryId: '102', attributes: [
-      { id: '501', label: '材质', required: true, options: [], control: 'text', allowCustom: false },
-      { id: '502', label: '产地', required: false, options: [{ label: '中国大陆', value: '99' }], control: 'single', allowCustom: false },
+      { id: '501', label: '材质', required: true, options: [], control: 'text', allowCustom: false, ruleStatus: 'confirmed' },
+      { id: '502', label: '产地', required: false, options: [{ label: '中国大陆', value: '99' }],
+        control: 'single', allowCustom: false, ruleStatus: 'confirmed' },
+      { id: '1687', label: '品牌', required: true, options: [{ label: '无品牌', value: '596120136' }],
+        control: 'single', allowCustom: false, ruleStatus: 'confirmed' },
     ],
   } }))
   await page.goto('/#/products')
@@ -755,6 +760,7 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
   expect(payload).toMatchObject({ expectedVersion: 'a'.repeat(64),
     category: [{ id: '100', name: '居家日用' }, { id: '101', name: '收纳工具' }, { id: '102', name: '收纳架' }],
     attributes: [{ id: '502', name: '产地', values: [{ name: '中国大陆', valueId: '99' }] },
+      { id: '1687', name: '品牌', values: [{ name: '无品牌', valueId: '596120136' }] },
       { id: '501', name: '材质', values: [{ name: '塑料', valueId: '0' }] }] })
   await expect(material).toHaveValue('塑料')
   await originForm.locator('.n-base-clear').click()
@@ -803,13 +809,17 @@ test('批量预检保留拼多多推荐，打开商品后由用户选择', async
         prediction } }] } })
   })
   await page.goto('/#/products')
+  const copyButton = page.locator('.n-data-table-tbody tr').first().getByRole('button', { name: '复制商品ID' })
+  const initialCopyX = (await copyButton.boundingBox())!.x
   await page.locator('.n-data-table-tbody tr').first().locator('.n-checkbox').click()
   await page.getByRole('button', { name: '批量预检' }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByRole('button', { name: `${firstId} 预检中` })).toBeVisible()
+  await expect.poll(async () => (await copyButton.boundingBox())!.x).toBe(initialCopyX)
   await expect(page.getByText('0/1', { exact: true })).toBeVisible()
   releaseResult()
   await expect(page.getByRole('button', { name: `${firstId} 待选择类目` })).toBeVisible()
+  await expect.poll(async () => (await copyButton.boundingBox())!.x).toBe(initialCopyX)
   await expect(page.getByText('1/1', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: `${firstId} 待选择类目` }).click()
   const dialog = page.getByRole('dialog')
@@ -842,7 +852,10 @@ test('手动新建打开完整弹窗，仅保存时创建商品', async ({ page 
     items: [{ id: '100', name: '家居', isLeaf: true, enabled: true }], fromCache: true,
   } }))
   await page.route('**/api/v1/category-lookup/schema**', (route) => route.fulfill({ json: {
-    shopId: '00000000-0000-4000-8000-000000000111', categoryId: '100', attributes: [],
+    shopId: '00000000-0000-4000-8000-000000000111', categoryId: '100', attributes: [
+      { id: '1687', label: '品牌', required: true, options: [{ label: '无品牌', value: '596120136' }],
+        control: 'single', allowCustom: false, ruleStatus: 'confirmed' },
+    ],
   } }))
   await page.goto('/#/products')
   await page.getByRole('button', { name: '手动新建商品' }).click()
@@ -865,6 +878,7 @@ test('手动新建打开完整弹窗，仅保存时创建商品', async ({ page 
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => created).toMatchObject({ title: '我的手动商品',
     edit: { title: '我的手动商品', category: [{ id: '100', name: '家居' }],
+      attributes: [{ id: '1687', name: '品牌', values: [{ valueId: '596120136', name: '无品牌' }] }],
       mainImages: ['https://example.test/main.jpg'], skus: [{ price: '9.90', stock: 5 }] } })
   expect(created?.draftSeed).toMatch(/^[a-f0-9]{32}$/)
 })
@@ -893,7 +907,8 @@ test('手动草稿可上传主图并预检类目，选择后才保存商品', as
         levels: [{ id: '100', name: '家居' }] }] } })
   })
   await page.route('**/api/v1/category-lookup/schema', (route) => route.fulfill({ json: {
-    categoryId: '100', attributes: [{ id: '1', label: '材质', required: true, options: [] }],
+    categoryId: '100', attributes: [{ id: '1', label: '材质', required: true, options: [],
+      control: 'text', allowCustom: false, ruleStatus: 'confirmed' }],
   } }))
   await page.goto('/#/products')
   await page.getByRole('button', { name: '手动新建商品' }).click()
@@ -903,7 +918,7 @@ test('手动草稿可上传主图并预检类目，选择后才保存商品', as
   const chooser = page.waitForEvent('filechooser')
   await dialog.getByRole('button', { name: '上传本地图片' }).first().click()
   await (await chooser).setFiles({ name: 'main.png', mimeType: 'image/png', buffer: Buffer.from('test image') })
-  await expect(dialog.locator('.product-preview__image-card').first().locator('img')).toHaveAttribute('src', imageUrl)
+  await expect(dialog.locator('.product-image-list__card').first().locator('img')).toHaveAttribute('src', imageUrl)
   await dialog.getByRole('tab', { name: '基本信息' }).click()
   await dialog.getByRole('button', { name: '预检类目' }).click()
   await expect.poll(() => prediction).toEqual({ title: '我的手动商品', imageUrl })
@@ -957,7 +972,8 @@ test('编辑现有商品可上传主图和规格图并把地址写入保存请�
 test('属性下拉空输入可展开，自定义规则能保存并读回', async ({ page }) => {
   await fixtures(page)
   let version = 'a'.repeat(64)
-  let sourceAttributes: Array<{ id: string; name: string; values: string[] }> = []
+  let sourceAttributes: Array<{ id: string; name: string; values: string[];
+    valueItems: Array<{ valueId: string; name: string }> }> = []
   let payload: ProductPatch | null = null
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
@@ -972,7 +988,8 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
       payload = route.request().postDataJSON() as ProductPatch
       for (const item of payload.attributes ?? []) {
         sourceAttributes = sourceAttributes.filter((attribute) => attribute.id !== item.id)
-        if (item.values.length) sourceAttributes.push({ id: item.id, name: item.name, values: item.values.map((value) => value.name) })
+        if (item.values.length) sourceAttributes.push({ id: item.id, name: item.name,
+          values: item.values.map((value) => value.name), valueItems: item.values.map((value) => ({ ...value })) })
       }
       version = 'b'.repeat(64)
       return route.fulfill({ json: { version } })
@@ -984,9 +1001,12 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   })
   await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
     shopId: '00000000-0000-4000-8000-000000000111', categoryId: '100', attributes: [
-      { id: '1', label: '面料', required: true, options: [{ label: '棉', value: '10' }], control: 'single', allowCustom: true },
-      { id: '2', label: '型号', required: false, options: [{ label: '标准', value: '20' }], control: 'single', allowCustom: false },
-      { id: '3', label: '容量', required: false, options: [], control: 'number', allowCustom: false },
+      { id: '1', label: '面料', required: true, options: [{ label: '棉', value: '10' }],
+        control: 'multi', allowCustom: true, ruleStatus: 'confirmed' },
+      { id: '2', label: '型号', required: false, options: [{ label: '标准', value: '20' }],
+        control: 'single', allowCustom: false, ruleStatus: 'confirmed' },
+      { id: '3', label: '容量', required: false, options: [], control: 'number', allowCustom: false,
+        ruleStatus: 'confirmed' },
     ],
   } }))
   await page.goto('/#/products')
@@ -996,6 +1016,7 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   const fabric = dialog.locator('.n-form-item').filter({ hasText: '面料' })
   await fabric.locator('.n-base-selection').click()
   await expect(page.getByText('棉', { exact: true })).toBeVisible()
+  await page.getByText('棉', { exact: true }).click()
   await fabric.locator('input').fill('亚麻')
   await expect(page.getByText('添加『亚麻』', { exact: true })).toBeVisible()
   await page.getByText('添加『亚麻』', { exact: true }).click()
@@ -1010,7 +1031,7 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => payload).not.toBeNull()
   expect(payload?.attributes).toEqual([
-    { id: '1', name: '面料', values: [{ name: '亚麻', valueId: '0' }] },
+    { id: '1', name: '面料', values: [{ name: '棉', valueId: '10' }, { name: '亚麻', valueId: '0' }] },
     { id: '3', name: '容量', values: [{ name: '12.5', valueId: '0' }] },
   ])
 
@@ -1019,6 +1040,7 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect(dialog.locator('.n-form-item').filter({ hasText: '面料' })).toContainText('棉')
   await expect(dialog.locator('.n-form-item').filter({ hasText: '面料' })).toContainText('亚麻')
   await expect(dialog.locator('.n-form-item').filter({ hasText: '型号' })).not.toContainText('伪造型号')
   await expect(dialog.getByRole('textbox', { name: '容量' })).toHaveValue('12.5')
@@ -1027,7 +1049,9 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
 test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最上层', async ({ page }) => {
   await fixtures(page)
   const urls = ['https://example.test/a.svg', 'https://example.test/b.svg', 'https://example.test/c.svg']
+  const detailUrls = ['https://example.test/d1.svg', 'https://example.test/d2.svg', 'https://example.test/d3.svg']
   let savedOrder = [...urls]
+  let savedDetailOrder = [...detailUrls]
   let version = 'a'.repeat(64)
   let payload: ProductPatch | null = null
   await page.route('https://example.test/**', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml',
@@ -1044,28 +1068,37 @@ test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最
     if (route.request().method() === 'PATCH') {
       payload = route.request().postDataJSON() as ProductPatch
       savedOrder = payload.mainImages ?? savedOrder
+      savedDetailOrder = payload.detailImages ?? savedDetailOrder
       version = 'b'.repeat(64)
       return route.fulfill({ json: { version } })
     }
     return route.fulfill({ json: { product: product(firstId), sourceCategoryId: null, sourceAttributes: [],
       skus: [{ sku_id: 'sku-1', sku_name: '规格: 默认', current_price: '19.99', image_rel_path: '', sort_order: 0 }],
-      images: savedOrder.map((source_url, sort_order) => ({ image_type: 'main', sort_order, rel_path: '', source_url })) } })
+      images: [
+        ...savedOrder.map((source_url, sort_order) => ({ image_type: 'main', sort_order, rel_path: '', source_url })),
+        ...savedDetailOrder.map((source_url, sort_order) => ({ image_type: 'detail', sort_order, rel_path: '', source_url })),
+      ] } })
   })
   await page.goto('/#/products')
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
-  let cards = dialog.locator('.product-preview__image-section').first().locator('.product-preview__image-card')
+  let cards = dialog.locator('.product-preview__image-section').first().locator('.product-image-list__card')
   await cards.first().dragTo(cards.nth(2))
   await expect(cards.first().locator('img')).toHaveAttribute('src', /b\.svg/)
+  let detailCards = dialog.locator('.product-preview__image-section').nth(1).locator('.product-image-list__card')
+  await detailCards.first().dragTo(detailCards.nth(2))
+  await expect(detailCards.first().locator('img')).toHaveAttribute('src', /d2\.svg/)
   await expect(page.locator('.n-image-preview-container')).toHaveCount(0)
   page.once('dialog', (confirmation) => confirmation.accept())
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
-  cards = dialog.locator('.product-preview__image-section').first().locator('.product-preview__image-card')
+  cards = dialog.locator('.product-preview__image-section').first().locator('.product-image-list__card')
   await expect(cards.first().locator('img')).toHaveAttribute('src', /a\.svg/)
+  detailCards = dialog.locator('.product-preview__image-section').nth(1).locator('.product-image-list__card')
+  await expect(detailCards.first().locator('img')).toHaveAttribute('src', /d1\.svg/)
 
   await dialog.getByRole('tab', { name: '基本信息' }).click()
   await dialog.getByRole('textbox', { name: '商品标题' }).fill('未保存标题')
@@ -1083,6 +1116,7 @@ test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最
 
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   await cards.first().dragTo(cards.nth(2))
+  await detailCards.first().dragTo(detailCards.nth(2))
   const actionLayout = await cards.evaluateAll((items) => items.map((card) => {
     const bounds = card.getBoundingClientRect()
     const buttons = [...card.querySelectorAll('button')].map((button) => button.getBoundingClientRect())
@@ -1093,12 +1127,14 @@ test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最
   expect(actionLayout.every((item) => item.contained && !item.overlap)).toBe(true)
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => payload?.mainImages).toEqual([urls[1], urls[2], urls[0]])
+  await expect.poll(() => payload?.detailImages).toEqual([detailUrls[1], detailUrls[2], detailUrls[0]])
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await page.reload()
   await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   await expect(dialog.locator('.product-preview__image-section').first().locator('img').first()).toHaveAttribute('src', /b\.svg/)
+  await expect(dialog.locator('.product-preview__image-section').nth(1).locator('img').first()).toHaveAttribute('src', /d2\.svg/)
 })
 
 test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读取新结果', async ({ page }) => {
@@ -1131,7 +1167,8 @@ test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读�
   })
   await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
     shopId: '00000000-0000-4000-8000-000000000111', categoryId: '100',
-    attributes: [{ id: '502', label: '品牌', required: true, options: [], control: 'text', allowCustom: false }],
+    attributes: [{ id: '502', label: '品牌', required: true, options: [], control: 'text',
+      allowCustom: false, ruleStatus: 'confirmed' }],
   } }))
   await page.route('**/api/v1/prechecks/run', (route) => {
     runCount++
@@ -1261,7 +1298,7 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
   await titleInput.fill('修改后的商品')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   page.once('dialog', (prompt) => prompt.accept('https://example.test/new-white.jpg'))
-  await dialog.getByRole('button', { name: '更换', exact: true }).click()
+  await dialog.getByRole('button', { name: '更换链接', exact: true }).click()
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
   await expect(dialog.getByRole('switch', { name: '颜色规格图开关' })).toBeChecked()
   const skuImage = dialog.getByRole('img', { name: '白色规格图片' })

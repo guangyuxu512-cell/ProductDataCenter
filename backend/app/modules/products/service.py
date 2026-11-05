@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import Settings
+from app.modules.product_images.urls import canonical_product_image_url
 from .errors import GroupNameConflict, GroupNotFound, ProductNotFound
 from .export import export_archive, resolve_data_file
 from .queries import parse_product_list_options
@@ -15,13 +16,26 @@ class ProductService:
         self.settings = settings
 
     def list(self, params):
-        return self.repository.list(parse_product_list_options(params))
+        return self.list_options(parse_product_list_options(params))
+
+    def list_options(self, options):
+        page = self.repository.list(options)
+        for item in page["items"]:
+            item["main_image_url"] = self._image_url(item.get("main_image_url"))
+        return page
 
     def detail(self, product_id: str):
         detail = self.repository.detail(product_id)
         if detail is None:
             raise ProductNotFound()
+        detail["product"]["main_image_url"] = self._image_url(detail["product"].get("main_image_url"))
+        detail["images"] = [{**dict(item), "source_url": self._image_url(item.get("source_url")) or ""}
+                            for item in detail["images"]]
         return detail
+
+    def _image_url(self, value):
+        return canonical_product_image_url(value, self.settings.image_public_base_url,
+                                           self.settings.image_legacy_base_urls)
 
     def edit_snapshot(self, product_id: str):
         return self.repository.edit_snapshot(product_id)
@@ -64,7 +78,8 @@ class ProductService:
 
     def export(self, product_ids: list[str]):
         return export_archive(self.repository.export_rows(product_ids), product_ids,
-                              self.settings.export_max_bytes)
+                              self.settings.export_max_bytes, self.settings.image_public_base_url,
+                              self.settings.image_legacy_base_urls)
 
     def image_file(self, product_id: str, kind: str, position: int):
         row = self.repository.image(product_id, kind, position)

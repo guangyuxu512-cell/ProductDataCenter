@@ -4,4 +4,6 @@
 
 新建和编辑可上传主图、详情图，抖音和手动商品可上传规格图；拼多多规格编辑目前尚未接入。支持 JPG、PNG、GIF、WebP，单图不超过 15 MB。图片 URL 可供网页、RPA 和抖店类目预检读取，访问此 URL 不需要商品库管理凭据；因此知道地址的人可以读取该图片。中控已有 AI 素材接口要求登录，不直接暴露或更改中控原有素材权限。
 
-部署时必须提供专门的可写持久目录和实际可从公网访问的商品库地址。`deploy/compose.product-images.yaml` 展示应用所需的配置：`PRODUCT_IMAGE_STORAGE_DIR` 指向现有 NAS 图片存储下为商品库单独准备的目录；`PRODUCT_IMAGE_PUBLIC_BASE_URL` 是外部可访问的商品服务根地址。外网反向代理必须把 `/rpa/v1/product-images/` 转发到商品库，上传管理接口仍沿用既有的管理权限和网络限制。未配置时上传明确失败，不会返回不可用的假地址。启用前需要确认 NAS 的读写权限、备份与公网地址，启用后从外网下载一张新图片并用 RPA 和抖店预检实测。
+部署时必须提供专门的可写持久目录和实际可从公网访问的 HTTPS 商品库地址。`deploy/compose.product-images.yaml` 展示应用所需的配置：`PRODUCT_IMAGE_STORAGE_DIR` 指向现有 NAS 图片存储下为商品库单独准备的目录；`PRODUCT_IMAGE_PUBLIC_BASE_URL` 是外部可访问的 HTTPS 服务根地址。HTTP、带凭据或带查询参数的根地址会使上传明确失败，不会返回 Tailnet/局域网假公网地址。
+
+外网入口只需把匿名只读路径 `/rpa/v1/product-images/` 转发到商品库；管理 API、数据库和凭据不得随之公开。`PRODUCT_IMAGE_LEGACY_BASE_URLS` 可填写逗号分隔的旧商品库图片根地址，只对该服务的 UUID 图片路径做读取/导出兼容改写，不修改抖音、拼多多等来源图片。管理详情、商品包导出和 RPA 数据包使用同一规范地址。启用前需确认目录写入与备份，启用后必须在未加入 NAS Tailnet 的实际异地 RPA 机器上直接使用数据包原始 URL 下载一张新上传图片，并记录 HTTP 状态、内容类型和实际打开结果；局域网或健康检查不能代替这项验收。

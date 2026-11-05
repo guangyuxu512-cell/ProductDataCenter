@@ -21,35 +21,48 @@ def _field_values(field, fields: list, source: list, target: list, platform: str
     if platform == "pinduoduo":
         saved = [item for item in target if item["id"] == field.id]
         if saved:
-            value = saved[0]["values"]
+            value = saved[0].get("valueItems") or saved[0]["values"]
     elif platform == "douyin":
         exact = [item for item in source if item["id"] and item["id"] == field.id]
         if len(exact) == 1:
-            value = exact[0]["values"]
+            value = exact[0].get("valueItems") or exact[0]["values"]
         elif len(exact) > 1:
             value = []
     if value is None:
         same_name = [item for item in source if item["name"].strip() == field.label.strip()]
         if names[field.label.strip()] == 1 and len(same_name) == 1:
-            value = same_name[0]["values"]
-    return [] if value is None else [str(item).strip() for item in value if str(item).strip()]
+            value = same_name[0].get("valueItems") or same_name[0]["values"]
+    normalized = []
+    for item in value or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            value_id = str(item.get("valueId") or "0").strip()
+        else:
+            name, value_id = str(item).strip(), "0"
+        if name:
+            normalized.append({"valueId": value_id, "name": name})
+    return normalized
 
 
-def _attribute_problem(field, values: list[str]) -> str | None:
+def _attribute_problem(field, values: list[dict]) -> str | None:
     if not values:
         return "未填写" if field.required else None
     control = getattr(field, "control", "text")
+    if getattr(field, "ruleStatus", "unknown") != "confirmed" or control == "unknown":
+        return "规则待核对"
     if control == "single" and len(values) != 1:
         return "只能选择一项"
     if control == "number":
         try:
-            if any(not Decimal(value).is_finite() for value in values):
+            if any(not Decimal(value["name"]).is_finite() for value in values):
                 return "数字无效"
         except (InvalidOperation, ValueError):
             return "数字无效"
-    if field.options and not getattr(field, "allowCustom", False):
+    if field.options and getattr(field, "allowCustom", None) is False:
+        option_ids = Counter(option.value.strip() for option in field.options)
         labels = Counter(option.label.strip() for option in field.options)
-        if any(labels[value] != 1 for value in values):
+        if any((option_ids[value["valueId"]] != 1 if value["valueId"] not in {"", "0"}
+                else labels[value["name"]] != 1) for value in values):
             return "包含无效选项"
     return None
 

@@ -128,8 +128,9 @@ class Attribute(BaseModel):
     label: str
     required: bool
     options: list[Option]
-    control: Literal["single", "multi", "text", "number"] = "text"
-    allowCustom: bool = False
+    control: Literal["single", "multi", "text", "number", "unknown"] = "unknown"
+    allowCustom: bool | None = None
+    ruleStatus: Literal["confirmed", "unknown"] = "unknown"
 
 
 class SearchResponse(BaseModel):

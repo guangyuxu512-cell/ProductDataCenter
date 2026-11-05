@@ -11,13 +11,14 @@ import { copyText } from '@/shared/utils/copy-text'
 import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictManualCategory, predictProductCategory,
   type CategoryAttribute, type CategoryTreeItem, type PredictedCategory } from '../api/category-lookup'
 import { createManualProduct, fetchEditSnapshot, saveProduct, uploadProductImage, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
-import type { LibraryProduct, ProductSku } from '../model/contracts'
+import type { LibraryProduct, ProductAttributeValue, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
-import { originalAttributeValue, pddAttributeValue } from '../model/source-attributes'
+import { originalAttributeValues, pddAttributeValues } from '../model/source-attributes'
 import type { AutoPrecheck, CategoryPrediction, PrecheckIssue } from '../model/precheck'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
+import ProductImageList from './ProductImageList.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
 
 const props = withDefaults(defineProps<{
@@ -93,12 +94,9 @@ type SkuDraft = { skuId: string; sourceSpecIds: string[] | null; specIds: string
 const skuDrafts = ref<SkuDraft[]>([])
 const initialSkuDrafts = ref<SkuDraft[]>([])
 const selectedParts = ref<CategoryTreeItem[] | null>(null)
-const attributeInputs = ref<Record<string, string[]>>({})
+const attributeInputs = ref<Record<string, ProductAttributeValue[]>>({})
 const touchedAttributes = ref<string[]>([])
 const imagePreviewSource = ref('')
-const draggedMainIndex = ref<number | null>(null)
-const mainDropIndex = ref<number | null>(null)
-let suppressImagePreview = false
 let editRequest = 0
 const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value && !uploading.value)
 const dirty = computed(() => !!props.product && (
@@ -113,7 +111,7 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
   const product = props.product
   editVersion.value = ''; editBusy.value = false; saving.value = false
   selectedParts.value = null; attributeInputs.value = {}; touchedAttributes.value = []
-  imagePreviewSource.value = ''; draggedMainIndex.value = null; mainDropIndex.value = null
+  imagePreviewSource.value = ''
   specGroups.value = []; initialSpecGroups.value = []; imageGroupIndex.value = 0; specImageEnabled.value = false
   skuDrafts.value = []; initialSkuDrafts.value = []
   if (!props.show || !product) return
@@ -160,16 +158,36 @@ function navigateEditor(direction: 'previous' | 'next') { if (!saving.value && !
 function navigateTo(id: string) { if (!saving.value && !uploading.value && allowLeave()) emit('navigate-to', id) }
 
 function attributeControl(item: CategoryAttribute) {
-  return item.control ?? (item.options.length ? 'single' : 'text')
+  return item.control
 }
-function splitAttributeValue(item: CategoryAttribute, value: string) {
-  const text = value.trim()
-  if (!text) return []
-  return attributeControl(item) === 'multi' ? text.split('、').map((part) => part.trim()).filter(Boolean) : [text]
+function customToken(name: string) { return `custom:${encodeURIComponent(name)}` }
+function retainedToken(value: ProductAttributeValue) {
+  return `retained:${encodeURIComponent(value.valueId)}:${encodeURIComponent(value.name)}`
 }
 function setAttribute(item: CategoryAttribute, value: string | number | Array<string | number> | null) {
   const raw = Array.isArray(value) ? value : value === null ? [] : [value]
-  attributeInputs.value[item.id] = raw.map(String).map((part) => part.trim()).filter(Boolean)
+  if (!item.options.length) {
+    attributeInputs.value[item.id] = raw.map(String).map((name) => name.trim()).filter(Boolean)
+      .map((name) => ({ valueId: '0', name }))
+  } else {
+    attributeInputs.value[item.id] = raw.flatMap((part) => {
+      const token = String(part)
+      if (token.startsWith('option:')) {
+        const option = item.options.find((candidate) => candidate.value === token.slice(7))
+        return option ? [{ valueId: option.value, name: option.label }] : []
+      }
+      if (token.startsWith('custom:')) {
+        const name = decodeURIComponent(token.slice(7)).trim()
+        return name ? [{ valueId: '0', name }] : []
+      }
+      if (token.startsWith('retained:')) {
+        const [, encodedId = '', encodedName = ''] = token.split(':', 3)
+        const name = decodeURIComponent(encodedName).trim()
+        return name ? [{ valueId: decodeURIComponent(encodedId) || '0', name }] : []
+      }
+      return []
+    })
+  }
   if (!touchedAttributes.value.includes(item.id)) touchedAttributes.value.push(item.id)
 }
 function applyPddSourceAttributes() {
@@ -179,40 +197,60 @@ function applyPddSourceAttributes() {
   for (const field of categoryAttributes.value) {
     if (touchedAttributes.value.includes(field.id) ||
         (sameTarget && product.targetAttributes?.some((attribute) => attribute.id === field.id))) continue
-    const value = pddAttributeValue(field, categoryAttributes.value, product)
-    if (value) setAttribute(field, splitAttributeValue(field, value))
+    const values = pddAttributeValues(field, categoryAttributes.value, product)
+    if (values.length) {
+      attributeInputs.value[field.id] = values
+      if (!touchedAttributes.value.includes(field.id)) touchedAttributes.value.push(field.id)
+    }
   }
 }
-function attributeValues(item: CategoryAttribute): string[] {
+function attributeValues(item: CategoryAttribute): ProductAttributeValue[] {
   if (item.id in attributeInputs.value) return attributeInputs.value[item.id]
   const product = props.product
   if (product?.platform === 'pdd') {
     const current = product.targetCategory?.at(-1)?.id
     if (current && current === selectedCategory.value && !selectedParts.value) {
-      return [...(product.targetAttributes?.find((attribute) => attribute.id === item.id)?.values ?? [])]
+      const saved = product.targetAttributes?.find((attribute) => attribute.id === item.id)
+      return saved?.valueItems?.length
+        ? saved.valueItems.map((value) => ({ ...value }))
+        : (saved?.values ?? []).map((name) => ({ valueId: '0', name }))
     }
     return []
   }
-  const value = product ? originalAttributeValue(item, categoryAttributes.value, product, selectedCategory.value) : ''
-  return splitAttributeValue(item, value)
+  return product ? originalAttributeValues(item, categoryAttributes.value, product, selectedCategory.value) : []
 }
 function attributeTextValue(item: CategoryAttribute) {
-  return attributeValues(item).join(attributeControl(item) === 'multi' ? '、' : '')
+  return attributeValues(item).map((value) => value.name).join(attributeControl(item) === 'multi' ? '、' : '')
 }
 function attributeProblem(item: CategoryAttribute): string | null {
   const values = attributeValues(item)
   if (!values.length) return item.required ? '未填写' : null
+  if (item.ruleStatus !== 'confirmed' || attributeControl(item) === 'unknown') return '规则待核对'
   if (attributeControl(item) === 'single' && values.length !== 1) return '只能选择一项'
-  if (attributeControl(item) === 'number' && values.some((value) => !value.trim() || !Number.isFinite(Number(value)))) return '数字无效'
+  if (attributeControl(item) === 'number' && values.some((value) => !value.name.trim() || !Number.isFinite(Number(value.name)))) return '数字无效'
   if (item.options.length && item.allowCustom !== true && values.some((value) =>
-    item.options.filter((option) => option.label === value).length !== 1)) return '包含无效选项'
+    value.valueId !== '0'
+      ? item.options.filter((option) => option.value === value.valueId).length !== 1
+      : item.options.filter((option) => option.label === value.name).length !== 1)) return '包含无效选项'
   return null
 }
 function attributeOptions(item: CategoryAttribute): SelectOption[] {
-  return item.options.map((option) => ({ label: option.label, value: option.label }))
+  const options: SelectOption[] = item.options.map((option) => ({ label: option.label, value: `option:${option.value}` }))
+  for (const value of attributeValues(item)) {
+    if (item.options.some((option) => option.value === value.valueId)) continue
+    const token = value.valueId === '0' ? customToken(value.name) : retainedToken(value)
+    if (!options.some((option) => option.value === token)) options.push({ label: value.name, value: token })
+  }
+  return options
+}
+function attributeModelValue(item: CategoryAttribute) {
+  const tokens = attributeValues(item).map((value) => item.options.some((option) => option.value === value.valueId)
+    ? `option:${value.valueId}`
+    : value.valueId === '0' ? customToken(value.name) : retainedToken(value))
+  return attributeControl(item) === 'multi' ? tokens : (tokens[0] ?? null)
 }
 function createAttributeOption(label: string): SelectOption {
-  return { label: `添加『${label}』`, value: label, __customCreate: true, __customLabel: label }
+  return { label: `添加『${label}』`, value: customToken(label), __customCreate: true, __customLabel: label }
 }
 const renderAttributeLabel: SelectProps['renderLabel'] = (option, selected) => {
   const custom = option as SelectOption & { __customCreate?: boolean; __customLabel?: string }
@@ -400,51 +438,20 @@ function removeImage(kind: 'main' | 'detail' | 'sku', index: number) {
   if (kind === 'sku') { if (specImages.value[index]) specImages.value[index].url = ''; return }
   ;(kind === 'main' ? draftMain.value : draftDetail.value).splice(index, 1)
 }
-function moveImage(kind: 'main' | 'detail', index: number, offset: number) {
+function reorderImages(kind: 'main' | 'detail', from: number, to: number) {
   const images = kind === 'main' ? draftMain.value : draftDetail.value
-  const next = index + offset
-  if (!canEdit.value || next < 0 || next >= images.length) return
-  ;[images[index], images[next]] = [images[next], images[index]]
+  if (!canEdit.value || from < 0 || to < 0 || from >= images.length || to >= images.length || from === to) return
+  const [moved] = images.splice(from, 1)
+  images.splice(to, 0, moved)
 }
 
 function openImagePreview(source: string) {
-  if (!source || suppressImagePreview) return
+  if (!source) return
   imagePreviewSource.value = source
 }
 function closeImagePreview(show: boolean) {
   if (!show) imagePreviewSource.value = ''
 }
-function beginMainDrag(index: number, event: DragEvent) {
-  if (!canEdit.value) { event.preventDefault(); return }
-  draggedMainIndex.value = index
-  mainDropIndex.value = index
-  suppressImagePreview = true
-  event.dataTransfer?.setData('text/plain', String(index))
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
-}
-function hoverMainDrop(index: number, event: DragEvent) {
-  if (draggedMainIndex.value === null || !canEdit.value) return
-  event.preventDefault()
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-  mainDropIndex.value = index
-}
-function dropMainImage(index: number, event: DragEvent) {
-  event.preventDefault()
-  const from = draggedMainIndex.value
-  if (from !== null && from !== index && draftMain.value[from] !== undefined) {
-    const next = [...draftMain.value]
-    const [moved] = next.splice(from, 1)
-    next.splice(index, 0, moved)
-    draftMain.value = next
-  }
-  finishMainDrag()
-}
-function finishMainDrag() {
-  draggedMainIndex.value = null
-  mainDropIndex.value = null
-  window.setTimeout(() => { suppressImagePreview = false }, 0)
-}
-
 async function submitEdit() {
   const product = props.product
   if (!product || !canEdit.value || !dirty.value) return
@@ -532,9 +539,7 @@ async function submitEdit() {
     const field = categoryAttributes.value.find((item) => item.id === id)
     if (!field) return []
     const values = attributeInputs.value[id] ?? []
-    return [{ id, name: field.label, values: values.map((name) => ({
-      name, valueId: field.options.find((option) => option.label === name)?.value ?? '0',
-    })) }]
+    return [{ id, name: field.label, values: values.map((value) => ({ ...value })) }]
   })
   saving.value = true
   try {
@@ -623,6 +628,7 @@ async function loadAttributes(refresh = false) {
     if ('shopId' in result && typeof result.shopId === 'string') categoryShop.value = result.shopId
     categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true
     applyPddSourceAttributes()
+    applyNoBrandDefault()
   } catch {
     if (request === categoryRequest) {
       if (categorySchemaLoaded.value) message.error('更新属性失败，仍显示之前的属性')
@@ -630,6 +636,17 @@ async function loadAttributes(refresh = false) {
     }
   }
   finally { if (request === categoryRequest) categoryBusy.value = false }
+}
+
+function applyNoBrandDefault() {
+  if (!canEdit.value) return
+  const fields = categoryAttributes.value.filter((field) => field.label.trim() === '品牌' &&
+    field.ruleStatus === 'confirmed' && field.control === 'single')
+  if (fields.length !== 1 || attributeValues(fields[0]).length) return
+  const options = fields[0].options.filter((option) => option.label.trim() === '无品牌' && option.value)
+  if (options.length !== 1) return
+  attributeInputs.value[fields[0].id] = [{ valueId: options[0].value, name: options[0].label }]
+  if (!touchedAttributes.value.includes(fields[0].id)) touchedAttributes.value.push(fields[0].id)
 }
 
 function selectCategory(value: { id: string; path: string; shopId: string; levels: CategoryTreeItem[] }) {
@@ -768,20 +785,24 @@ const imageSections = computed(() => {
   return [
     { key: 'main' as const, label: '主图', images: (props.editable ? draftMain.value : (product.previewMainImageUrls ??
       (product.mainImageUrl ? [product.mainImageUrl] : []))).map((src, index) => ({
-        src, label: `主图 ${index + 1}`, caption: '', skuKey: undefined,
+        key: `main:${src}:${index}`, src, label: `主图 ${index + 1}`, caption: '', skuKey: undefined,
+        canLocal: true, canLink: false, canDelete: true,
       })) },
     { key: 'detail' as const, label: '详情图', images: (props.editable ? draftDetail.value : product.detailImageUrls).map((src, index) => ({
-      src, label: `详情图 ${index + 1}`, caption: '', skuKey: undefined,
+      key: `detail:${src}:${index}`, src, label: `详情图 ${index + 1}`, caption: '', skuKey: undefined,
+      canLocal: true, canLink: false, canDelete: true,
     })) },
     { key: 'sku' as const, label: '规格图', images: props.editable && specImages.value.length
-      ? [...specImages.value.map((item) => ({ src: item.url, label: item.name || specGroups.value[imageGroupIndex.value]?.name || '规格图',
-        caption: '', skuKey: item.id })), ...(product.previewSkuImageUrls ?? [])
+      ? [...specImages.value.map((item) => ({ key: `sku:${item.id}`, src: item.url, label: item.name || specGroups.value[imageGroupIndex.value]?.name || '规格图',
+        caption: '', skuKey: item.id, canLocal: product.platform !== 'pdd', canLink: true, canDelete: true })), ...(product.previewSkuImageUrls ?? [])
         .filter((url) => imageGroupIndex.value === 0 && !initialSpecGroups.value[0]?.values.some((item) => item.url === url) &&
           !specImages.value.some((item) => item.url === url))
-        .map((src, index) => ({ src, label: `其他规格图 ${index + 1}`, caption: '', skuKey: undefined }))]
+        .map((src, index) => ({ key: `sku:other:${src}:${index}`, src, label: `其他规格图 ${index + 1}`, caption: '', skuKey: undefined,
+          canLocal: false, canLink: false, canDelete: false }))]
       : (product.previewSkuImageUrls ??
       product.skus.flatMap((sku) => sku.imageUrl ? [sku.imageUrl] : [])).map((src, index) => ({
-      src, label: `规格图 ${index + 1}`, caption: '', skuKey: undefined,
+      key: `sku:${src}:${index}`, src, label: `规格图 ${index + 1}`, caption: '', skuKey: undefined,
+      canLocal: false, canLink: false, canDelete: false,
     })) },
   ]
 })
@@ -954,7 +975,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               :data-precheck-field="section.key === 'main' ? 'mainImages' : undefined">
               <header class="product-preview__image-section-header">
                 <strong>{{ section.label }}</strong>
-                <NText v-if="section.key === 'main' && canEdit && section.images.length > 1" depth="3">拖拽缩略图可排序</NText>
+                <NText v-if="section.key !== 'sku' && canEdit && section.images.length > 1" depth="3">拖拽缩略图可排序</NText>
                 <div v-if="section.key !== 'sku'" class="product-preview__actions">
                   <AppButton size="small" disabled title="AI 改图尚未接入">AI 创作</AppButton>
                   <AppButton size="small" :loading="uploading" :disabled="!canEdit" @click="chooseLocalImage(section.key)">上传本地图片</AppButton>
@@ -962,46 +983,13 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                 </div>
                 <AppButton v-else tone="link" size="small" @click="tab = 'sku'">在规格与 SKU 中设置</AppButton>
               </header>
-              <div class="product-preview__image-strip">
-                <div v-for="(image, index) in section.images" :key="image.skuKey ?? `${section.key}:${image.src}:${index}`"
-                  class="product-preview__image-card"
-                  :class="{ 'product-preview__image-card--draggable': section.key === 'main' && canEdit,
-                    'product-preview__image-card--dragging': section.key === 'main' && draggedMainIndex === index,
-                    'product-preview__image-card--drop': section.key === 'main' && mainDropIndex === index && draggedMainIndex !== index }"
-                  :draggable="section.key === 'main' && canEdit"
-                  :aria-grabbed="section.key === 'main' ? draggedMainIndex === index : undefined"
-                  @dragstart="section.key === 'main' && beginMainDrag(index, $event)"
-                  @dragover="section.key === 'main' && hoverMainDrop(index, $event)"
-                  @drop="section.key === 'main' && dropMainImage(index, $event)"
-                  @dragend="section.key === 'main' && finishMainDrag()">
-                  <div class="product-preview__image-canvas">
-                    <NImage v-if="image.src" :key="imageRetries[`${section.key}:${index}`] ?? 0"
-                      :src="imageSource(`${section.key}:${index}`, image.src)" preview-disabled
-                      :alt="`${product.title} ${image.label}`" lazy object-fit="contain"
-                      :img-props="{ referrerpolicy: 'no-referrer' }"
-                      @click="openImagePreview(image.src)"
-                      @error="fallbackImage(`${section.key}:${index}`, image.src)">
-                      <template #error><AppButton size="small" @click.stop="retryImage(`${section.key}:${index}`)">重试</AppButton></template>
-                    </NImage>
-                    <NText v-else depth="3">—</NText>
-                  </div>
-                  <div v-if="section.key !== 'sku'" class="product-preview__image-actions">
-                    <AppButton tone="link" size="small" :disabled="!canEdit" @click="chooseLocalImage(section.key, index)">本地替换</AppButton>
-                    <AppButton v-if="section.key === 'detail'" tone="link" size="small" :disabled="!canEdit || index === 0" @click="moveImage(section.key, index, -1)">上移</AppButton>
-                    <AppButton v-if="section.key === 'detail'" tone="link" size="small" :disabled="!canEdit || index === section.images.length - 1" @click="moveImage(section.key, index, 1)">下移</AppButton>
-                    <AppButton tone="link" size="small" :disabled="!canEdit" @click="removeImage(section.key, index)">删除</AppButton>
-                  </div>
-                  <template v-else>
-                    <NText class="product-preview__image-caption">{{ image.label }}</NText>
-                    <div class="product-preview__image-actions">
-                      <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey || product.platform === 'pdd'" @click="chooseLocalImage('sku', index)">上传</AppButton>
-                      <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey" @click="changeImage('sku', index)">更换</AppButton>
-                      <AppButton tone="link" size="small" :disabled="!canEdit || !image.skuKey || !image.src" @click="removeImage('sku', index)">删除</AppButton>
-                      <AppButton tone="link" size="small" disabled title="AI 改图尚未接入">AI 改图</AppButton>
-                    </div>
-                  </template>
-                </div>
-              </div>
+              <ProductImageList :items="section.images" :editable="canEdit"
+                :draggable="section.key !== 'sku'" :uploading="uploading"
+                @preview="openImagePreview"
+                @local="chooseLocalImage(section.key, $event)"
+                @link="changeImage(section.key, $event)"
+                @remove="removeImage(section.key, $event)"
+                @reorder="(from, to) => section.key !== 'sku' && reorderImages(section.key, from, to)" />
             </article>
           </section>
           <section v-if="tab === 'attributes'" class="product-preview__section">
@@ -1020,19 +1008,21 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
               <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required"
                 :data-precheck-field="item.id">
                 <div v-if="editable && item.options.length" class="product-preview__attribute-input">
-                  <AppSelect :model-value="attributeControl(item) === 'multi' ? attributeValues(item) : (attributeValues(item)[0] ?? null)"
+                  <AppSelect :model-value="attributeModelValue(item)"
                     :options="attributeOptions(item)" clearable filterable show-on-focus
                     :multiple="attributeControl(item) === 'multi'" :max-tag-count="2"
                     :tag="item.allowCustom === true" :on-create="item.allowCustom === true ? createAttributeOption : undefined"
                     :render-label="renderAttributeLabel"
-                    :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)"
+                    :disabled="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd'].includes(product.platform)"
                     :placeholder="item.allowCustom === true ? '请选择、搜索或添加自定义值' : '请选择或搜索平台选项'"
                     @update:model-value="setAttribute(item, $event)" @update:values="setAttribute(item, $event)" />
                   <NText v-if="attributeProblem(item) === '包含无效选项'" type="error">该值不是平台允许的选项</NText>
+                  <NText v-else-if="attributeProblem(item) === '规则待核对'" type="warning">平台规则待核对，原值已保留</NText>
                 </div>
                 <AppInput v-else :model-value="attributeTextValue(item)" :aria-label="item.label"
                   :inputmode="attributeControl(item) === 'number' ? 'decimal' : undefined"
-                  :readonly="!canEdit || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
+                  :readonly="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
+                <NText v-if="!item.options.length && attributeProblem(item) === '规则待核对'" type="warning">平台规则待核对，原值已保留</NText>
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
@@ -1121,17 +1111,6 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 .product-preview__count { white-space:nowrap; color:var(--text-secondary); }
 .product-preview__section-heading,.product-preview__image-section-header { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); flex-wrap:wrap; }
 .product-preview__image-section { display:grid; gap:var(--space-2); min-width:0; }
-.product-preview__image-strip { display:flex; gap:var(--space-3); overflow-x:auto; padding-bottom:var(--space-2); }
-.product-preview__image-card { flex:0 0 168px; min-width:0; padding:var(--space-2); border:1px solid var(--border-subtle); border-radius:var(--radius-card); background:var(--bg-surface-solid); text-align:center; transition:border-color .15s ease,box-shadow .15s ease,opacity .15s ease; }
-.product-preview__image-card--draggable { cursor:grab; }
-.product-preview__image-card--draggable:active { cursor:grabbing; }
-.product-preview__image-card--dragging { opacity:.45; }
-.product-preview__image-card--drop { border-color:var(--color-primary); box-shadow:0 0 0 2px var(--color-primary-soft); }
-.product-preview__image-card strong,.product-preview__image-caption { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.product-preview__image-canvas { display:grid; place-items:center; width:100%; height:112px; margin-bottom:var(--space-2); }
-.product-preview__image-canvas :deep(img) { width:112px; height:112px; object-fit:contain; }
-.product-preview__image-actions { display:flex; min-height:var(--control-height-compact); align-content:flex-start; justify-content:center; gap:var(--space-1) var(--space-2); flex-wrap:wrap; overflow:hidden; }
-.product-preview__image-actions > * { flex:0 0 auto; }
 .product-preview__attributes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-3); }
 .product-preview__axis { display:grid; gap:var(--space-3); padding:var(--space-3); background:var(--bg-surface-raised); border:1px solid var(--border-subtle); border-radius:var(--radius-card); }
 .product-preview__axis-heading,.product-preview__values,.product-preview__value { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }

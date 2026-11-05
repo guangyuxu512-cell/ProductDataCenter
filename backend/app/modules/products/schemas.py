@@ -54,10 +54,16 @@ class ImageRead(BaseModel):
     source_url: str
 
 
+class AttributeValueRead(BaseModel):
+    valueId: str = "0"
+    name: str
+
+
 class SourceAttribute(BaseModel):
     id: str | None = None
     name: str
     values: list[str]
+    valueItems: list[AttributeValueRead] = Field(default_factory=list)
 
 
 class TargetCategoryPart(BaseModel):

@@ -6,8 +6,9 @@ export interface CategoryAttribute {
   label: string
   required: boolean
   options: Array<{ label: string; value: string }>
-  control: 'single' | 'multi' | 'text' | 'number'
-  allowCustom: boolean
+  control: 'single' | 'multi' | 'text' | 'number' | 'unknown'
+  allowCustom: boolean | null
+  ruleStatus: 'confirmed' | 'unknown'
 }
 export interface CategoryTreeItem { id: string; name: string; isLeaf: boolean; enabled: boolean }
 export interface PredictedCategory extends CategoryCandidate {

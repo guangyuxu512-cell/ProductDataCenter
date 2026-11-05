@@ -75,33 +75,35 @@ async function copyId() {
           {{ title }}
         </NTooltip>
         <div class="product-info-cell__id">
-          <NTooltip
-            placement="top-start"
-            :get-disabled="() => !id || !clipped(idElement)"
-            :content-style="tooltipStyle"
-          >
-            <template #trigger
-              ><span ref="idElement" class="product-info-cell__id-text"
-                >ID：{{ id ?? '—' }}</span
-              ></template
+          <div class="product-info-cell__id-core">
+            <NTooltip
+              placement="top-start"
+              :get-disabled="() => !id || !clipped(idElement)"
+              :content-style="tooltipStyle"
             >
-            ID：{{ id }}
-          </NTooltip>
-          <NTooltip>
-            <template #trigger
-              ><AppButton
-                class="product-info-cell__copy"
-                size="small"
-                tone="text"
-                :loading="copying"
-                :disabled="copying || !id"
-                aria-label="复制商品ID"
-                @click.stop="copyId"
-                ><Copy :size="14" aria-hidden="true" /></AppButton
-            ></template>
-            复制商品ID
-          </NTooltip>
-          <slot name="id-after" />
+              <template #trigger
+                ><span ref="idElement" class="product-info-cell__id-text"
+                  >ID：{{ id ?? '—' }}</span
+                ></template
+              >
+              ID：{{ id }}
+            </NTooltip>
+            <NTooltip>
+              <template #trigger
+                ><AppButton
+                  class="product-info-cell__copy"
+                  size="small"
+                  tone="text"
+                  :loading="copying"
+                  :disabled="copying || !id"
+                  aria-label="复制商品ID"
+                  @click.stop="copyId"
+                  ><Copy :size="14" aria-hidden="true" /></AppButton
+              ></template>
+              复制商品ID
+            </NTooltip>
+          </div>
+          <div class="product-info-cell__status"><slot name="id-after" /></div>
         </div>
       </div>
     </NConfigProvider>
@@ -140,8 +142,7 @@ async function copyId() {
   color: var(--text-primary);
 }
 .product-info-cell__id {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--product-id-copy-size) auto;
+  display: flex;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -150,6 +151,23 @@ async function copyId() {
   color: var(--text-secondary);
   font-size: var(--font-size-secondary);
 }
+.product-info-cell__id-core {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) var(--product-id-copy-size);
+  flex: 0 0 auto;
+  width: fit-content;
+  max-width: min(220px, 100%);
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+.product-info-cell__status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.product-info-cell__status :deep(.product-library-precheck) { max-width:100%; overflow:hidden; }
+.product-info-cell__status :deep(.product-library-precheck > span) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .product-info-cell--compact .product-info-cell__id {
   font-size: var(--list-compact-font-size);
 }

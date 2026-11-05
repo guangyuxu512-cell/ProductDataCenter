@@ -5,5 +5,6 @@ services:
     environment:
       BACKEND_IMAGE_STORAGE_DIR: /product-images
       BACKEND_IMAGE_PUBLIC_BASE_URL: ${PRODUCT_IMAGE_PUBLIC_BASE_URL:?external image origin required}
+      BACKEND_IMAGE_LEGACY_BASE_URLS: ${PRODUCT_IMAGE_LEGACY_BASE_URLS:-}
     volumes:
       - ${PRODUCT_IMAGE_STORAGE_DIR:?persistent NAS image directory required}:/product-images

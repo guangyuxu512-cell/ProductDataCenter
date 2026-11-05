@@ -11,6 +11,9 @@ class CacheUnavailable(Exception):
     pass
 
 
+SCHEMA_FORMAT_VERSION = 2
+
+
 class CategoryCache:
     def __init__(self, path: Path | None):
         self.path = path
@@ -49,7 +52,17 @@ class CategoryCache:
             with self._transaction() as db:
                 row = db.execute("SELECT payload FROM category_cache WHERE kind=? AND shop_id=? AND cache_key=?",
                                  (kind, shop_id, key)).fetchone()
-            return json.loads(row[0]) if row else None
+            value = json.loads(row[0]) if row else None
+            if kind != "schema" or value is None:
+                return value
+            # Version-one rows are plain normalized lists and have already
+            # discarded the platform control metadata.  Treat each such row
+            # as one cache miss; the successful live response below replaces
+            # it with the versioned representation and normal caching resumes.
+            if (not isinstance(value, dict) or value.get("formatVersion") != SCHEMA_FORMAT_VERSION
+                    or not isinstance(value.get("attributes"), list)):
+                return None
+            return value["attributes"]
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
 
@@ -72,7 +85,9 @@ class CategoryCache:
             tree_version: int | None = None, refresh_tree: bool = False,
             refresh_schema: bool = False, schema_version: int | None = None) -> None:
         try:
-            payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            stored = ({"formatVersion": SCHEMA_FORMAT_VERSION, "attributes": value}
+                      if kind == "schema" else value)
+            payload = json.dumps(stored, ensure_ascii=False, separators=(",", ":"))
             with self._transaction() as db:
                 db.execute("BEGIN IMMEDIATE")
                 if refresh_tree:

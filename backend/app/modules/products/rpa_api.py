@@ -52,8 +52,8 @@ def group_products(group_id: UUID, service: Service, limit: int = Query(50, ge=1
                    offset: int = Query(0, ge=0, le=2_147_483_647), include_total: bool = True):
     if not service.repository.group_exists(group_id):
         raise GroupNotFound()
-    return service.repository.list(ProductListOptions(group_id=str(group_id), limit=limit, offset=offset,
-                                                       include_total=include_total))
+    return service.list_options(ProductListOptions(group_id=str(group_id), limit=limit, offset=offset,
+                                                    include_total=include_total))
 
 
 @router.get("/products/{product_id}/uu")
@@ -67,7 +67,9 @@ def product_uu(product_id: str, service: Service,
     rows = service.repository.export_rows([product_id])
     if not rows:
         raise ProductNotFound("商品不存在或没有可用的 UU")
-    content, _ = current_uu_bytes(rows[0], service.settings.export_max_bytes)
+    content, _ = current_uu_bytes(rows[0], service.settings.export_max_bytes,
+                                  service.settings.image_public_base_url,
+                                  service.settings.image_legacy_base_urls)
     digest = hashlib.sha256(content).hexdigest()
     if expected_sha256 is not None and expected_sha256 != digest:
         raise UuVersionChanged()

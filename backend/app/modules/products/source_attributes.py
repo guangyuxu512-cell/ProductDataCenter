@@ -19,14 +19,27 @@ def source_attributes(category_values, format_groups, properties=None) -> list[d
     def add(identity, name, values):
         identity = _text(identity, 100)
         name = _text(name, 200)
-        values = list(dict.fromkeys(value for value in (_text(v, 2000) for v in values[:30]) if value))
-        if not name or not values or len(result) >= 300:
+        value_items = []
+        seen_values = set()
+        for raw in values[:30]:
+            if isinstance(raw, dict):
+                value_name = _text(raw.get("name", raw.get("value_name", raw.get("label"))), 2000)
+                value_id = _text(raw.get("valueId", raw.get("value_id", raw.get("id"))), 200) or "0"
+            else:
+                value_name = _text(raw, 2000)
+                value_id = "0"
+            marker = (value_id, value_name)
+            if value_name and marker not in seen_values:
+                seen_values.add(marker)
+                value_items.append({"valueId": value_id, "name": value_name})
+        if not name or not value_items or len(result) >= 300:
             return
         # The explicit property-value block is preferred when both formats
         # contain the same attribute; do not merge conflicting descriptions.
         if identity and (identity in by_id or identity in ambiguous_ids):
             return
-        item = {"id": identity or None, "name": name, "values": values}
+        item = {"id": identity or None, "name": name,
+                "values": [value["name"] for value in value_items], "valueItems": value_items}
         result.append(item)
         if identity:
             by_id[identity] = item
@@ -38,7 +51,9 @@ def source_attributes(category_values, format_groups, properties=None) -> list[d
             rows = [entry for entry in entries[:30] if isinstance(entry, dict)]
             names = {_text(entry.get("k"), 200) for entry in rows} - {""}
             if len(names) == 1:
-                add(identity, next(iter(names)), [entry.get("value_name") for entry in rows])
+                add(identity, next(iter(names)), [
+                    {"valueId": entry.get("value_id"), "name": entry.get("value_name")} for entry in rows
+                ])
             elif len(names) > 1:
                 ambiguous_ids.add(_text(identity, 100))
 

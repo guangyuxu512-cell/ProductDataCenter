@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile
 
+from app.modules.product_images.urls import canonical_package_text
 from .errors import ExportUnavailable
 
 
@@ -17,12 +18,17 @@ def resolve_data_file(root: Path, relative: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def current_uu_bytes(row: dict, remaining: int) -> tuple[bytes, str]:
+def current_uu_bytes(row: dict, remaining: int, public_base: str | None = None,
+                     legacy_bases: str = "") -> tuple[bytes, str]:
     # The database is the single source of the current package. Historical files
     # can remain on disk but must never override an edited database value.
     value = row.get("uu_text")
     if not isinstance(value, str) or not value:
         raise ExportUnavailable("商品数据包缺失，无法导出")
+    try:
+        value = canonical_package_text(value, public_base, legacy_bases)
+    except (ValueError, TypeError):
+        raise ExportUnavailable("UU 数据格式异常，无法导出") from None
     content = value.encode("utf-8")
     if len(content) > remaining:
         raise ExportUnavailable("导出资料过大，请减少商品数量")
@@ -33,14 +39,15 @@ def current_uu_bytes(row: dict, remaining: int) -> tuple[bytes, str]:
     return content, "database"
 
 
-def export_archive(rows: list[dict], product_ids: list[str], max_bytes: int):
+def export_archive(rows: list[dict], product_ids: list[str], max_bytes: int,
+                   public_base: str | None = None, legacy_bases: str = ""):
     archive = io.BytesIO()
     exported: list[dict] = []
     total_bytes = 0
     now = datetime.now(timezone.utc)
     with ZipFile(archive, "w", compression=ZIP_STORED) as zipped:
         for row in rows:
-            content, source = current_uu_bytes(row, max_bytes - total_bytes)
+            content, source = current_uu_bytes(row, max_bytes - total_bytes, public_base, legacy_bases)
             total_bytes += len(content)
             platform = re.sub(r"[^a-zA-Z0-9_-]", "_", row["source_platform"])
             identity = re.sub(r"[^a-zA-Z0-9_-]", "_", row["source_product_id"] or row["product_id"])

@@ -33,7 +33,7 @@ def _public_base(value: str | None) -> str:
         base = (value or "").strip().rstrip("/")
         parts = urlsplit(base)
         _ = parts.port
-        if (parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password
+        if (parts.scheme != "https" or not parts.hostname or parts.username or parts.password
                 or parts.query or parts.fragment or any(c.isspace() or ord(c) < 32 for c in base)):
             raise ValueError()
         return base

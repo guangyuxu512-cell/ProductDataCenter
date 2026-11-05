@@ -347,23 +347,52 @@ def normalize_fields(items: list) -> list[dict]:
         if not isinstance(label, str):
             continue
         options = []
+        option_ids = set()
         for option in item.get("options", []) if isinstance(item.get("options"), list) else []:
             if not isinstance(option, dict):
                 continue
             name = option.get("value_name") or option.get("label") or option.get("name") or option.get("text")
             val = option.get("value_id", option.get("value", option.get("id")))
             if isinstance(name, str) and isinstance(val, (str, int)) and not isinstance(val, bool):
-                options.append({"label": name[:200], "value": str(val)[:200]})
-        # ``type``, ``multiple`` and ``allow_create`` are fields from the
-        # platform schema consumed by the already shipped package editor.  Do
-        # not infer a control from a Chinese label: the same property can have
-        # different rules in different categories.
-        field_type = item.get("type")
-        if options:
-            control = "multi" if item.get("multiple") is True else "single"
-        else:
-            control = "number" if field_type == "number" else "text"
+                identity = str(val)[:200]
+                if identity not in option_ids:
+                    option_ids.add(identity)
+                    options.append({"label": name[:200], "value": identity})
+
+        # The current Douyin form response keeps the actual editor capability
+        # in ``additions``.  In particular, ``ui_type=multi_select`` controls
+        # multiplicity and ``diy_type=1`` permits a user-created value.  Older
+        # captures used explicit top-level flags, so keep that narrow fallback.
+        # Missing metadata is deliberately ``unknown``: absence is not proof
+        # that the platform forbids a source value.
+        additions = item.get("additions") if isinstance(item.get("additions"), dict) else {}
+        ui_type = additions.get("ui_type")
+        diy_type = additions.get("diy_type")
+        control = "unknown"
+        allow_custom = None
+        rule_status = "unknown"
+        if ui_type in {"select", "search", "multi_select"}:
+            control = "multi" if ui_type == "multi_select" else "single"
+            if diy_type in (0, "0", False):
+                allow_custom = False
+                rule_status = "confirmed"
+            elif diy_type in (1, "1", True):
+                allow_custom = True
+                rule_status = "confirmed"
+        elif ui_type == "text":
+            control, allow_custom, rule_status = "text", False, "confirmed"
+        elif ui_type == "number":
+            control, allow_custom, rule_status = "number", False, "confirmed"
+        elif ui_type is None:
+            field_type = item.get("type")
+            if options and isinstance(item.get("multiple"), bool):
+                control = "multi" if item["multiple"] else "single"
+                if isinstance(item.get("allow_create"), bool):
+                    allow_custom = item["allow_create"]
+                    rule_status = "confirmed"
+            elif not options and field_type in {"text", "number"}:
+                control, allow_custom, rule_status = field_type, False, "confirmed"
         fields.append({"id": str(key)[:100], "label": label[:200], "required": item.get("required") in (True, 1),
                        "options": options, "control": control,
-                       "allowCustom": bool(options and item.get("allow_create") is True)})
+                       "allowCustom": allow_custom, "ruleStatus": rule_status})
     return fields
