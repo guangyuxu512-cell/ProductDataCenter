@@ -77,7 +77,7 @@ test('中控布局、内部滚动、详情、复制和分页总数复用', async
   expect(await page.evaluate(() => (window as unknown as { copiedId: string }).copiedId)).toBe(firstId)
   await expect(page.locator('.n-checkbox--checked')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '关闭', exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await expect(page.getByText('编辑商品', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '更多', exact: true }).click()
   await page.getByText('复制标题', { exact: true }).click()
@@ -148,7 +148,7 @@ test('慢速翻页与切换详情保持外框，旧数据加载时不可操作',
   await expect(page.locator('[data-stability-check="table"]')).toBeVisible()
   await page.locator('.n-pagination-item--button').first().click()
   await expect(page.getByText('ID：' + firstId)).toBeVisible()
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await expect(page.getByText('商品 ID ' + firstId)).toBeVisible()
   const modal = page.locator('.app-dialog')
   await modal.evaluate((el) => el.setAttribute('data-stability-check', 'modal'))
@@ -169,7 +169,7 @@ test('商品范围在左，四个页签读取当前商品并支持连续查看',
     if (request.url().includes('/api/v1/') && request.method() !== 'GET') writes.push(request.method())
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   const navigator = dialog.locator('.product-preview__navigator')
   const content = dialog.locator('.product-preview__main')
@@ -216,7 +216,7 @@ test('按来源规格显示布局，不补造缺失 SKU 或错误关联图片', 
     await route.fulfill({ json: { product: product(firstId), skus, images } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await page.screenshot({ path: testInfo.outputPath('approved-layout-basic.png'), animations: 'disabled' })
   await dialog.getByRole('tab', { name: '图文信息' }).click()
@@ -239,7 +239,7 @@ test('窄窗口内商品范围、四个页签和底部关闭按钮可用', async
   await fixtures(page)
   await page.setViewportSize({ width: 900, height: 560 })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   for (const width of [900, 640]) {
     await page.setViewportSize({ width, height: 560 })
@@ -265,7 +265,7 @@ test('详情内移动分组沿用原有写接口', async ({ page }) => {
     }
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await page.getByRole('dialog').getByRole('button', { name: '移动分组' }).click()
   const form = page.getByRole('dialog').last()
   await expect(form.getByText('目标分组')).toBeVisible()
@@ -281,7 +281,7 @@ test('切换详情失败时保留弹窗并显示错误，不能操作旧商品',
   })
   await page.goto('/#/products')
   await expect(page.locator('.pagination-bar')).toContainText('共 60 条')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await expect(page.getByText('商品 ID ' + firstId)).toBeVisible()
   const modal = page.locator('.app-dialog')
   await modal.evaluate((el) => el.setAttribute('data-stability-check', 'modal-error'))
@@ -309,7 +309,7 @@ test('40 张详情图片按需加载，失败可单图重试，商品范围缩�
   })
   await page.goto('/#/products')
   await expect(page.locator('.pagination-bar')).toContainText('共 60 条')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await page.getByRole('tab', { name: '图文信息', exact: true }).click()
   const gallery = page.locator('.product-preview__image-section')
   await expect(gallery.first().getByRole('button', { name: '重试', exact: true })).toBeVisible()
@@ -346,7 +346,7 @@ test('详情图片还在请求时有固定显示区域，滚动后可加载后�
   })
   try {
     await page.goto('/#/products')
-    await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+    await page.getByRole('button', { name: '编辑', exact: true }).first().click()
     await page.getByRole('tab', { name: '图文信息', exact: true }).click()
     const gallery = page.locator('.product-preview__image-section').first()
     const first = gallery.locator('img').first()
@@ -379,7 +379,7 @@ test('抖音详情优先请求平台小图，失败回退原图，放大使用�
     await route.fulfill({ json: { product: product(firstId), skus: [], images } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await page.getByRole('tab', { name: '图文信息', exact: true }).click()
   const images = page.locator('.product-preview__image-section').first().locator('img')
   await expect(images).toHaveCount(2)
@@ -405,7 +405,7 @@ test('未显示的 SKU 明细不会提前请求原尺寸图片，滚动后仍能
     await route.fulfill({ json: { product: product(firstId), skus, images } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await page.getByRole('tab', { name: '图文信息', exact: true }).click()
   await expect(page.locator('.product-preview__image-section').first().locator('img').first()).toBeVisible()
   await expect.poll(() => requested.some((url) => url.includes('sku-0~') && url.includes('resize:384:0'))).toBe(true)
@@ -533,7 +533,7 @@ test('直接展开完整类目并手动更新缓存，切换商品后不沿用�
     return route.fulfill({ json: { categoryId: '1000010075', attributes: [{ id: '12', label: '材质', required: true, options: [] }] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('button', { name: '查找类目' })).toHaveCount(0)
   await dialog.getByRole('textbox', { name: '抖店类目' }).click()
@@ -591,7 +591,7 @@ test('抖音原类目直接取属性，切换商品时不使用旧响应', async
         options: [], control: 'text', allowCustom: false, ruleStatus: 'confirmed' }] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await expect.poll(() => calls.length).toBe(1)
   await dialog.getByRole('tab', { name: '商品属性' }).click()
@@ -627,7 +627,7 @@ test('抖音商品打开后提示具体缺失属性，填写后更新提示', as
     ],
   } }))
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('status')).toContainText('品牌未填写')
   await expect(dialog.getByRole('status')).toContainText('产地未填写')
@@ -656,7 +656,7 @@ test('抖音原类目回显原包属性，切换类目后不错误沿用', async
       allowCustom: true, ruleStatus: 'confirmed' }],
   } }))
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   const material = dialog.locator('.n-form-item').filter({ hasText: '材质' }).locator('input')
@@ -684,7 +684,7 @@ test('非抖音来源不会把原平台类目当作抖店类目', async ({ page 
     return route.fulfill({ status: 500 })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
@@ -741,7 +741,7 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
     ],
   } }))
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('button', { name: '预检类目' }).click()
   await expect(dialog.getByText('未找到推荐类目，请手动选择')).toBeVisible()
@@ -768,7 +768,7 @@ test('拼多多预检展示候选，确认类目和属性后保存到当前商�
   await expect.poll(() => payload).toMatchObject({ attributes: [{ id: '502', name: '产地', values: [] }] })
   await expect(originForm).not.toContainText('中国大陆')
   await dialog.getByRole('button', { name: '关闭', exact: true }).last().click()
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   await expect(originForm).not.toContainText('中国大陆')
   await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
@@ -952,7 +952,7 @@ test('编辑现有商品可上传主图和规格图并把地址写入保存请�
       skus: [{ sku_id: 'sku-1', sku_name: '颜色: 白色', current_price: '19.99', image_rel_path: '', sort_order: 0 }], images: [] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   let chooser = page.waitForEvent('filechooser')
@@ -1007,10 +1007,12 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
         control: 'single', allowCustom: false, ruleStatus: 'confirmed' },
       { id: '3', label: '容量', required: false, options: [], control: 'number', allowCustom: false,
         ruleStatus: 'confirmed' },
+      { id: '4', label: '自定义多选', required: false, options: [], control: 'multi', allowCustom: true,
+        ruleStatus: 'confirmed' },
     ],
   } }))
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   const fabric = dialog.locator('.n-form-item').filter({ hasText: '面料' })
@@ -1028,22 +1030,160 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   await expect(page.getByText('添加『伪造型号』', { exact: true })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await dialog.getByRole('textbox', { name: '容量' }).fill('12.5')
+  const customOnly = dialog.locator('.n-form-item').filter({ hasText: '自定义多选' })
+  await customOnly.locator('.n-base-selection').click()
+  await customOnly.locator('input').fill('定制甲')
+  await page.getByText('添加『定制甲』', { exact: true }).click()
+  await customOnly.locator('input').fill('定制乙')
+  await page.getByText('添加『定制乙』', { exact: true }).click()
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => payload).not.toBeNull()
   expect(payload?.attributes).toEqual([
     { id: '1', name: '面料', values: [{ name: '棉', valueId: '10' }, { name: '亚麻', valueId: '0' }] },
     { id: '3', name: '容量', values: [{ name: '12.5', valueId: '0' }] },
+    { id: '4', name: '自定义多选', values: [{ name: '定制甲', valueId: '0' }, { name: '定制乙', valueId: '0' }] },
   ])
 
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await page.reload()
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   await expect(dialog.locator('.n-form-item').filter({ hasText: '面料' })).toContainText('棉')
   await expect(dialog.locator('.n-form-item').filter({ hasText: '面料' })).toContainText('亚麻')
   await expect(dialog.locator('.n-form-item').filter({ hasText: '型号' })).not.toContainText('伪造型号')
   await expect(dialog.getByRole('textbox', { name: '容量' })).toHaveValue('12.5')
+  await expect(dialog.locator('.n-form-item').filter({ hasText: '自定义多选' })).toContainText('定制甲')
+  await expect(dialog.locator('.n-form-item').filter({ hasText: '自定义多选' })).toContainText('定制乙')
+})
+
+test('列表单删和批删确认后刷新数量及选择', async ({ page }) => {
+  await fixtures(page)
+  const ids = [firstId, '3760269504500859112', '3760269504500859113']
+  let remaining = [...ids]
+  const requests: string[][] = []
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false,
+  } }))
+  await page.route(/\/api\/v1\/products(?:\?.*)?$/, (route) => {
+    const url = new URL(route.request().url())
+    const includeTotal = url.searchParams.get('includeTotal') !== 'false'
+    return route.fulfill({ json: { items: remaining.map((id) => product(id)), total: includeTotal ? remaining.length : null,
+      totalIncluded: includeTotal, limit: 20, offset: 0 } })
+  })
+  await page.route('**/api/v1/products/delete', (route) => {
+    const selected = route.request().postDataJSON().productIds as string[]
+    requests.push(selected); remaining = remaining.filter((id) => !selected.includes(id))
+    return route.fulfill({ json: { deleted: selected, missing: [] } })
+  })
+  await page.goto('/#/products')
+  await expect(page.locator('.pagination-bar')).toContainText('共 3 条')
+  const row = page.locator('.n-data-table-tbody tr').filter({ hasText: ids[0] })
+  await expect(row.getByRole('button', { name: '编辑', exact: true })).toBeVisible()
+  await expect(row.getByRole('button', { name: '导出', exact: true })).toBeVisible()
+  page.once('dialog', (confirmation) => confirmation.accept())
+  await row.getByRole('button', { name: '删除', exact: true }).click()
+  await expect(page.locator('.pagination-bar')).toContainText('共 2 条')
+  await expect(row).toHaveCount(0)
+  for (const id of ids.slice(1)) await page.locator('.n-data-table-tbody tr').filter({ hasText: id }).locator('.n-checkbox').click()
+  await expect(page.getByText('已选 2 项')).toBeVisible()
+  page.once('dialog', (confirmation) => confirmation.accept())
+  await page.getByRole('button', { name: '批量删除', exact: true }).click()
+  await expect(page.locator('.pagination-bar')).toContainText('共 0 条')
+  await expect(page.getByText('已选 2 项')).toHaveCount(0)
+  expect(requests).toEqual([[ids[0]], ids.slice(1)])
+})
+
+test('真实玩具类目的尺寸和年龄旧编码保存重开', async ({ page }) => {
+  await fixtures(page)
+  let version = 'a'.repeat(64)
+  let payload: ProductPatch | null = null
+  let sourceAttributes = [
+    { id: '2595', name: '适用年龄', values: ['3周岁-6周岁|6周岁-8周岁'],
+      valueItems: [{ valueId: '0', name: '3周岁-6周岁|6周岁-8周岁' }] },
+    { id: '4738', name: '规格尺寸', values: ['135*205*1m'], valueItems: [{ valueId: '0', name: '135*205*1m' }] },
+  ]
+  const modules = [48, 49, 50].map((id, index) => ({ id: String(id), prefix: '', suffix: index < 2 ? '*' : '',
+    required: true, requiredTips: '该项为必填，请输入', placeholder: '请输入', dataType: 'float', minimum: 1,
+    maximum: 10000, precision: 1, units: index === 2 ? [{ label: 'cm', value: '39' },
+      { label: 'm', value: '41' }, { label: 'mm', value: '90' }] : [] }))
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version, specImageGroup: '规格', specImages: [{ id: '11', name: '默认', url: '' }],
+    specGroups: [{ index: 0, name: '规格', movable: false, values: [{ id: '11', name: '默认', url: '' }] }],
+    skus: [{ skuId: 'sku-1', specIds: ['11'], price: '19.99', stock: 9, enabled: true, merchantCode: '' }],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON() as ProductPatch
+      for (const item of payload.attributes ?? []) {
+        sourceAttributes = sourceAttributes.filter((attribute) => attribute.id !== item.id)
+        if (item.values.length) sourceAttributes.push({ id: item.id, name: item.name,
+          values: item.values.map((value) => value.name), valueItems: item.values.map((value) => ({ ...value })) })
+      }
+      version = 'b'.repeat(64)
+      return route.fulfill({ json: { version } })
+    }
+    return route.fulfill({ json: { product: product(firstId), sourceCategoryId: '1000001535', sourceAttributes,
+      targetCategory: [], targetAttributes: [],
+      skus: [{ sku_id: 'sku-1', sku_name: '规格: 默认', current_price: '19.99', image_rel_path: '', sort_order: 0 }],
+      images: [{ image_type: 'main', sort_order: 0, rel_path: '', source_url: image }] } })
+  })
+  await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
+    shopId: '00000000-0000-4000-8000-000000000111', categoryId: '1000001535', attributes: [
+      { id: '2595', label: '适用年龄', required: true, control: 'multi', allowCustom: false, ruleStatus: 'confirmed',
+        maxValues: 5, options: [{ label: '3周岁-6周岁', value: '64357' }, { label: '6周岁-8周岁', value: '64359' },
+          { label: '8周岁-14周岁', value: '64358' }] },
+      { id: '4738', label: '规格尺寸', required: true, control: 'measure', allowCustom: false,
+        ruleStatus: 'confirmed', options: [], measureTemplates: [{ id: '53', name: '三脚架长宽高度量衡模板', modules }] },
+      { id: '989', label: '尺寸', required: false, control: 'text', allowCustom: false, ruleStatus: 'confirmed', options: [] },
+      { id: '810', label: '功能', required: false, control: 'multi', allowCustom: true, ruleStatus: 'confirmed',
+        maxValues: 5, options: [{ label: '可拆卸', value: '10445' }, { label: '防误吞', value: '619206' }] },
+    ],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  let dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  const ages = dialog.locator('[data-precheck-field="2595"]')
+  await expect(ages).toContainText('3周岁-6周岁')
+  await expect(ages).toContainText('6周岁-8周岁')
+  await expect(dialog.getByRole('textbox', { name: '规格尺寸 1' })).toHaveValue('135')
+  await expect(dialog.getByRole('textbox', { name: '规格尺寸 2' })).toHaveValue('205')
+  await expect(dialog.getByRole('textbox', { name: '规格尺寸 3' })).toHaveValue('1')
+  await dialog.getByRole('textbox', { name: '规格尺寸 1' }).fill('11')
+  await dialog.getByRole('textbox', { name: '规格尺寸 2' }).fill('22')
+  await dialog.getByRole('textbox', { name: '规格尺寸 3' }).fill('22')
+  await dialog.locator('[data-precheck-field="4738"] .n-base-selection').click()
+  await page.getByText('cm', { exact: true }).last().click()
+  await dialog.getByRole('textbox', { name: '尺寸', exact: true }).fill('普通文本尺寸')
+  const functions = dialog.locator('[data-precheck-field="810"]')
+  await functions.locator('.n-base-selection').click()
+  await page.getByText('可拆卸', { exact: true }).click()
+  await functions.locator('input').fill('测试定制功能')
+  await page.getByText('添加『测试定制功能』', { exact: true }).click()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload?.attributes?.find((item) => item.id === '4738')?.values[0]?.name).toBe('11*22*22cm')
+  expect(payload?.attributes?.find((item) => item.id === '2595')?.values).toEqual([
+    { valueId: '64357', name: '3周岁-6周岁' }, { valueId: '64359', name: '6周岁-8周岁' },
+  ])
+  expect(payload?.attributes?.find((item) => item.id === '810')?.values).toEqual([
+    { valueId: '10445', name: '可拆卸' }, { valueId: '0', name: '测试定制功能' },
+  ])
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await page.reload()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect(dialog.getByRole('textbox', { name: '规格尺寸 1' })).toHaveValue('11')
+  await expect(dialog.getByRole('textbox', { name: '规格尺寸 2' })).toHaveValue('22')
+  await expect(dialog.getByRole('textbox', { name: '规格尺寸 3' })).toHaveValue('22')
+  await expect(dialog.locator('[data-precheck-field="2595"]')).toContainText('3周岁-6周岁')
+  await expect(dialog.locator('[data-precheck-field="2595"]')).toContainText('6周岁-8周岁')
+  await expect(dialog.getByRole('textbox', { name: '尺寸', exact: true })).toHaveValue('普通文本尺寸')
+  await expect(dialog.getByText('平台规则待核对，原值已保留')).toHaveCount(0)
 })
 
 test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最上层', async ({ page }) => {
@@ -1080,7 +1220,7 @@ test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最
       ] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   let cards = dialog.locator('.product-preview__image-section').first().locator('.product-image-list__card')
@@ -1092,7 +1232,7 @@ test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最
   await expect(page.locator('.n-image-preview-container')).toHaveCount(0)
   page.once('dialog', (confirmation) => confirmation.accept())
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   cards = dialog.locator('.product-preview__image-section').first().locator('.product-image-list__card')
@@ -1130,7 +1270,7 @@ test('主图拖拽只改草稿，保存读回一致且图片预览 ESC 只关最
   await expect.poll(() => payload?.detailImages).toEqual([detailUrls[1], detailUrls[2], detailUrls[0]])
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await page.reload()
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   await expect(dialog.locator('.product-preview__image-section').first().locator('img').first()).toHaveAttribute('src', /b\.svg/)
@@ -1189,7 +1329,7 @@ test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读�
       error: null, updatedAt: '2026-11-05T00:00:05Z' }] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   await expect(dialog.getByText('自动预检待处理：品牌未填写')).toBeVisible()
@@ -1223,7 +1363,7 @@ test('自动预检的结果在列表和商品中显示具体待完善项', async
   await page.goto('/#/products')
   const row = page.locator('.n-data-table-tbody tr').first()
   await expect(row.getByText('待完善 1 项', { exact: true })).toBeVisible()
-  await row.getByRole('button', { name: '查看商品' }).click()
+  await row.getByRole('button', { name: '编辑' }).click()
   await expect(page.getByRole('dialog').getByText('自动预检待处理：品牌未填写')).toBeVisible()
 })
 
@@ -1252,7 +1392,7 @@ test('拼多多无推荐时可以手动选择类目并保存', async ({ page }) 
     shopId: shop, parentId: '0', items: [{ id: '100', name: '收纳用品', isLeaf: true, enabled: true }], fromCache: true,
   } }))
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('button', { name: '预检类目' }).click()
   await expect(dialog.getByText('未找到推荐类目，请手动选择')).toBeVisible()
@@ -1291,7 +1431,7 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
       images: [{ image_type: 'main', sort_order: 0, rel_path: '', source_url: 'https://example.test/main.jpg' }] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   const titleInput = dialog.getByRole('textbox', { name: '商品标题' })
   await expect(titleInput).toBeEditable()
@@ -1356,7 +1496,7 @@ test('切换规格图的组会置顶，图片与对应规格一起保存', async
       images: [] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
   await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).toBeChecked()
@@ -1406,7 +1546,7 @@ test('规格增改会生成新 SKU，保留原有稀疏组合和来源 ID', asyn
     ], images: [] } })
   })
   await page.goto('/#/products')
-  await page.getByRole('button', { name: '查看商品', exact: true }).first().click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
   await expect(dialog.getByRole('button', { name: '添加规格类型' })).toBeEnabled()

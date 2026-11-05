@@ -75,6 +75,11 @@ def export_uu(body: ProductIds, service: Service):
     })
 
 
+@router.post("/products/delete", dependencies=[Depends(require_product_writes)])
+def delete_products(body: ProductIds, service: Service):
+    return service.delete_products(body.productIds)
+
+
 @router.get("/products/{product_id}", response_model=ProductDetail)
 def detail(product_id: str, service: Service):
     return service.detail(product_id)

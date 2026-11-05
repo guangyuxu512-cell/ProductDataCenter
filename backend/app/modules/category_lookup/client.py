@@ -333,6 +333,51 @@ def normalize_candidates(value) -> list[dict]:
     return result
 
 
+def normalize_measure_templates(raw) -> list[dict]:
+    """Preserve supported platform measure modules; never infer them from labels."""
+    if not isinstance(raw, list) or not raw:
+        return []
+    templates = []
+    for template in raw:
+        if not isinstance(template, dict) or not isinstance(template.get("value_modules"), list):
+            return []
+        modules = []
+        for module in template["value_modules"]:
+            if not isinstance(module, dict) or module.get("input_type") != "input":
+                return []
+            rule = module.get("validate_rule")
+            if not isinstance(rule, dict) or rule.get("data_type") not in {"float", "int"}:
+                return []
+            # Unknown linkage or per-unit validation must not be treated as
+            # validated until its platform semantics have been implemented.
+            if module.get("unit_linkage") not in (None, {}) or rule.get("unit_rules") not in (None, []):
+                return []
+            units = module.get("unit_options")
+            if not isinstance(units, list):
+                return []
+            if any(not isinstance(unit, dict) or not isinstance(unit.get("label"), str)
+                   or not isinstance(unit.get("value"), (str, int)) or isinstance(unit.get("value"), bool)
+                   for unit in units):
+                return []
+            minimum, maximum, precision = rule.get("min"), rule.get("max"), rule.get("precision")
+            if (any(value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool))
+                    for value in (minimum, maximum))
+                    or (precision is not None and (not isinstance(precision, int) or isinstance(precision, bool) or precision < 0))):
+                return []
+            modules.append({"id": str(module.get("module_id") or ""), "prefix": str(module.get("prefix") or ""),
+                            "suffix": str(module.get("suffix") or ""), "required": module.get("value_required") is True,
+                            "requiredTips": str(module.get("required_tips") or ""),
+                            "placeholder": str(module.get("module_shading_words") or ""),
+                            "units": [{"label": unit["label"], "value": str(unit["value"])} for unit in units],
+                            "dataType": rule["data_type"], "minimum": minimum, "maximum": maximum,
+                            "precision": precision})
+        if not modules:
+            return []
+        templates.append({"id": str(template.get("template_id") or ""),
+                          "name": str(template.get("display_name") or ""), "modules": modules})
+    return templates
+
+
 def normalize_fields(items: list) -> list[dict]:
     fields = []
     # The platform response is already capped by MAX_BYTES. Do not silently
@@ -371,6 +416,7 @@ def normalize_fields(items: list) -> list[dict]:
         control = "unknown"
         allow_custom = None
         rule_status = "unknown"
+        measure_templates = []
         if ui_type in {"select", "search", "multi_select"}:
             control = "multi" if ui_type == "multi_select" else "single"
             if diy_type in (0, "0", False):
@@ -383,6 +429,10 @@ def normalize_fields(items: list) -> list[dict]:
             control, allow_custom, rule_status = "text", False, "confirmed"
         elif ui_type == "number":
             control, allow_custom, rule_status = "number", False, "confirmed"
+        elif ui_type == "measure":
+            measure_templates = normalize_measure_templates(additions.get("measure_templates"))
+            if measure_templates:
+                control, allow_custom, rule_status = "measure", False, "confirmed"
         elif ui_type is None:
             field_type = item.get("type")
             if options and isinstance(item.get("multiple"), bool):
@@ -392,7 +442,15 @@ def normalize_fields(items: list) -> list[dict]:
                     rule_status = "confirmed"
             elif not options and field_type in {"text", "number"}:
                 control, allow_custom, rule_status = field_type, False, "confirmed"
-        fields.append({"id": str(key)[:100], "label": label[:200], "required": item.get("required") in (True, 1),
-                       "options": options, "control": control,
-                       "allowCustom": allow_custom, "ruleStatus": rule_status})
+        limits = [rule.get("value") for rule in item.get("rules", [])
+                  if isinstance(rule, dict) and rule.get("type") == "max_input_num"
+                  and isinstance(rule.get("value"), int) and not isinstance(rule.get("value"), bool)
+                  and rule["value"] > 0] if isinstance(item.get("rules"), list) else []
+        field = {"id": str(key)[:100], "label": label[:200], "required": item.get("required") in (True, 1),
+                 "options": options, "control": control, "allowCustom": allow_custom, "ruleStatus": rule_status}
+        if limits:
+            field["maxValues"] = min(limits)
+        if measure_templates:
+            field["measureTemplates"] = measure_templates
+        fields.append(field)
     return fields

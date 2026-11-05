@@ -139,7 +139,7 @@ class ProductRepository:
                             values = item.get("values")
                             if isinstance(values, list):
                                 value_items = [{"valueId": str(value.get("valueId") or "0"), "name": value["name"]}
-                                               for value in values[:30]
+                                               for value in values
                                                if isinstance(value, dict) and isinstance(value.get("name"), str)]
                                 names = [value["name"] for value in value_items]
                                 # An explicitly cleared value must remain distinguishable
@@ -197,6 +197,14 @@ class ProductRepository:
         return list(conn.execute(text("""UPDATE products SET group_id=:group_id
             WHERE product_id=ANY(CAST(:ids AS text[])) RETURNING product_id"""),
             {"ids": product_ids, "group_id": group_id}).scalars())
+
+    def delete_products(self, product_ids: list[str]) -> list[str]:
+        # Collector-owned foreign keys cascade SKU, image and precheck rows.
+        # Image files are deliberately left alone: URLs may be shared.
+        with self.engine.begin() as conn:
+            return list(conn.execute(text("""DELETE FROM products
+                WHERE product_id=ANY(CAST(:ids AS text[])) RETURNING product_id"""),
+                {"ids": product_ids}).scalars())
 
     def export_rows(self, product_ids: list[str]) -> list[dict]:
         with self.engine.connect() as conn:

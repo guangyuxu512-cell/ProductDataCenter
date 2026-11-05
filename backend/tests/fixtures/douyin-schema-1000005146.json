@@ -1,0 +1,603 @@
+[
+  {
+    "id": "3127",
+    "label": "材质",
+    "required": true,
+    "placeholder": "请选择，最多选10项",
+    "additions": {
+      "ui_type": "multi_select",
+      "diy_type": 1,
+      "measure_templates": []
+    },
+    "options": [
+      {
+        "value_id": "5163",
+        "value_name": "白蜡木"
+      },
+      {
+        "value_id": "4047",
+        "value_name": "铁"
+      },
+      {
+        "value_id": "3482",
+        "value_name": "花梨木"
+      },
+      {
+        "value_id": "4911",
+        "value_name": "碳钢"
+      },
+      {
+        "value_id": "1271",
+        "value_name": "胡桃木"
+      },
+      {
+        "value_id": "9193",
+        "value_name": "塑胶"
+      },
+      {
+        "value_id": "10949",
+        "value_name": "合金"
+      },
+      {
+        "value_id": "13752",
+        "value_name": "紫檀"
+      },
+      {
+        "value_id": "10728",
+        "value_name": "ABS"
+      },
+      {
+        "value_id": "12376",
+        "value_name": "合金钢"
+      },
+      {
+        "value_id": "18071",
+        "value_name": "硅胶"
+      },
+      {
+        "value_id": "30769",
+        "value_name": "松木"
+      },
+      {
+        "value_id": "32177",
+        "value_name": "PVC"
+      },
+      {
+        "value_id": "33776",
+        "value_name": "黑胡桃木"
+      },
+      {
+        "value_id": "33687",
+        "value_name": "树脂"
+      },
+      {
+        "value_id": "21557",
+        "value_name": "核桃木"
+      },
+      {
+        "value_id": "33028",
+        "value_name": "金属"
+      },
+      {
+        "value_id": "28081",
+        "value_name": "椴木"
+      },
+      {
+        "value_id": "11181",
+        "value_name": "真皮"
+      },
+      {
+        "value_id": "16124",
+        "value_name": "黄菠罗"
+      },
+      {
+        "value_id": "35999",
+        "value_name": "铝"
+      },
+      {
+        "value_id": "7594",
+        "value_name": "复合材料"
+      },
+      {
+        "value_id": "8405",
+        "value_name": "复合板"
+      },
+      {
+        "value_id": "13221",
+        "value_name": "仿皮"
+      },
+      {
+        "value_id": "30028",
+        "value_name": "皮革"
+      },
+      {
+        "value_id": "32409",
+        "value_name": "亚克力"
+      },
+      {
+        "value_id": "20329",
+        "value_name": "玻璃"
+      },
+      {
+        "value_id": "20130",
+        "value_name": "樱桃木"
+      },
+      {
+        "value_id": "34014",
+        "value_name": "竹木"
+      },
+      {
+        "value_id": "12154",
+        "value_name": "锌"
+      },
+      {
+        "value_id": "194154",
+        "value_name": "樟子松实木"
+      },
+      {
+        "value_id": "37006",
+        "value_name": "太空铝"
+      },
+      {
+        "value_id": "193877",
+        "value_name": "树脂塑料"
+      },
+      {
+        "value_id": "8869",
+        "value_name": "实木"
+      },
+      {
+        "value_id": "19532",
+        "value_name": "竹编"
+      },
+      {
+        "value_id": "21802",
+        "value_name": "镀锌"
+      },
+      {
+        "value_id": "25050",
+        "value_name": "短绒"
+      },
+      {
+        "value_id": "29442",
+        "value_name": "陶瓷"
+      },
+      {
+        "value_id": "28865",
+        "value_name": "山毛榉"
+      },
+      {
+        "value_id": "14437",
+        "value_name": "大理石"
+      },
+      {
+        "value_id": "184310",
+        "value_name": "楠竹"
+      },
+      {
+        "value_id": "25",
+        "value_name": "钢铁"
+      },
+      {
+        "value_id": "7153",
+        "value_name": "刨花板"
+      },
+      {
+        "value_id": "4683",
+        "value_name": "人造板"
+      },
+      {
+        "value_id": "193767",
+        "value_name": "钢材"
+      },
+      {
+        "value_id": "26486",
+        "value_name": "镀锌管"
+      },
+      {
+        "value_id": "23421",
+        "value_name": "橡胶木"
+      },
+      {
+        "value_id": "8753",
+        "value_name": "橡木"
+      },
+      {
+        "value_id": "29427",
+        "value_name": "岩板"
+      },
+      {
+        "value_id": "34706",
+        "value_name": "钢"
+      },
+      {
+        "value_id": "31936",
+        "value_name": "桦木"
+      },
+      {
+        "value_id": "21554",
+        "value_name": "铝钢"
+      },
+      {
+        "value_id": "27236",
+        "value_name": "色木"
+      },
+      {
+        "value_id": "10270",
+        "value_name": "檫木"
+      },
+      {
+        "value_id": "4444",
+        "value_name": "柳桉木"
+      },
+      {
+        "value_id": "15321",
+        "value_name": "酸枝木"
+      },
+      {
+        "value_id": "26277",
+        "value_name": "泡桐木"
+      },
+      {
+        "value_id": "22694",
+        "value_name": "橡胶"
+      },
+      {
+        "value_id": "36167",
+        "value_name": "红木"
+      },
+      {
+        "value_id": "5942",
+        "value_name": "榆木"
+      },
+      {
+        "value_id": "23447",
+        "value_name": "桃木"
+      },
+      {
+        "value_id": "16361",
+        "value_name": "大果紫檀"
+      },
+      {
+        "value_id": "34439",
+        "value_name": "彩铝"
+      },
+      {
+        "value_id": "31863",
+        "value_name": "杉木"
+      },
+      {
+        "value_id": "23952",
+        "value_name": "草编"
+      },
+      {
+        "value_id": "20242",
+        "value_name": "锡"
+      },
+      {
+        "value_id": "25755",
+        "value_name": "纸板"
+      },
+      {
+        "value_id": "22672",
+        "value_name": "锦纶"
+      },
+      {
+        "value_id": "18444",
+        "value_name": "木"
+      },
+      {
+        "value_id": "7596",
+        "value_name": "铝合金"
+      },
+      {
+        "value_id": "38682",
+        "value_name": "塑料"
+      },
+      {
+        "value_id": "37898",
+        "value_name": "不锈钢"
+      },
+      {
+        "value_id": "14305",
+        "value_name": "竹"
+      },
+      {
+        "value_id": "27816",
+        "value_name": "304不锈钢"
+      },
+      {
+        "value_id": "34441",
+        "value_name": "藤"
+      },
+      {
+        "value_id": "375",
+        "value_name": "PP"
+      },
+      {
+        "value_id": "10886",
+        "value_name": "塑钢"
+      },
+      {
+        "value_id": "7999",
+        "value_name": "榉木"
+      },
+      {
+        "value_id": "33498",
+        "value_name": "黄花梨木"
+      },
+      {
+        "value_id": "194161",
+        "value_name": "高分子材料"
+      },
+      {
+        "value_id": "290",
+        "value_name": "亚麻"
+      },
+      {
+        "value_id": "26588",
+        "value_name": "绒布"
+      },
+      {
+        "value_id": "35636",
+        "value_name": "梧桐木"
+      },
+      {
+        "value_id": "20100",
+        "value_name": "楸木"
+      },
+      {
+        "value_id": "26519",
+        "value_name": "有机玻璃"
+      },
+      {
+        "value_id": "2049",
+        "value_name": "塑铝"
+      },
+      {
+        "value_id": "33018",
+        "value_name": "水曲柳"
+      },
+      {
+        "value_id": "1724",
+        "value_name": "柳木"
+      },
+      {
+        "value_id": "2593",
+        "value_name": "老船木"
+      },
+      {
+        "value_id": "25708",
+        "value_name": "涤纶"
+      },
+      {
+        "value_id": "23741",
+        "value_name": "铜"
+      },
+      {
+        "value_id": "15883",
+        "value_name": "锌合金"
+      },
+      {
+        "value_id": "8161",
+        "value_name": "杨木"
+      },
+      {
+        "value_id": "34559",
+        "value_name": "柏木"
+      },
+      {
+        "value_id": "23460",
+        "value_name": "柚木"
+      },
+      {
+        "value_id": "38562",
+        "value_name": "PU"
+      },
+      {
+        "value_id": "197223",
+        "value_name": "pu皮"
+      },
+      {
+        "value_id": "30728",
+        "value_name": "枫木"
+      },
+      {
+        "value_id": "15541",
+        "value_name": "桃花心木"
+      },
+      {
+        "value_id": "8709",
+        "value_name": "岑木"
+      },
+      {
+        "value_id": "2638",
+        "value_name": "海棠木"
+      },
+      {
+        "value_id": "18387",
+        "value_name": "柞木"
+      },
+      {
+        "value_id": "19852",
+        "value_name": "香樟木"
+      },
+      {
+        "value_id": "24960",
+        "value_name": "酸枣木"
+      },
+      {
+        "value_id": "36684",
+        "value_name": "楠木"
+      },
+      {
+        "value_id": "7132",
+        "value_name": "红豆杉"
+      },
+      {
+        "value_id": "184525",
+        "value_name": "老花樟"
+      },
+      {
+        "value_id": "779",
+        "value_name": "乌金木"
+      },
+      {
+        "value_id": "17250",
+        "value_name": "鸡翅木"
+      },
+      {
+        "value_id": "38829",
+        "value_name": "布"
+      }
+    ],
+    "rules": [
+      {
+        "type": "max_input_num",
+        "value": 10
+      }
+    ]
+  },
+  {
+    "id": "989",
+    "label": "尺寸",
+    "required": true,
+    "placeholder": "请输入",
+    "additions": {
+      "ui_type": "text",
+      "diy_type": 0,
+      "measure_templates": []
+    },
+    "rules": []
+  },
+  {
+    "id": "1847",
+    "label": "包装尺寸",
+    "required": false,
+    "placeholder": "请输入",
+    "additions": {
+      "ui_type": "measure",
+      "diy_type": 0,
+      "measure_templates": [
+        {
+          "display_name": "长cm×宽cm×高cm",
+          "related_sku_classification": [
+            "main_sale_single_product",
+            "non_main_sale",
+            "information_description"
+          ],
+          "template_id": 869,
+          "unsupported_sku_classification": [
+            "main_sale_combination",
+            "main_sale_multi_product"
+          ],
+          "value_modules": [
+            {
+              "extra": {
+                "unit_rule_type": "无需上下限"
+              },
+              "input_type": "input",
+              "module_id": 1846,
+              "module_shading_words": "请输入",
+              "prefix": "长",
+              "prefix_id": 2655076129928467,
+              "required_tips": "",
+              "suffix": "×",
+              "suffix_id": 2650106748577829,
+              "unit_linkage": {},
+              "unit_options": [
+                {
+                  "label": "cm",
+                  "value": 39
+                },
+                {
+                  "label": "m",
+                  "value": 41
+                }
+              ],
+              "validate_rule": {
+                "data_type": "float",
+                "max": null,
+                "min": null,
+                "precision": 2,
+                "time_format": "",
+                "unit_rules": []
+              },
+              "value_options": [],
+              "value_required": false
+            },
+            {
+              "extra": {
+                "unit_rule_type": "无需上下限"
+              },
+              "input_type": "input",
+              "module_id": 1847,
+              "module_shading_words": "请输入",
+              "prefix": "宽",
+              "prefix_id": 0,
+              "required_tips": "",
+              "suffix": "×",
+              "suffix_id": 2650106748577829,
+              "unit_linkage": {},
+              "unit_options": [
+                {
+                  "label": "cm",
+                  "value": 39
+                },
+                {
+                  "label": "m",
+                  "value": 41
+                }
+              ],
+              "validate_rule": {
+                "data_type": "float",
+                "max": null,
+                "min": null,
+                "precision": 2,
+                "time_format": "",
+                "unit_rules": []
+              },
+              "value_options": [],
+              "value_required": false
+            },
+            {
+              "extra": {
+                "unit_rule_type": "无需上下限"
+              },
+              "input_type": "input",
+              "module_id": 1848,
+              "module_shading_words": "请输入",
+              "prefix": "高",
+              "prefix_id": 0,
+              "required_tips": "",
+              "suffix": "",
+              "suffix_id": 0,
+              "unit_linkage": null,
+              "unit_options": [
+                {
+                  "label": "cm",
+                  "value": 39
+                },
+                {
+                  "label": "m",
+                  "value": 41
+                }
+              ],
+              "validate_rule": {
+                "data_type": "float",
+                "max": null,
+                "min": null,
+                "precision": 2,
+                "time_format": "",
+                "unit_rules": []
+              },
+              "value_options": [],
+              "value_required": false
+            }
+          ]
+        }
+      ]
+    },
+    "rules": []
+  }
+]

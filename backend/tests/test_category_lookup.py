@@ -505,13 +505,17 @@ def test_old_inflight_tree_result_cannot_repopulate_after_manual_refresh(setting
     assert cache.get("schema", "other-shop", "123") is None
 
 
-def test_legacy_schema_cache_is_one_time_miss_and_v2_keeps_controls(settings):
+def test_legacy_schema_cache_is_one_time_miss_and_v3_keeps_controls(settings):
     import json
     from app.modules.category_lookup.cache import CategoryCache
     cache = CategoryCache(settings.category_cache_file)
     with cache._transaction() as db:
         db.execute("INSERT INTO category_cache(kind,shop_id,cache_key,payload) VALUES ('schema','shop','legacy',?)",
                    (json.dumps([{"id": "1", "control": "single"}]),))
+    assert cache.get("schema", "shop", "legacy") is None
+    with cache._transaction() as db:
+        db.execute("UPDATE category_cache SET payload=? WHERE kind='schema' AND shop_id='shop' AND cache_key='legacy'",
+                   (json.dumps({"formatVersion": 2, "attributes": [{"id": "1", "control": "unknown"}]}),))
     assert cache.get("schema", "shop", "legacy") is None
     value = [{"id": "1", "control": "multi", "allowCustom": True, "ruleStatus": "confirmed"}]
     cache.put("schema", "shop", "legacy", value)

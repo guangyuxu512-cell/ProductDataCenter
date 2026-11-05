@@ -1,14 +1,30 @@
 import { http } from '@/shared/api/http-client'
 
 export interface CategoryCandidate { id: string; name: string; path: string }
+export interface MeasureModule {
+  id: string
+  prefix: string
+  suffix: string
+  required: boolean
+  requiredTips: string
+  placeholder: string
+  units: Array<{ label: string; value: string }>
+  dataType: 'float' | 'int'
+  minimum: number | null
+  maximum: number | null
+  precision: number | null
+}
+export interface MeasureTemplate { id: string; name: string; modules: MeasureModule[] }
 export interface CategoryAttribute {
   id: string
   label: string
   required: boolean
   options: Array<{ label: string; value: string }>
-  control: 'single' | 'multi' | 'text' | 'number' | 'unknown'
+  control: 'single' | 'multi' | 'text' | 'number' | 'measure' | 'unknown'
   allowCustom: boolean | null
   ruleStatus: 'confirmed' | 'unknown'
+  maxValues?: number | null
+  measureTemplates?: MeasureTemplate[]
 }
 export interface CategoryTreeItem { id: string; name: string; isLeaf: boolean; enabled: boolean }
 export interface PredictedCategory extends CategoryCandidate {

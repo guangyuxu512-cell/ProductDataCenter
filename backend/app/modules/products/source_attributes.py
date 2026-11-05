@@ -21,7 +21,7 @@ def source_attributes(category_values, format_groups, properties=None) -> list[d
         name = _text(name, 200)
         value_items = []
         seen_values = set()
-        for raw in values[:30]:
+        for raw in values:
             if isinstance(raw, dict):
                 value_name = _text(raw.get("name", raw.get("value_name", raw.get("label"))), 2000)
                 value_id = _text(raw.get("valueId", raw.get("value_id", raw.get("id"))), 200) or "0"
@@ -48,7 +48,7 @@ def source_attributes(category_values, format_groups, properties=None) -> list[d
         for identity, entries in islice(category_values.items(), 300):
             if not isinstance(entries, list):
                 continue
-            rows = [entry for entry in entries[:30] if isinstance(entry, dict)]
+            rows = [entry for entry in entries if isinstance(entry, dict)]
             names = {_text(entry.get("k"), 200) for entry in rows} - {""}
             if len(names) == 1:
                 add(identity, next(iter(names)), [
@@ -65,7 +65,7 @@ def source_attributes(category_values, format_groups, properties=None) -> list[d
             for field in fields[:300]:
                 if not isinstance(field, dict) or not isinstance(field.get("message"), list):
                     continue
-                values = [message.get("desc") for message in field["message"][:30] if isinstance(message, dict)]
+                values = [message.get("desc") for message in field["message"] if isinstance(message, dict)]
                 add(field.get("property_id"), field.get("name"), values)
     # Newer PDD source packages carry properties in product.properties.
     if isinstance(properties, list):

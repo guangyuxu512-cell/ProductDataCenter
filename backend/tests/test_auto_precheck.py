@@ -2,6 +2,7 @@ from types import SimpleNamespace as Node
 from unittest.mock import Mock, patch
 
 from app.modules.category_lookup.api import Attribute, Option
+from app.modules.category_lookup.attribute_values import UNVERIFIED
 from app.modules.prechecks.service import _attribute_problems, _missing_required, check_product
 
 
@@ -72,7 +73,19 @@ def test_option_id_is_authoritative_and_unknown_rules_remain_pending():
         {"id": "2", "name": "尺寸", "values": ["10×20 cm"]},
     ]
     assert [(field.label, problem) for field, problem in
-            _attribute_problems([restricted, unknown], source, [], "douyin")] == [("尺寸", "规则待核对")]
+            _attribute_problems([restricted, unknown], source, [], "douyin")] == [("尺寸", UNVERIFIED)]
+
+
+def test_unknown_rule_cannot_report_success_or_invent_platform_message():
+    detail = {"product": {"source_platform": "douyin", "title": "商品", "main_image_url": "https://example.invalid/a"},
+              "images": [], "skus": [{"current_price": "9.90"}], "sourceCategoryId": "100",
+              "sourceAttributes": [{"id": "1", "name": "未知属性", "values": ["旧值"]}],
+              "targetCategory": [], "targetAttributes": []}
+    field = Attribute(id="1", label="未知属性", required=False, options=[])
+    service = Node(repository=Node(detail=lambda _: detail))
+    with patch("app.modules.prechecks.service.schema_auto", return_value=Node(attributes=[field])):
+        result = check_product("12345678", service, None, None)
+    assert result["status"] == "failed" and result["issues"] == [] and result["issueDetails"] == []
 
 
 def test_new_douyin_precheck_writes_real_no_brand_then_leaves_stale_claim_unfinished():

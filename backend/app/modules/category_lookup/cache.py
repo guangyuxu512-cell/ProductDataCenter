@@ -11,7 +11,7 @@ class CacheUnavailable(Exception):
     pass
 
 
-SCHEMA_FORMAT_VERSION = 2
+SCHEMA_FORMAT_VERSION = 3
 
 
 class CategoryCache:

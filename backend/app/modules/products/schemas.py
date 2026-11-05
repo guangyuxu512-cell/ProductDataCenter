@@ -162,7 +162,7 @@ class AttributeValueEdit(BaseModel):
 class AttributeEdit(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
-    values: list[AttributeValueEdit] = Field(max_length=30)
+    values: list[AttributeValueEdit]
 
 
 class SpecImageEdit(BaseModel):

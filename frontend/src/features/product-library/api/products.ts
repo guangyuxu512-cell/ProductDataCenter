@@ -87,6 +87,10 @@ export async function moveProducts(productIds: string[], groupId: string | null)
   return (await http.patch<{ updated: string[] }>('/products/group', { productIds, groupId })).data
 }
 
+export async function deleteProducts(productIds: string[]) {
+  return (await http.post<{ deleted: string[]; missing: string[] }>('/products/delete', { productIds })).data
+}
+
 export async function fetchDetail(id: string, signal?: AbortSignal) {
   return (await http.get<NasDetail>(`/products/${encodeURIComponent(id)}`, { signal })).data
 }
