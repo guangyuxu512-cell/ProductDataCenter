@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # URL is configured explicitly; the incoming Host header is never trusted.
     image_storage_dir: Path | None = None
     image_public_base_url: str | None = None
+    # Comma-separated former origins for this service's UUID image route.
+    # They are rewritten on reads/exports without touching source-platform URLs.
+    image_legacy_base_urls: str = ""
     image_upload_max_bytes: int = Field(default=15 * 1024 * 1024, ge=1, le=15 * 1024 * 1024)
     enable_group_writes: bool = False
     enable_product_writes: bool = False

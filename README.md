@@ -9,8 +9,9 @@
 - 表格内部横纵滚动、固定表头和底部分页，翻页复用总数，无商品列表定时轮询。
 - 分组新增、重命名、删除、批量移动；删除分组保留商品。服务端默认关闭写入，可通过部署配置启用。
 - 单件和批量导出商品数据包；使用 PostgreSQL 当前内容，不自动下载图片。
+- 商品编辑、统一预检、抖店类目/属性表单、NAS 持久图片上传和 RPA 只读数据包接口；生产启用状态以对应发布记录为准。
 
-商品编辑、导入、选品工作流、跨平台类目/属性映射、抖店预检、AI 改图以及 RPA 云数据包接口后续分阶段接入。V1 没有这些能力的演示按钮。
+商品复制/删除、统一数据包格式、AI 改图、采集系统前端下线及 RPA 架构调整不在当前范围。属性规则、默认品牌、共享图片组件和公网图片访问的本轮实现与发布状态见 [2026-11-05 补修记录](docs/product-attribute-brand-image-public-fix-20261105.md)。
 
 ## 复用基线
 
@@ -50,11 +51,11 @@ pnpm --dir frontend dev
 
 ## Windows 项目目录
 
-工作目标是 `D:\商品云库`。本候选在云端工作区建立，没有访问或修改该 Windows 目录。空目录可通过以下方式接收分支（已有文件时先核对，不覆盖）：
+工作目标是 `D:\商品云库\ProductDataCenter`。空目录可通过以下方式接收分支（已有文件时先核对，不覆盖）：
 
 ```powershell
 $env:GIT_LFS_SKIP_SMUDGE = '1'
-git clone --branch codex/product-workbench-v1 https://github.com/guangyuxu512-cell/ProductDataCenter.git "D:\商品云库"
+git clone https://github.com/guangyuxu512-cell/ProductDataCenter.git "D:\商品云库\ProductDataCenter"
 Remove-Item Env:GIT_LFS_SKIP_SMUDGE
 ```
 

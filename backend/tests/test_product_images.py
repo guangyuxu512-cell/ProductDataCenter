@@ -8,6 +8,7 @@ from app.main import create_application
 from app.modules.products.editing import apply_edit
 from app.modules.products.manual import manual_package
 from app.modules.products.schemas import ProductEdit
+from app.modules.product_images.urls import canonical_package_text, canonical_product_image_url
 
 
 TOKEN = "test-image-upload-admin-token"
@@ -60,4 +61,32 @@ def test_upload_fails_closed_and_rejects_non_images_and_large_files(tmp_path, mo
         assert client.post('/api/v1/product-images', content=PNG * 4, headers=headers).status_code == 413
         assert client.get('/rpa/v1/product-images/invalid.jpg').status_code == 404
         assert not list(tmp_path.iterdir())
+    get_settings.cache_clear()
+
+
+def test_only_configured_product_image_urls_are_canonicalized():
+    old = "http://100.91.242.119:3612/rpa/v1/product-images/" + "a" * 32 + ".png"
+    public = "https://rpa.example.test"
+    assert canonical_product_image_url(old, public, "http://100.91.242.119:3612") == \
+        public + "/rpa/v1/product-images/" + "a" * 32 + ".png"
+    source = "https://p3.example.test/rpa/v1/product-images/" + "a" * 32 + ".png"
+    assert canonical_product_image_url(source, public, "http://100.91.242.119:3612") == source
+    malformed = "http://100.91.242.119:3612/rpa/v1/product-images/not-owned.png"
+    assert canonical_product_image_url(malformed, public, "http://100.91.242.119:3612") == malformed
+    assert canonical_product_image_url(old, "http://public.example.test", "http://100.91.242.119:3612") == old
+    package = '{"ours":"' + old + '","source":"' + source + '"}'
+    rewritten = canonical_package_text(package, public, "http://100.91.242.119:3612")
+    assert public in rewritten and source in rewritten and old not in rewritten
+
+
+def test_upload_rejects_non_https_public_origin(tmp_path, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", TOKEN)
+    monkeypatch.setenv("BACKEND_ENABLE_PRODUCT_WRITES", "true")
+    monkeypatch.setenv("BACKEND_IMAGE_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("BACKEND_IMAGE_PUBLIC_BASE_URL", "http://100.91.242.119:3612")
+    get_settings.cache_clear()
+    with TestClient(create_application()) as client:
+        response = client.post('/api/v1/product-images', content=PNG,
+            headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "image/png"})
+        assert response.status_code == 503 and not list(tmp_path.iterdir())
     get_settings.cache_clear()

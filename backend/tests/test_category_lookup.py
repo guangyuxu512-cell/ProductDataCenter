@@ -98,16 +98,36 @@ def test_schema_keeps_options_beyond_previous_500_item_limit():
 
 def test_schema_uses_platform_control_metadata_instead_of_guessing_labels():
     fields = normalize_fields([
-        {"id": 1, "label": "适用场景", "type": "select", "multiple": True, "allow_create": True,
+        {"id": 1, "label": "适用场景", "additions": {"ui_type": "multi_select", "diy_type": 1},
          "options": [{"value_id": 10, "value_name": "家用"}]},
-        {"id": 2, "label": "型号", "type": "select", "multiple": False, "allow_create": False,
+        {"id": 2, "label": "型号", "additions": {"ui_type": "select", "diy_type": 0},
          "options": [{"value_id": 20, "value_name": "标准"}]},
-        {"id": 3, "label": "容量", "type": "number", "options": []},
-        {"id": 4, "label": "备注", "type": "text", "options": []},
+        {"id": 3, "label": "容量", "additions": {"ui_type": "number", "diy_type": 0}, "options": []},
+        {"id": 4, "label": "备注", "additions": {"ui_type": "text", "diy_type": 0}, "options": []},
+        {"id": 5, "label": "尺寸", "additions": {"ui_type": "measure", "diy_type": 0}, "options": []},
     ])
-    assert [(field["control"], field["allowCustom"]) for field in fields] == [
-        ("multi", True), ("single", False), ("number", False), ("text", False),
+    assert [(field["control"], field["allowCustom"], field["ruleStatus"]) for field in fields] == [
+        ("multi", True, "confirmed"), ("single", False, "confirmed"),
+        ("number", False, "confirmed"), ("text", False, "confirmed"),
+        ("unknown", None, "unknown"),
     ]
+
+
+def test_real_response_shape_exposes_custom_multi_and_no_brand_option():
+    fields = normalize_fields([
+        {"id": 810, "label": "功能", "required": False,
+         "additions": {"ui_type": "multi_select", "diy_type": 1, "property_type": 0},
+         "options": [{"value_id": 619191, "value_name": "保湿"}]},
+        {"id": 2595, "label": "适用年龄", "required": False,
+         "additions": {"ui_type": "multi_select", "diy_type": 0, "property_type": 0},
+         "options": [{"value_id": 1, "value_name": "成人"}]},
+        {"id": 1687, "label": "品牌", "required": True,
+         "additions": {"ui_type": "search", "diy_type": 0, "property_type": 0},
+         "options": [{"value_id": "596120136", "value_name": "无品牌"}]},
+    ])
+    assert fields[0]["control"] == "multi" and fields[0]["allowCustom"] is True
+    assert fields[1]["control"] == "multi" and fields[1]["allowCustom"] is False
+    assert fields[2]["options"] == [{"label": "无品牌", "value": "596120136"}]
 
 
 def test_invalid_signer_mode_does_not_make_a_platform_request(settings):
@@ -142,14 +162,16 @@ def test_signed_search_and_schema_do_not_require_token_and_return_safe_fields(se
         body = json.loads(request.content)
         assert body["context"]["category_id"] == "1000010075" and "__token" not in body
         return httpx.Response(200, json={"code": 0, "data": {"model": {"category_properties": {"items": [
-            {"id": 12, "label": "材质", "required": True, "options": [{"id": 3, "name": "不锈钢"}]},
+            {"id": 12, "label": "材质", "required": True,
+             "additions": {"ui_type": "select", "diy_type": 0},
+             "options": [{"id": 3, "name": "不锈钢"}]},
             {"id": 13, "label": "隐藏", "hidden": True}]}}}})
     client = DouyinCategoryClient(settings, transport=httpx.MockTransport(handler))
     session = make_session()
     assert client.search(session, "勺子") == [{"id": "1000010075", "name": "汤勺", "path": "餐具 > 汤勺"}]
     assert client.schema(session, "1000010075", "不锈钢勺子") == [
         {"id": "12", "label": "材质", "required": True, "options": [{"label": "不锈钢", "value": "3"}],
-         "control": "single", "allowCustom": False}]
+         "control": "single", "allowCustom": False, "ruleStatus": "confirmed"}]
     assert [item[0] for item in calls] == ["sign", "sign", "platform", "sign", "sign", "platform"]
 
 
@@ -481,6 +503,19 @@ def test_old_inflight_tree_result_cannot_repopulate_after_manual_refresh(setting
     cache.put("schema", "other-shop", "123", [{"label": "old"}], schema_version=schema_version)
     assert cache.get("schema", "shop", "123") == [{"label": "new"}]
     assert cache.get("schema", "other-shop", "123") is None
+
+
+def test_legacy_schema_cache_is_one_time_miss_and_v2_keeps_controls(settings):
+    import json
+    from app.modules.category_lookup.cache import CategoryCache
+    cache = CategoryCache(settings.category_cache_file)
+    with cache._transaction() as db:
+        db.execute("INSERT INTO category_cache(kind,shop_id,cache_key,payload) VALUES ('schema','shop','legacy',?)",
+                   (json.dumps([{"id": "1", "control": "single"}]),))
+    assert cache.get("schema", "shop", "legacy") is None
+    value = [{"id": "1", "control": "multi", "allowCustom": True, "ruleStatus": "confirmed"}]
+    cache.put("schema", "shop", "legacy", value)
+    assert cache.get("schema", "shop", "legacy") == value
 
 
 def test_api_auto_assigns_shops_and_preserves_rpa_boundary(settings, monkeypatch):

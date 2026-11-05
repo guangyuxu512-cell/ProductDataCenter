@@ -3,9 +3,13 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Thread
 
+from fastapi import Response
+
+from app.modules.category_lookup.api import AutoSchemaBody, schema_auto
 from app.modules.category_lookup.client import DouyinCategoryClient
 from app.modules.central.client import CentralApplicationClient
 from app.modules.products.repository import ProductRepository
+from app.modules.products.brand_defaults import no_brand_selection
 from app.modules.products.service import ProductService
 from .queue import PrecheckQueue
 from .service import check_product
@@ -31,6 +35,21 @@ class PrecheckRunner:
 
     def process(self, claim):
         try:
+            detail = self.service.repository.detail(claim["product_id"])
+            if detail and detail["product"]["source_platform"] == "douyin" and not claim["product_id"].startswith("manual:"):
+                category_id = detail.get("sourceCategoryId")
+                status = str(detail["product"].get("title_status") or "")
+                if category_id and not status.endswith("商品库已修改"):
+                    schema = schema_auto(AutoSchemaBody(categoryId=category_id,
+                                                        title=detail["product"].get("title") or "商品"),
+                                         Response(), self.central, self.lookup)
+                    selection = no_brand_selection(schema.attributes)
+                    if selection and self.service.repository.set_default_brand(
+                            claim["product_id"], selection, force=False, mark_modified=False) == "updated":
+                        # Updating uu_json advances the durable queue revision.
+                        # Do not complete this now-stale claim; the next claim
+                        # checks the just-saved no-brand value.
+                        return
             result = check_product(claim["product_id"], self.service, self.central, self.lookup)
             self.queue.complete(claim, result)
         except Exception:

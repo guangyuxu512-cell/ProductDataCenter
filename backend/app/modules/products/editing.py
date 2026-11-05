@@ -433,7 +433,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
             edited_ids = {item.id for item in edit.attributes}
             for item in edit.attributes:
                 if item.values:
-                    values[item.id] = [{"diy_type": 1, "k": item.name, "value_id": value.valueId,
+                    values[item.id] = [{"diy_type": 1 if value.valueId == "0" else 0, "k": item.name, "value_id": value.valueId,
                                         "value_name": value.name} for value in item.values]
                 else:
                     values.pop(item.id, None)

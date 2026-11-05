@@ -47,6 +47,8 @@ export interface ProductHistory {
   summary: string
 }
 
+export interface ProductAttributeValue { valueId: string; name: string }
+
 export interface LibraryProduct {
   id: string
   productId: string
@@ -63,7 +65,7 @@ export interface LibraryProduct {
   /** Original Douyin category from the source package; absent for other platforms. */
   sourceCategoryId?: string | null
   targetCategory?: Array<{ id: string; name: string }>
-  targetAttributes?: Array<{ id: string | null; name: string; values: string[] }>
+  targetAttributes?: Array<{ id: string | null; name: string; values: string[]; valueItems?: ProductAttributeValue[] }>
   currentPrice: string | null
   currency?: string | null
   collectedAt: string
@@ -77,7 +79,7 @@ export interface LibraryProduct {
   /** Frontend/Mock editing draft only; this is not a Backend DTO field. */
   specDimensions: ProductSpecDimension[]
   skus: ProductSku[]
-  attributes: Array<{ id?: string | null; name: string; value: string }>
+  attributes: Array<{ id?: string | null; name: string; value: string; valueItems?: ProductAttributeValue[] }>
   mockEditedAt: string | null
   edited?: boolean
   packageFiles: Array<{ name: string; kind: 'txt' | 'origin-txt' | 'image' }>

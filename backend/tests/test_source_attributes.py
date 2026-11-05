@@ -11,9 +11,9 @@ def test_reads_original_attribute_ids_and_multiple_values_without_duplicates():
         {"property_id": "503", "name": "品牌", "message": [{"desc": "示例品牌"}]},
     ]}]
     assert source_attributes(properties, formats) == [
-        {"id": "501", "name": "材质", "values": ["304 不锈钢"]},
-        {"id": "502", "name": "适用场景", "values": ["家用", "户外"]},
-        {"id": "503", "name": "品牌", "values": ["示例品牌"]},
+        {"id": "501", "name": "材质", "values": ["304 不锈钢"], "valueItems": [{"valueId": "0", "name": "304 不锈钢"}]},
+        {"id": "502", "name": "适用场景", "values": ["家用", "户外"], "valueItems": [{"valueId": "0", "name": "家用"}, {"valueId": "0", "name": "户外"}]},
+        {"id": "503", "name": "品牌", "values": ["示例品牌"], "valueItems": [{"valueId": "0", "name": "示例品牌"}]},
     ]
 
 
@@ -24,8 +24,8 @@ def test_falls_back_to_product_format_without_fabricating_missing_values():
         {"property_id": "9", "name": "品牌", "message": [{"desc": ""}]},
     ]}]
     assert source_attributes(None, formats) == [
-        {"id": "123", "name": "材质", "values": ["棉"]},
-        {"id": None, "name": "货号", "values": ["A001"]},
+        {"id": "123", "name": "材质", "values": ["棉"], "valueItems": [{"valueId": "0", "name": "棉"}]},
+        {"id": None, "name": "货号", "values": ["A001"], "valueItems": [{"valueId": "0", "name": "A001"}]},
     ]
     assert source_attributes(None, None) == []
 
@@ -44,6 +44,6 @@ def test_reads_modern_pdd_properties_without_inventing_values():
         {"key": "空值", "values": [], "propertyId": "3"},
         {"key": "错误", "values": "invalid", "propertyId": "4"},
     ]) == [
-        {"id": "482", "name": "产地", "values": ["中国大陆"]},
-        {"id": "317", "name": "材质", "values": ["玻璃"]},
+        {"id": "482", "name": "产地", "values": ["中国大陆"], "valueItems": [{"valueId": "0", "name": "中国大陆"}]},
+        {"id": "317", "name": "材质", "values": ["玻璃"], "valueItems": [{"valueId": "0", "name": "玻璃"}]},
     ]

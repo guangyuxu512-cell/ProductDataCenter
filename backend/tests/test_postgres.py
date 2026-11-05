@@ -64,8 +64,8 @@ def test_exact_id_and_second_precision(engine):
     assert detail["product"]["source_platform"] == "douyin" and len(detail["skus"]) == 1
     assert detail["sourceCategoryId"] == "300"
     assert detail["sourceAttributes"] == [
-        {"id": "501", "name": "材质", "values": ["棉"]},
-        {"id": "502", "name": "品牌", "values": ["测试品牌"]},
+        {"id": "501", "name": "材质", "values": ["棉"], "valueItems": [{"valueId": "0", "name": "棉"}]},
+        {"id": "502", "name": "品牌", "values": ["测试品牌"], "valueItems": [{"valueId": "0", "name": "测试品牌"}]},
     ]
     pdd_detail = repo.detail("pdd:3760269504500859111")
     assert pdd_detail["sourceCategoryId"] is None and pdd_detail["sourceAttributes"] == []
@@ -407,8 +407,10 @@ def test_pdd_target_category_and_attributes_round_trip_without_changing_source(e
         repo.save_edit(product_id, edit)
         detail = repo.detail(product_id)
         assert detail["targetCategory"] == [{"id": "10", "name": "家居"}, {"id": "11", "name": "收纳"}]
-        assert detail["sourceAttributes"] == [{"id": "482", "name": "产地", "values": ["中国大陆"]}]
-        assert detail["targetAttributes"] == [{"id": "12", "name": "材质", "values": ["塑料"]}]
+        assert detail["sourceAttributes"] == [{"id": "482", "name": "产地", "values": ["中国大陆"],
+                                                "valueItems": [{"valueId": "0", "name": "中国大陆"}]}]
+        assert detail["targetAttributes"] == [{"id": "12", "name": "材质", "values": ["塑料"],
+                                                "valueItems": [{"valueId": "2", "name": "塑料"}]}]
         assert detail["product"]["category_path"] == original.category_path
         saved = json.loads(repo.export_rows([product_id])[0]["uu_text"])
         assert all(saved[key] == value for key, value in package.items())
@@ -419,7 +421,8 @@ def test_pdd_target_category_and_attributes_round_trip_without_changing_source(e
                                                  {"id": product_id}).scalar_one().encode()).hexdigest()
         repo.save_edit(product_id, ProductEdit(expectedVersion=version,
             attributes=[{"id": "12", "name": "材质", "values": []}]))
-        assert repo.detail(product_id)["targetAttributes"] == [{"id": "12", "name": "材质", "values": []}]
+        assert repo.detail(product_id)["targetAttributes"] == [{"id": "12", "name": "材质", "values": [],
+                                                                 "valueItems": []}]
     finally:
         with engine.begin() as conn:
             conn.execute(text("UPDATE products SET uu_json=CAST(:package AS jsonb), title_status=:status WHERE product_id=:id"),
@@ -763,3 +766,46 @@ def test_spec_structure_save_updates_postgres_projection_and_rpa_payload(engine,
     finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
+
+
+def test_no_brand_batch_updates_only_brand_and_preserves_later_manual_choice(engine):
+    product_id = "1234567890123456799"
+    package = {
+        "goodsInfo": {"goodsName": "品牌隔离测试", "catId4": "1000008074"},
+        "category_properties_value": {"value": {
+            "100": [{"k": "材质", "value_id": "7", "value_name": "棉"}],
+            "1687": [{"k": "品牌", "value_id": "other", "value_name": "其他品牌"}],
+        }},
+        "unrelated": {"keep": [1, 2, 3]},
+    }
+    selection = {"fieldId": "1687", "fieldName": "品牌",
+                 "valueId": "596120136", "valueName": "无品牌"}
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""INSERT INTO products(product_id,source_platform,title,title_status,uu_json)
+                VALUES (:id,'douyin','品牌隔离测试','采集完成',CAST(:package AS jsonb))"""),
+                {"id": product_id, "package": json.dumps(package, ensure_ascii=False)})
+        repo = ProductRepository(engine)
+        assert repo.set_default_brand(product_id, selection, force=True, mark_modified=False) == "updated"
+        with engine.connect() as conn:
+            saved, status, queue_state = conn.execute(text("""SELECT uu_json,title_status,
+                (SELECT state FROM product_prechecks WHERE product_id=:id) FROM products WHERE product_id=:id"""),
+                {"id": product_id}).one()
+        assert saved["category_properties_value"]["value"]["1687"] == [{
+            "diy_type": 0, "k": "品牌", "value_id": "596120136", "value_name": "无品牌",
+        }]
+        assert saved["category_properties_value"]["value"]["100"] == package["category_properties_value"]["value"]["100"]
+        assert saved["unrelated"] == package["unrelated"] and status == "采集完成" and queue_state == "pending"
+        assert repo.set_default_brand(product_id, selection, force=True, mark_modified=False) == "already"
+        with engine.begin() as conn:
+            conn.execute(text("""UPDATE products SET title_status='采集完成 | 商品库已修改',
+                uu_json=jsonb_set(uu_json,'{category_properties_value,value,1687}',
+                '[{"k":"品牌","value_id":"2065951823","value_name":"HP/惠普"}]'::jsonb)
+                WHERE product_id=:id"""), {"id": product_id})
+        assert repo.set_default_brand(product_id, selection, force=False, mark_modified=False) == "manual"
+        with engine.connect() as conn:
+            assert conn.execute(text("""SELECT uu_json #>> '{category_properties_value,value,1687,0,value_name}'
+                FROM products WHERE product_id=:id"""), {"id": product_id}).scalar_one() == "HP/惠普"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})

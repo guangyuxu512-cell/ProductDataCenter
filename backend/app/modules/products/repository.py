@@ -138,11 +138,14 @@ class ProductRepository:
                                 continue
                             values = item.get("values")
                             if isinstance(values, list):
-                                names = [value["name"] for value in values[:30]
-                                         if isinstance(value, dict) and isinstance(value.get("name"), str)]
+                                value_items = [{"valueId": str(value.get("valueId") or "0"), "name": value["name"]}
+                                               for value in values[:30]
+                                               if isinstance(value, dict) and isinstance(value.get("name"), str)]
+                                names = [value["name"] for value in value_items]
                                 # An explicitly cleared value must remain distinguishable
                                 # from a value that has never been mapped.
-                                target_attributes.append({"id": identity, "name": item["name"], "values": names})
+                                target_attributes.append({"id": identity, "name": item["name"],
+                                                          "values": names, "valueItems": value_items})
             skus = conn.execute(text("""SELECT sku_id, sku_name, current_price, image_rel_path, sort_order
                 FROM product_skus WHERE product_id=:id ORDER BY sort_order, sku_id"""), {"id": product_id}).mappings().all()
             images = conn.execute(text("""SELECT image_type, sort_order, rel_path, source_url
@@ -413,6 +416,55 @@ class ProductRepository:
             conn.execute(text("UPDATE products SET uu_sha256=:version WHERE product_id=:id"),
                          {"id": product_id, "version": saved_version})
             return {"version": saved_version}
+
+    def set_default_brand(self, product_id: str, selection: dict, *, force: bool = False,
+                          mark_modified: bool = False) -> str:
+        """Write only the real platform brand field and let the queue trigger recheck it."""
+        with self.engine.begin() as conn:
+            row = conn.execute(text("""SELECT source_platform, title_status, uu_json AS package
+                FROM products WHERE product_id=:id FOR UPDATE"""), {"id": product_id}).mappings().first()
+            if row is None or not isinstance(row["package"], dict):
+                return "missing"
+            status = str(row["title_status"] or "")
+            if not force and status.endswith("商品库已修改"):
+                return "manual"
+            package = deepcopy(row["package"])
+            field_id = str(selection["fieldId"])
+            expected = {"valueId": str(selection["valueId"]), "name": str(selection["valueName"])}
+            if row["source_platform"] == "douyin":
+                block = package.setdefault("category_properties_value", {"value": {}})
+                values = block.get("value") if isinstance(block, dict) else None
+                if not isinstance(values, dict):
+                    return "unsupported"
+                current = values.get(field_id)
+                if (isinstance(current, list) and len(current) == 1 and isinstance(current[0], dict)
+                        and str(current[0].get("value_id") or "") == expected["valueId"]
+                        and current[0].get("value_name") == expected["name"]):
+                    return "already"
+                values[field_id] = [{"diy_type": 0, "k": str(selection["fieldName"]),
+                                     "value_id": expected["valueId"], "value_name": expected["name"]}]
+            elif row["source_platform"] in {"pinduoduo", "pdd"}:
+                target = package.get("douyinTarget")
+                attributes = target.get("attributes") if isinstance(target, dict) else None
+                if not isinstance(attributes, dict):
+                    return "unsupported"
+                current = attributes.get(field_id)
+                if (isinstance(current, dict) and current.get("values") == [expected]):
+                    return "already"
+                attributes[field_id] = {"name": str(selection["fieldName"]), "values": [expected]}
+            else:
+                return "unsupported"
+            if mark_modified and not status.endswith("商品库已修改"):
+                status = f"{status} | 商品库已修改" if status else "商品库已修改"
+            saved = conn.execute(text("""UPDATE products SET uu_json=CAST(:package AS jsonb), title_status=:status
+                WHERE product_id=:id RETURNING uu_json::text"""), {
+                    "id": product_id, "status": status,
+                    "package": json.dumps(package, ensure_ascii=False, separators=(",", ":")),
+                }).scalar_one()
+            conn.execute(text("UPDATE products SET uu_sha256=:version WHERE product_id=:id"), {
+                "id": product_id, "version": hashlib.sha256(saved.encode("utf-8")).hexdigest(),
+            })
+            return "updated"
 
     def image(self, product_id: str, kind: str, position: int):
         with self.engine.connect() as conn:
