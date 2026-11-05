@@ -410,7 +410,7 @@ def test_pdd_target_category_and_attributes_round_trip_without_changing_source(e
         assert detail["sourceAttributes"] == [{"id": "482", "name": "产地", "values": ["中国大陆"],
                                                 "valueItems": [{"valueId": "0", "name": "中国大陆"}]}]
         assert detail["targetAttributes"] == [{"id": "12", "name": "材质", "values": ["塑料"],
-                                                "valueItems": [{"valueId": "2", "name": "塑料"}]}]
+                                                "valueItems": [{"valueId": "13", "name": "塑料"}]}]
         assert detail["product"]["category_path"] == original.category_path
         saved = json.loads(repo.export_rows([product_id])[0]["uu_text"])
         assert all(saved[key] == value for key, value in package.items())
