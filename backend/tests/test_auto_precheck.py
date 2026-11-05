@@ -88,6 +88,18 @@ def test_unknown_rule_cannot_report_success_or_invent_platform_message():
     assert result["status"] == "failed" and result["issues"] == [] and result["issueDetails"] == []
 
 
+def test_old_queued_rule_hint_is_removed_without_falsely_passing():
+    from app.modules.prechecks.queue import present_result
+    original = {"status": "needs_completion", "issues": ["尺寸规则待核对", "品牌未填写"], "issueDetails": [
+        {"fieldId": "4738", "message": "尺寸规则待核对"}, {"fieldId": "1687", "message": "品牌未填写"}]}
+    result = present_result(original)
+    assert result == {"status": "failed", "issues": ["品牌未填写"],
+                      "issueDetails": [{"fieldId": "1687", "message": "品牌未填写"}]}
+    assert original["issues"] == ["尺寸规则待核对", "品牌未填写"]
+    assert present_result({"status": "needs_completion", "issues": ["品牌未填写"]}) == {
+        "status": "needs_completion", "issues": ["品牌未填写"]}
+
+
 def test_new_douyin_precheck_writes_real_no_brand_then_leaves_stale_claim_unfinished():
     from app.modules.prechecks.runner import PrecheckRunner
 
