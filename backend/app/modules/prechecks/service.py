@@ -9,6 +9,7 @@ from app.modules.category_lookup.api import (
     AutoSchemaBody, PredictBody, PredictManualBody, predict, predict_manual, schema_auto,
 )
 from app.modules.category_lookup.client import DouyinCategoryClient
+from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, normalize_multi_values
 from app.modules.central.client import CentralApplicationClient
 from app.modules.products.service import ProductService
 
@@ -41,7 +42,7 @@ def _field_values(field, fields: list, source: list, target: list, platform: str
             name, value_id = str(item).strip(), "0"
         if name:
             normalized.append({"valueId": value_id, "name": name})
-    return normalized
+    return normalize_multi_values(field, normalized)
 
 
 def _attribute_problem(field, values: list[dict]) -> str | None:
@@ -49,15 +50,22 @@ def _attribute_problem(field, values: list[dict]) -> str | None:
         return "未填写" if field.required else None
     control = getattr(field, "control", "text")
     if getattr(field, "ruleStatus", "unknown") != "confirmed" or control == "unknown":
-        return "规则待核对"
+        return UNVERIFIED
     if control == "single" and len(values) != 1:
         return "只能选择一项"
+    maximum = getattr(field, "maxValues", None)
+    if control == "multi" and maximum is not None and len(values) > maximum:
+        return f"最多选{maximum}项"
+    if control == "measure" and (len(values) != 1 or not measure_valid(values[0]["name"], getattr(field, "measureTemplates", []))):
+        return "格式无效"
     if control == "number":
         try:
             if any(not Decimal(value["name"]).is_finite() for value in values):
                 return "数字无效"
         except (InvalidOperation, ValueError):
             return "数字无效"
+    if control in ("single", "multi") and not field.options and getattr(field, "allowCustom", None) is False:
+        return UNVERIFIED
     if field.options and getattr(field, "allowCustom", None) is False:
         option_ids = Counter(option.value.strip() for option in field.options)
         labels = Counter(option.label.strip() for option in field.options)
@@ -146,8 +154,11 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
         schema = schema_auto(AutoSchemaBody(categoryId=category_id, title=title), Response(), central, lookup)
     problems = _attribute_problems(schema.attributes, detail["sourceAttributes"],
                                    detail["targetAttributes"], platform)
+    unverified = any(problem == UNVERIFIED for _, problem in problems)
     for field, problem in problems:
+        if problem == UNVERIFIED:
+            continue
         _add_issue(result, "attribute_invalid" if problem != "未填写" else "attribute_missing",
                    f"{field.label}{problem}", "attributes", fieldId=field.id)
-    result["status"] = "needs_completion" if result["issues"] else "ready"
+    result["status"] = "failed" if unverified else "needs_completion" if result["issues"] else "ready"
     return result

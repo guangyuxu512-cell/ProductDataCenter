@@ -123,14 +123,36 @@ class Option(BaseModel):
     value: str
 
 
+class MeasureModule(BaseModel):
+    id: str
+    prefix: str = ""
+    suffix: str = ""
+    required: bool = False
+    requiredTips: str = ""
+    placeholder: str = ""
+    units: list[Option] = Field(default_factory=list)
+    dataType: Literal["float", "int"]
+    minimum: float | None = None
+    maximum: float | None = None
+    precision: int | None = None
+
+
+class MeasureTemplate(BaseModel):
+    id: str
+    name: str
+    modules: list[MeasureModule]
+
+
 class Attribute(BaseModel):
     id: str
     label: str
     required: bool
     options: list[Option]
-    control: Literal["single", "multi", "text", "number", "unknown"] = "unknown"
+    control: Literal["single", "multi", "text", "number", "measure", "unknown"] = "unknown"
     allowCustom: bool | None = None
     ruleStatus: Literal["confirmed", "unknown"] = "unknown"
+    maxValues: int | None = None
+    measureTemplates: list[MeasureTemplate] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):

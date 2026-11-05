@@ -127,6 +127,137 @@ def test_manual_product_can_be_edited_and_read_by_rpa(engine, tmp_path):
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
 
 
+def test_product_deletion_cascades_records_and_preserves_shared_image(engine, tmp_path):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.products.api import get_service
+
+    repo = ProductRepository(engine)
+    identities = [repo.create_manual("单删隔离商品"), repo.create_manual("批删隔离商品一"),
+                  repo.create_manual("批删隔离商品二"), repo.create_manual("保留隔离商品")]
+    shared = tmp_path / "shared.png"
+    shared.write_bytes(b"shared test image")
+    try:
+        with engine.begin() as conn:
+            for identity in identities:
+                conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+                    VALUES (:id,'main',0,'shared.png','https://fixture.invalid/shared.png')"""), {"id": identity})
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test", enable_product_writes=True)
+        app = create_application()
+        app.dependency_overrides[get_settings] = lambda: settings
+        app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            admin, rpa = {"Authorization": "Bearer admin-test"}, {"Authorization": "Bearer rpa-test"}
+            assert client.post("/api/v1/products/delete", json={"productIds": [identities[0]]}).status_code == 401
+            assert client.post("/api/v1/products/delete", headers=rpa, json={"productIds": [identities[0]]}).status_code == 401
+            single = client.post("/api/v1/products/delete", headers=admin, json={"productIds": [identities[0]]})
+            assert single.status_code == 200 and single.json() == {"deleted": [identities[0]], "missing": []}
+            assert client.get(f"/rpa/v1/products/{identities[0]}/uu", headers=rpa).status_code == 404
+            exported = client.post("/api/v1/products/export-uu", headers=admin,
+                                   json={"productIds": [identities[0], identities[3]]})
+            assert exported.status_code == 200 and exported.headers["x-export-count"] == "1"
+            assert exported.headers["x-export-missing-count"] == "1"
+            batch = client.post("/api/v1/products/delete", headers=admin,
+                                json={"productIds": [identities[1], identities[2]]})
+            assert batch.status_code == 200 and set(batch.json()["deleted"]) == set(identities[1:3])
+        with engine.connect() as conn:
+            for table in ("products", "product_skus", "product_images", "product_prechecks"):
+                assert conn.execute(text(f"SELECT count(*) FROM {table} WHERE product_id=ANY(CAST(:ids AS text[]))"),
+                                    {"ids": identities[:3]}).scalar_one() == 0
+            assert conn.execute(text("SELECT count(*) FROM product_images WHERE product_id=:id"),
+                                {"id": identities[3]}).scalar_one() == 1
+        assert shared.read_bytes() == b"shared test image"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=ANY(CAST(:ids AS text[]))"), {"ids": identities})
+
+
+def test_product_delete_role_only_needs_parent_table_delete(engine):
+    role = "pdc_delete_role_test"
+    repo = ProductRepository(engine)
+    product_id = repo.create_manual("授权隔离商品")
+    limited = None
+    try:
+        with engine.begin() as conn:
+            conn.exec_driver_sql(f"CREATE ROLE {role} NOLOGIN")
+            conn.exec_driver_sql(f"GRANT USAGE ON SCHEMA public TO {role}")
+            conn.exec_driver_sql(f"GRANT SELECT, DELETE ON products TO {role}")
+            assert not conn.execute(text("SELECT has_table_privilege(:role, 'product_prechecks', 'DELETE')"),
+                                    {"role": role}).scalar_one()
+        limited = create_engine(engine.url)
+        @event.listens_for(limited, "connect")
+        def assume_role(connection, _record):
+            with connection.cursor() as cursor:
+                cursor.execute(f"SET ROLE {role}")
+        assert ProductRepository(limited).delete_products([product_id]) == [product_id]
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM product_prechecks WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == 0
+    finally:
+        if limited is not None:
+            limited.dispose()
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+            if conn.execute(text("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=:role)"), {"role": role}).scalar_one():
+                conn.exec_driver_sql(f"DROP OWNED BY {role}")
+                conn.exec_driver_sql(f"DROP ROLE {role}")
+
+
+def test_real_schema_attribute_values_roundtrip_to_export_and_rpa(engine, tmp_path):
+    from io import BytesIO
+    from unittest.mock import patch
+    from zipfile import ZipFile
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.main import create_application
+    from app.modules.products.api import get_service
+    from app.modules.products.schemas import ProductEdit
+
+    repo = ProductRepository(engine)
+    product_id = repo.create_manual("属性隔离商品")
+    expected = {
+        "2595": [("64357", "3周岁-6周岁"), ("64359", "6周岁-8周岁")],
+        "4738": [("0", "11*22*22cm")],
+        "989": [("0", "普通文本尺寸")],
+        "810": [("10445", "可拆卸"), ("0", "测试定制功能")],
+    }
+    try:
+        snapshot = repo.edit_snapshot(product_id)
+        repo.save_edit(product_id, ProductEdit(expectedVersion=snapshot["version"],
+            category=[{"id": "1000001467", "name": "玩具"}, {"id": "1000001477", "name": "益智早教玩具"},
+                      {"id": "1000001535", "name": "智力思维训练"}],
+            attributes=[{"id": identity, "name": label, "values": [{"valueId": value_id, "name": name}
+                         for value_id, name in expected[identity]]} for identity, label in
+                        [("2595", "适用年龄"), ("4738", "规格尺寸"), ("989", "尺寸"), ("810", "功能")]]))
+        actual = {item["id"]: [(value["valueId"], value["name"]) for value in item["valueItems"]]
+                  for item in repo.detail(product_id)["sourceAttributes"]}
+        assert actual == expected
+        settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_settings] = lambda: settings
+        app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            rpa = client.get(f"/rpa/v1/products/{product_id}/uu", headers={"Authorization": "Bearer rpa-test"})
+            exported = client.post("/api/v1/products/export-uu", headers={"Authorization": "Bearer admin-test"},
+                                   json={"productIds": [product_id]})
+        assert rpa.status_code == exported.status_code == 200
+        with ZipFile(BytesIO(exported.content)) as archive:
+            filename = next(name for name in archive.namelist() if name.startswith("UU/") and name.endswith("_UU.txt"))
+            package = json.loads(archive.read(filename))
+        assert package["category_properties_value"] == rpa.json()["category_properties_value"]
+        for identity, values in expected.items():
+            assert [(item["value_id"], item["value_name"]) for item in
+                    package["category_properties_value"]["value"][identity]] == values
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT state FROM product_prechecks WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == "pending"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
 def test_manual_create_saves_complete_package_atomically_with_restricted_role(engine, tmp_path):
     from contextlib import contextmanager
     from decimal import Decimal

@@ -14,11 +14,13 @@ import { createManualProduct, fetchEditSnapshot, saveProduct, uploadProductImage
 import type { LibraryProduct, ProductAttributeValue, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
-import { originalAttributeValues, pddAttributeValues } from '../model/source-attributes'
+import { normalizeMultiValues, originalAttributeValues, pddAttributeValues } from '../model/source-attributes'
+import { validMeasure } from '../model/measure'
 import type { AutoPrecheck, CategoryPrediction, PrecheckIssue } from '../model/precheck'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
 import ProductImageList from './ProductImageList.vue'
+import ProductMeasureInput from './ProductMeasureInput.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
 
 const props = withDefaults(defineProps<{
@@ -135,7 +137,7 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
     setEditSnapshot(result)
   }).catch(() => { if (request === editRequest) message.error('读取编辑数据失败，请刷新商品后重试') })
     .finally(() => {
-      if (request === editRequest) { editBusy.value = false; applyPddSourceAttributes() }
+      if (request === editRequest) { editBusy.value = false; applyPddSourceAttributes(); applyLegacyMultiNormalization() }
     })
 }, { immediate: true })
 
@@ -166,7 +168,8 @@ function retainedToken(value: ProductAttributeValue) {
 }
 function setAttribute(item: CategoryAttribute, value: string | number | Array<string | number> | null) {
   const raw = Array.isArray(value) ? value : value === null ? [] : [value]
-  if (!item.options.length) {
+  if (item.control === 'multi' && item.maxValues && raw.length > item.maxValues && raw.length > attributeValues(item).length) return
+  if (!['single', 'multi'].includes(item.control)) {
     attributeInputs.value[item.id] = raw.map(String).map((name) => name.trim()).filter(Boolean)
       .map((name) => ({ valueId: '0', name }))
   } else {
@@ -204,6 +207,28 @@ function applyPddSourceAttributes() {
     }
   }
 }
+function applyLegacyMultiNormalization() {
+  const product = props.product
+  if (!props.show || !product || !canEdit.value || !categorySchemaLoaded.value || selectedParts.value) return
+  for (const field of categoryAttributes.value) {
+    if (field.control !== 'multi' || field.ruleStatus !== 'confirmed' || touchedAttributes.value.includes(field.id)) continue
+    let raw: ProductAttributeValue[] = []
+    if (product.platform === 'douyin' && product.sourceCategoryId === selectedCategory.value) {
+      const matches = product.attributes.filter((attribute) => attribute.id === field.id)
+      if (matches.length === 1) raw = matches[0].valueItems?.length
+        ? matches[0].valueItems.map((value) => ({ ...value })) : [{ valueId: '0', name: matches[0].value }]
+    } else if (product.platform === 'pdd' && product.targetCategory?.at(-1)?.id === selectedCategory.value) {
+      const saved = product.targetAttributes?.find((attribute) => attribute.id === field.id)
+      raw = saved?.valueItems?.length ? saved.valueItems.map((value) => ({ ...value }))
+        : (saved?.values ?? []).map((name) => ({ valueId: '0', name }))
+    }
+    const normalized = normalizeMultiValues(field, raw)
+    if (normalized.length > raw.length) {
+      attributeInputs.value[field.id] = normalized
+      touchedAttributes.value.push(field.id)
+    }
+  }
+}
 function attributeValues(item: CategoryAttribute): ProductAttributeValue[] {
   if (item.id in attributeInputs.value) return attributeInputs.value[item.id]
   const product = props.product
@@ -211,9 +236,10 @@ function attributeValues(item: CategoryAttribute): ProductAttributeValue[] {
     const current = product.targetCategory?.at(-1)?.id
     if (current && current === selectedCategory.value && !selectedParts.value) {
       const saved = product.targetAttributes?.find((attribute) => attribute.id === item.id)
-      return saved?.valueItems?.length
+      const values = saved?.valueItems?.length
         ? saved.valueItems.map((value) => ({ ...value }))
         : (saved?.values ?? []).map((name) => ({ valueId: '0', name }))
+      return normalizeMultiValues(item, values)
     }
     return []
   }
@@ -225,8 +251,11 @@ function attributeTextValue(item: CategoryAttribute) {
 function attributeProblem(item: CategoryAttribute): string | null {
   const values = attributeValues(item)
   if (!values.length) return item.required ? '未填写' : null
-  if (item.ruleStatus !== 'confirmed' || attributeControl(item) === 'unknown') return '规则待核对'
+  if (item.ruleStatus !== 'confirmed' || attributeControl(item) === 'unknown') return null
   if (attributeControl(item) === 'single' && values.length !== 1) return '只能选择一项'
+  if (attributeControl(item) === 'multi' && item.maxValues && values.length > item.maxValues) return `最多选${item.maxValues}项`
+  if (attributeControl(item) === 'measure' && (values.length !== 1 ||
+      !(item.measureTemplates ?? []).some((template) => validMeasure(template, values[0].name)))) return '格式无效'
   if (attributeControl(item) === 'number' && values.some((value) => !value.name.trim() || !Number.isFinite(Number(value.name)))) return '数字无效'
   if (item.options.length && item.allowCustom !== true && values.some((value) =>
     value.valueId !== '0'
@@ -629,6 +658,7 @@ async function loadAttributes(refresh = false) {
     categoryAttributes.value = result.attributes; categorySchemaLoaded.value = true
     applyPddSourceAttributes()
     applyNoBrandDefault()
+    applyLegacyMultiNormalization()
   } catch {
     if (request === categoryRequest) {
       if (categorySchemaLoaded.value) message.error('更新属性失败，仍显示之前的属性')
@@ -760,6 +790,7 @@ const precheckSummary = computed(() => {
   if (!record) return null
   if (record.error) return { text: `自动预检失败：${record.error}`, tone: 'error' as const }
   if (record.state !== 'done') return { text: `自动预检：${record.state === 'running' ? '预检中' : '排队中'}`, tone: 'default' as const }
+  if (record.result?.status === 'failed' || !record.result) return { text: '自动预检失败', tone: 'error' as const }
   return displayedPrecheckIssues.value.length
     ? { text: `自动预检待处理：${displayedPrecheckIssues.value.map((item) => item.message).join('；')}`, tone: 'warning' as const }
     : { text: '自动预检：已通过', tone: 'success' as const }
@@ -1007,22 +1038,25 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <div class="product-preview__attributes">
               <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required"
                 :data-precheck-field="item.id">
-                <div v-if="editable && item.options.length" class="product-preview__attribute-input">
+                <ProductMeasureInput v-if="item.control === 'measure' && item.measureTemplates?.length"
+                  :model-value="attributeTextValue(item)" :templates="item.measureTemplates" :label="item.label"
+                  :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)"
+                  @update:model-value="setAttribute(item, $event)" />
+                <div v-else-if="editable && ['single', 'multi'].includes(item.control)" class="product-preview__attribute-input">
                   <AppSelect :model-value="attributeModelValue(item)"
                     :options="attributeOptions(item)" clearable filterable show-on-focus
-                    :multiple="attributeControl(item) === 'multi'" :max-tag-count="2"
-                    :tag="item.allowCustom === true" :on-create="item.allowCustom === true ? createAttributeOption : undefined"
+                    :multiple="attributeControl(item) === 'multi'"
+                    :tag="item.allowCustom === true && (!item.maxValues || attributeValues(item).length < item.maxValues)"
+                    :on-create="item.allowCustom === true ? createAttributeOption : undefined"
                     :render-label="renderAttributeLabel"
                     :disabled="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd'].includes(product.platform)"
                     :placeholder="item.allowCustom === true ? '请选择、搜索或添加自定义值' : '请选择或搜索平台选项'"
                     @update:model-value="setAttribute(item, $event)" @update:values="setAttribute(item, $event)" />
                   <NText v-if="attributeProblem(item) === '包含无效选项'" type="error">该值不是平台允许的选项</NText>
-                  <NText v-else-if="attributeProblem(item) === '规则待核对'" type="warning">平台规则待核对，原值已保留</NText>
                 </div>
                 <AppInput v-else :model-value="attributeTextValue(item)" :aria-label="item.label"
                   :inputmode="attributeControl(item) === 'number' ? 'decimal' : undefined"
                   :readonly="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
-                <NText v-if="!item.options.length && attributeProblem(item) === '规则待核对'" type="warning">平台规则待核对，原值已保留</NText>
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />

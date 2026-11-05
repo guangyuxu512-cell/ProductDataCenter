@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CategoryAttribute } from '../api/category-lookup'
 import type { LibraryProduct } from './contracts'
-import { originalAttributeValue, originalAttributeValues, pddAttributeValue, pddAttributeValues } from './source-attributes'
+import { normalizeMultiValues, originalAttributeValue, originalAttributeValues, pddAttributeValue, pddAttributeValues } from './source-attributes'
 
 const target: CategoryAttribute = { id: '501', label: '材质', required: true, options: [], control: 'text', allowCustom: false, ruleStatus: 'confirmed' }
 const product = { platform: 'douyin', sourceCategoryId: '100', attributes: [
@@ -32,6 +32,18 @@ describe('原抖店类目属性回显', () => {
     expect(originalAttributeValue(target, [target], duplicate, '100')).toBe('')
     expect(originalAttributeValue(target, [target, { ...target, id: '2' }], duplicate, '100')).toBe('')
   })
+})
+
+it('只按真实多选选项拆分旧编码，并保留普通文本', () => {
+  const age: CategoryAttribute = { id: '2595', label: '适用年龄', required: true, control: 'multi', allowCustom: false,
+    ruleStatus: 'confirmed', maxValues: 5, options: [{ label: '3周岁-6周岁', value: '64357' },
+      { label: '6周岁-8周岁', value: '64359' }] }
+  const joined = [{ valueId: '0', name: '3周岁-6周岁|6周岁-8周岁' }]
+  expect(normalizeMultiValues(age, joined)).toEqual([{ valueId: '64357', name: '3周岁-6周岁' },
+    { valueId: '64359', name: '6周岁-8周岁' }])
+  expect(normalizeMultiValues({ ...age, control: 'text' }, joined)).toEqual(joined)
+  const unmatched = [{ valueId: '0', name: '3周岁-6周岁|未知年龄' }]
+  expect(normalizeMultiValues(age, unmatched)).toEqual(unmatched)
 })
 
 describe('拼多多来源属性匹配', () => {

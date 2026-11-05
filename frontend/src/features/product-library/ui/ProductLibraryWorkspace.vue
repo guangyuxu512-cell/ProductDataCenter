@@ -9,7 +9,7 @@ import { ContextSwitchBar, DataTable, FilterBar, FilterField, FormDialog,
 import { AppButton, AppInput, AppSelect } from '@/shared/ui'
 import { useProductLibrary } from '../model/useProductLibrary'
 import { capturedTime, platformCode, priceRange } from '../model/format'
-import { exportProducts, fetchAutoPrechecks, moveProducts, queuePrechecks } from '../api/products'
+import { deleteProducts, exportProducts, fetchAutoPrechecks, moveProducts, queuePrechecks } from '../api/products'
 import type { LibraryProduct } from '../model/contracts'
 import type { ProductRow } from '../model/nas-contracts'
 import { mergePrecheck, precheckIssueCount, type AutoPrecheck, type PrecheckIssue } from '../model/precheck'
@@ -110,6 +110,24 @@ async function download(ids: string[]) {
     setTimeout(() => URL.revokeObjectURL(url), 10_000)
     if (result.missing) message.warning(`已导出 ${result.exported} 个商品，${result.missing} 个缺少商品数据包`)
     else message.success(`已导出 ${result.exported} 个商品`)
+  } catch (error) { message.error(errorText(error)) }
+  finally { busy.value = false }
+}
+
+async function removeProducts(ids: string[]) {
+  if (busy.value || !ids.length || !capabilities.data.value?.productEdit) return
+  if (!window.confirm(`确定删除选中的 ${ids.length} 个商品吗？`)) return
+  busy.value = true
+  try {
+    const result = await deleteProducts(ids)
+    const removed = new Set(result.deleted)
+    if (detailId.value && removed.has(detailId.value)) detailId.value = null
+    precheckIds.value = precheckIds.value.filter((id) => !removed.has(id))
+    if (!precheckIds.value.length) precheckRunning.value = false
+    message.success(`已删除 ${result.deleted.length} 个商品`)
+    await refresh()
+    const lastPage = Math.max(1, Math.ceil(total.value / filters.pageSize))
+    if (filters.page > lastPage) filters.page = lastPage
   } catch (error) { message.error(errorText(error)) }
   finally { busy.value = false }
 }
@@ -255,8 +273,10 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   { title: 'SKU', key: 'sku_count', width: 80, align: 'center' },
   { title: '采集时间', key: 'captured_at', width: 176, align: 'center', render: (row) => capturedTime(row.captured_at) },
   { title: '操作', key: 'actions', width: 170, fixed: 'right', align: 'center', render: (row) => h('div', { class: 'product-library-actions' }, [
-    h(AppButton, { tone: 'link', size: 'small', onClick: () => { detailId.value = row.product_id } }, () => '查看商品'),
-    h(AppButton, { size: 'small', disabled: busy.value, onClick: () => download([row.product_id]) }, () => '导出商品数据包'),
+    h(AppButton, { tone: 'link', size: 'small', onClick: () => { detailId.value = row.product_id } }, () => '编辑'),
+    h(AppButton, { tone: 'link', size: 'small', disabled: busy.value, onClick: () => download([row.product_id]) }, () => '导出'),
+    h(AppButton, { tone: 'link', size: 'small', disabled: busy.value || !capabilities.data.value?.productEdit,
+      onClick: () => removeProducts([row.product_id]) }, () => '删除'),
   ]) },
 ])
 </script>
@@ -290,7 +310,8 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
         <span v-if="selected.length">已选 {{ selected.length }} 项</span>
         <template #actions>
           <AppButton size="small" :disabled="busy || !capabilities.data.value?.productEdit" @click="openManual">手动新建商品</AppButton>
-          <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出商品数据包</AppButton>
+          <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出</AppButton>
+          <AppButton size="small" :disabled="!selected.length || busy || !capabilities.data.value?.productEdit" @click="removeProducts(selected)">批量删除</AppButton>
           <AppButton size="small" :disabled="!selected.length || precheckRunning || !capabilities.data.value?.autoPrecheck" @click="startPrecheck">批量预检</AppButton>
           <span v-if="precheckIds.length" class="product-library-precheck-progress">{{ precheckCompleted }}/{{ precheckIds.length }}</span>
           <AppButton size="small" :disabled="!selected.length || busy || !canWriteGroups" @click="openMove(selected)">移动分组</AppButton>

@@ -1,0 +1,211 @@
+[
+  {
+    "id": "2595",
+    "label": "适用年龄",
+    "required": true,
+    "placeholder": "请选择，最多选5项",
+    "additions": {
+      "ui_type": "multi_select",
+      "diy_type": 0,
+      "measure_templates": []
+    },
+    "options": [
+      {
+        "value_id": "12071",
+        "value_name": "3周岁以下"
+      },
+      {
+        "value_id": "22028",
+        "value_name": "14周岁以上"
+      },
+      {
+        "value_id": "64358",
+        "value_name": "8周岁-14周岁"
+      },
+      {
+        "value_id": "64359",
+        "value_name": "6周岁-8周岁"
+      },
+      {
+        "value_id": "64357",
+        "value_name": "3周岁-6周岁"
+      },
+      {
+        "value_id": "1991",
+        "value_name": "通用"
+      },
+      {
+        "value_id": "250121",
+        "value_name": "5岁以上"
+      },
+      {
+        "value_id": "691596",
+        "value_name": "6岁+"
+      },
+      {
+        "value_id": "692178",
+        "value_name": "18岁"
+      }
+    ],
+    "rules": [
+      {
+        "type": "max_input_num",
+        "value": 5
+      }
+    ]
+  },
+  {
+    "id": "4738",
+    "label": "规格尺寸",
+    "required": true,
+    "placeholder": "请输入",
+    "additions": {
+      "ui_type": "measure",
+      "diy_type": 0,
+      "measure_templates": [
+        {
+          "display_name": "三脚架长宽高度量衡模板",
+          "template_id": 53,
+          "value_modules": [
+            {
+              "extra": {
+                "unit_rule_type": "不区分单位"
+              },
+              "input_type": "input",
+              "module_id": 48,
+              "module_shading_words": "请输入",
+              "prefix": "",
+              "prefix_id": 0,
+              "required_tips": "该项为必填，请输入",
+              "suffix": "*",
+              "suffix_id": 0,
+              "unit_linkage": {},
+              "unit_options": [],
+              "validate_rule": {
+                "data_type": "float",
+                "max": 10000,
+                "min": 1,
+                "precision": 1,
+                "time_format": "",
+                "unit_rules": []
+              },
+              "value_options": [],
+              "value_required": true
+            },
+            {
+              "extra": {
+                "unit_rule_type": "不区分单位"
+              },
+              "input_type": "input",
+              "module_id": 49,
+              "module_shading_words": "请输入",
+              "prefix": "",
+              "prefix_id": 0,
+              "required_tips": "该项为必填，请输入",
+              "suffix": "*",
+              "suffix_id": 0,
+              "unit_linkage": {},
+              "unit_options": [],
+              "validate_rule": {
+                "data_type": "float",
+                "max": 10000,
+                "min": 1,
+                "precision": 1,
+                "time_format": "",
+                "unit_rules": []
+              },
+              "value_options": [],
+              "value_required": true
+            },
+            {
+              "extra": {
+                "unit_rule_type": "不区分单位"
+              },
+              "input_type": "input",
+              "module_id": 50,
+              "module_shading_words": "请输入",
+              "prefix": "",
+              "prefix_id": 0,
+              "required_tips": "该项为必填，请输入",
+              "suffix": "",
+              "suffix_id": 0,
+              "unit_linkage": null,
+              "unit_options": [
+                {
+                  "label": "cm",
+                  "value": 39
+                },
+                {
+                  "label": "m",
+                  "value": 41
+                },
+                {
+                  "label": "mm",
+                  "value": 90
+                }
+              ],
+              "validate_rule": {
+                "data_type": "float",
+                "max": 10000,
+                "min": 1,
+                "precision": 1,
+                "time_format": "",
+                "unit_rules": []
+              },
+              "value_options": [],
+              "value_required": true
+            }
+          ]
+        }
+      ]
+    },
+    "rules": []
+  },
+  {
+    "id": "810",
+    "label": "功能",
+    "required": false,
+    "placeholder": "请选择，最多选5项",
+    "additions": {
+      "ui_type": "multi_select",
+      "diy_type": 1,
+      "measure_templates": []
+    },
+    "options": [
+      {
+        "value_id": "10445",
+        "value_name": "可拆卸"
+      },
+      {
+        "value_id": "619206",
+        "value_name": "防误吞"
+      },
+      {
+        "value_id": "619207",
+        "value_name": "感官交互"
+      },
+      {
+        "value_id": "168055",
+        "value_name": "智能控制"
+      }
+    ],
+    "rules": [
+      {
+        "type": "max_input_num",
+        "value": 5
+      }
+    ]
+  },
+  {
+    "id": "989",
+    "label": "尺寸",
+    "required": false,
+    "placeholder": "请输入",
+    "additions": {
+      "ui_type": "text",
+      "diy_type": 0,
+      "measure_templates": []
+    },
+    "rules": []
+  }
+]

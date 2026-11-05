@@ -76,6 +76,11 @@ class ProductService:
             updated = self.repository.assign_group(conn, product_ids, group_id)
             return {"updated": updated, "groupId": group_id}
 
+    def delete_products(self, product_ids: list[str]):
+        deleted = self.repository.delete_products(product_ids)
+        removed = set(deleted)
+        return {"deleted": deleted, "missing": [identity for identity in product_ids if identity not in removed]}
+
     def export(self, product_ids: list[str]):
         return export_archive(self.repository.export_rows(product_ids), product_ids,
                               self.settings.export_max_bytes, self.settings.image_public_base_url,
