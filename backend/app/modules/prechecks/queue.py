@@ -1,6 +1,27 @@
 """Claim and finish automatic checks without modifying product packages."""
+from copy import deepcopy
 import json
 from sqlalchemy import Engine, text
+
+
+def present_result(result):
+    """Hide obsolete app-generated rule hints without claiming validation passed."""
+    if not isinstance(result, dict):
+        return result
+    value = deepcopy(result)
+    issues = value.get("issues")
+    details = value.get("issueDetails")
+    def obsolete(message):
+        return isinstance(message, str) and message.endswith("规则待核对")
+    filtered_issues = [message for message in issues if not obsolete(message)] if isinstance(issues, list) else issues
+    filtered_details = [item for item in details if not (isinstance(item, dict) and obsolete(item.get("message")))] \
+        if isinstance(details, list) else details
+    if filtered_issues != issues or filtered_details != details:
+        value["issues"] = filtered_issues if isinstance(filtered_issues, list) else []
+        if isinstance(filtered_details, list):
+            value["issueDetails"] = filtered_details
+        value["status"] = "failed"
+    return value
 
 
 class PrecheckQueue:
@@ -69,5 +90,5 @@ class PrecheckQueue:
                 FROM product_prechecks WHERE product_id=ANY(CAST(:ids AS text[]))"""),
                 {"ids": product_ids}).mappings().all()
         return [{"productId": row["product_id"], "revision": row["revision"],
-                 "state": row["state"], "result": row["result"],
+                 "state": row["state"], "result": present_result(row["result"]),
                  "error": row["last_error"], "updatedAt": row["updated_at"]} for row in rows]
