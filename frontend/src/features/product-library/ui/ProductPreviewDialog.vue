@@ -99,6 +99,10 @@ const selectedParts = ref<CategoryTreeItem[] | null>(null)
 const attributeInputs = ref<Record<string, ProductAttributeValue[]>>({})
 const touchedAttributes = ref<string[]>([])
 const imagePreviewSource = ref('')
+const specInputMode = ref<'group' | 'value' | null>(null)
+const specInputIndex = ref(-1)
+const specInputName = ref('')
+const specInputFirstValue = ref('')
 let editRequest = 0
 const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value && !uploading.value)
 const dirty = computed(() => !!props.product && (
@@ -114,6 +118,7 @@ watch(() => [props.show, props.editable, props.product?.id] as const, () => {
   editVersion.value = ''; editBusy.value = false; saving.value = false
   selectedParts.value = null; attributeInputs.value = {}; touchedAttributes.value = []
   imagePreviewSource.value = ''
+  specInputMode.value = null
   specGroups.value = []; initialSpecGroups.value = []; imageGroupIndex.value = 0; specImageEnabled.value = false
   skuDrafts.value = []; initialSkuDrafts.value = []
   if (!props.show || !product) return
@@ -350,19 +355,32 @@ function localId() { return 'local-' + Date.now().toString(36) + '-' + Math.rand
 function reindexGroups() { specGroups.value.forEach((group, index) => { group.index = index }) }
 function addSpecGroup() {
   if (!canStructure.value || specGroups.value.length >= 3) return
-  const name = window.prompt('请输入规格类型名称')?.trim()
-  if (!name) return
-  const value = window.prompt('请输入“' + name + '”的第一个规格值')?.trim()
-  if (!value) return
-  const id = localId()
-  specGroups.value.push({ index: specGroups.value.length, sourceIndex: null, name, movable: true, values: [{ id, name: value, url: '' }] })
-  for (const row of skuDrafts.value) row.specIds.push(id)
+  specInputName.value = ''
+  specInputFirstValue.value = ''
+  specInputMode.value = 'group'
 }
 function addSpecValue(index: number) {
-  if (!canStructure.value) return
-  const group = specGroups.value[index]
-  const name = window.prompt('请输入“' + group.name + '”的规格值')?.trim()
+  if (!canStructure.value || !specGroups.value[index]) return
+  specInputIndex.value = index
+  specInputName.value = ''
+  specInputMode.value = 'value'
+}
+function confirmSpecInput() {
+  if (!canStructure.value || !specInputMode.value) return
+  const name = specInputName.value.trim()
   if (!name) return
+  if (specInputMode.value === 'group') {
+    const value = specInputFirstValue.value.trim()
+    if (!value || specGroups.value.length >= 3) return
+    const id = localId()
+    specGroups.value.push({ index: specGroups.value.length, sourceIndex: null, name, movable: true, values: [{ id, name: value, url: '' }] })
+    for (const row of skuDrafts.value) row.specIds.push(id)
+    specInputMode.value = null
+    return
+  }
+  const index = specInputIndex.value
+  const group = specGroups.value[index]
+  if (!group) return
   if (group.values.some((value) => value.name === name)) { message.error('规格值不能重复'); return }
   const id = localId()
   const added = new Map<string, string[]>()
@@ -374,6 +392,7 @@ function addSpecValue(index: number) {
   group.values.push({ id, name, url: '' })
   for (const ids of added.values()) skuDrafts.value.push({ skuId: localId(), sourceSpecIds: null, specIds: ids,
     price: '', stock: '0', merchantCode: '', enabled: true, deleted: false })
+  specInputMode.value = null
 }
 function deleteSpecValue(index: number, id: string) {
   if (!canStructure.value) return
@@ -930,7 +949,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 
 <template>
   <AppDialog :show="show" :title="creating ? '手动新建商品' : '编辑商品'" size="workspace" :content-scrollable="false"
-    :close-on-esc="!imagePreviewSource"
+    :close-on-esc="!imagePreviewSource && !specInputMode"
     positive-text="保存" negative-text="关闭" :loading="saving" :positive-disabled="!canEdit || !dirty"
     :positive-disabled-reason="!editable ? '商品编辑尚未启用' : null"
     @confirm="submitEdit" @update:show="!$event && closeEditor()">
@@ -1121,6 +1140,19 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
           </section>
         </div>
       </section>
+    </div>
+  </AppDialog>
+  <AppDialog :show="!!specInputMode" :title="specInputMode === 'group' ? '添加规格类型' : '添加规格值'" size="sm"
+    positive-text="添加" :positive-disabled="!specInputName.trim() || (specInputMode === 'group' && !specInputFirstValue.trim())"
+    @confirm="confirmSpecInput" @update:show="!$event && (specInputMode = null)">
+    <div @keydown.enter.stop.prevent="confirmSpecInput">
+      <NFormItem v-if="specInputMode === 'group'" label="规格类型名称">
+        <AppInput v-model="specInputName" aria-label="规格类型名称" autofocus />
+      </NFormItem>
+      <NFormItem :label="specInputMode === 'group' ? '第一个规格值' : `“${specGroups[specInputIndex]?.name ?? ''}”的规格值`">
+        <AppInput v-if="specInputMode === 'group'" v-model="specInputFirstValue" aria-label="第一个规格值" />
+        <AppInput v-else v-model="specInputName" aria-label="规格值名称" autofocus />
+      </NFormItem>
     </div>
   </AppDialog>
   <NImagePreview :show="!!imagePreviewSource" :src="imagePreviewSource" @update:show="closeImagePreview" />
