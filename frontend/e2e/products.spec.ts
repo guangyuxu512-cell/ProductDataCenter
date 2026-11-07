@@ -1522,6 +1522,7 @@ test('切换规格图的组会置顶，图片与对应规格一起保存', async
 
 test('规格增改会生成新 SKU，保留原有稀疏组合和来源 ID', async ({ page }) => {
   await fixtures(page)
+  await page.addInitScript(() => { window.prompt = () => { throw new Error('prompt is unavailable') } })
   let payload: ProductPatch | null = null
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false,
@@ -1555,14 +1556,14 @@ test('规格增改会生成新 SKU，保留原有稀疏组合和来源 ID', asyn
   await dialog.locator('.product-preview__axis').nth(1).getByRole('button', { name: '上移' }).click()
   await expect(dialog.locator('.product-preview__axis').first().getByRole('textbox', { name: '规格类型' })).toHaveValue('颜色')
   await dialog.getByLabel('颜色规格值').first().fill('深黑色')
-  page.once('dialog', (prompt) => prompt.accept('红色'))
   await dialog.getByRole('button', { name: '添加规格值' }).first().click()
+  await page.getByLabel('规格值名称').fill('红色')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
   await expect(dialog.locator('.n-data-table-tbody .n-data-table-tr')).toHaveCount(4)
-  const prompts = ['包装', '常规']
-  const answerPrompt = (prompt: import('@playwright/test').Dialog) => { void prompt.accept(prompts.shift()) }
-  page.on('dialog', answerPrompt)
   await dialog.getByRole('button', { name: '添加规格类型' }).click()
-  page.off('dialog', answerPrompt)
+  await page.getByLabel('规格类型名称').fill('包装')
+  await page.getByLabel('第一个规格值').fill('常规')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
   await expect(dialog.locator('.product-preview__axis')).toHaveCount(3)
   await expect(dialog.locator('.n-data-table-tbody .n-data-table-tr')).toHaveCount(4)
   await dialog.getByLabel('SKU 价格').nth(2).fill('25.00')
