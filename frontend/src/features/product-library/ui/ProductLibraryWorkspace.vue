@@ -9,7 +9,7 @@ import { ContextSwitchBar, DataTable, FilterBar, FilterField, FormDialog,
 import { AppButton, AppInput, AppSelect } from '@/shared/ui'
 import { useProductLibrary } from '../model/useProductLibrary'
 import { capturedTime, platformCode, priceRange } from '../model/format'
-import { deleteProducts, exportProducts, fetchAutoPrechecks, moveProducts, queuePrechecks } from '../api/products'
+import { deleteProducts, exportProducts, fetchAutoPrechecks, moveProducts, queuePrechecks, resolveProductCategories } from '../api/products'
 import type { LibraryProduct } from '../model/contracts'
 import type { ProductRow } from '../model/nas-contracts'
 import { mergePrecheck, precheckIssueCount, type AutoPrecheck, type PrecheckIssue } from '../model/precheck'
@@ -30,6 +30,24 @@ const precheckPending = ref(new Set<string>())
 const precheckRequestErrors = ref<Record<string, string>>({})
 const requestedIssue = ref<PrecheckIssue | null>(null)
 const rows = computed(() => list.data.value?.items ?? [])
+const hasCategoryName = (path: string | null | undefined) => !!path?.trim() && !/^[\d\s→>\/\\-]+$/.test(path.trim())
+const categoryKeys = computed(() => rows.value.filter((row) => row.source_platform === 'douyin' && !hasCategoryName(row.category_path))
+  .map((row) => `${row.product_id}|${row.updated_at ?? ''}`))
+const categories = useQuery({
+  queryKey: computed(() => ['product-category-paths', categoryKeys.value] as const),
+  enabled: computed(() => capabilities.data.value?.categoryLookup === true && categoryKeys.value.length > 0),
+  queryFn: ({ signal, queryKey }) => resolveProductCategories(queryKey[1].map((key) => key.split('|')[0]), signal),
+  staleTime: 300_000, retry: false,
+  refetchInterval: (query) => !query.state.data || query.state.data.some((item) => item.status === 'unavailable') ? 60_000 : false,
+})
+const categoryById = computed(() => new Map((categories.data.value ?? []).map((item) => [item.productId, item])))
+function categoryPath(row: ProductRow) {
+  if (row.source_platform !== 'douyin') return row.category_path || '—'
+  if (hasCategoryName(row.category_path)) return row.category_path
+  const mapping = categoryById.value.get(row.product_id)
+  if (mapping?.status === 'resolved') return mapping.path
+  return categories.isFetching.value ? '类目解析中' : '类目待确认'
+}
 const autoIds = computed(() => [...new Set([
   ...rows.value.map((row) => row.product_id), ...precheckIds.value, ...(detailId.value ? [detailId.value] : []),
 ])].slice(0, 200))
@@ -57,7 +75,12 @@ watch(precheckCompleted, (completed) => {
 })
 const groupItems = computed(() => groups.data.value ?? [])
 const canWriteGroups = computed(() => capabilities.data.value?.groupWrites === true)
-const preview = computed(() => detailId.value ? detail.data.value ?? null : null)
+const preview = computed(() => {
+  const product = detailId.value ? detail.data.value ?? null : null
+  if (!product || product.platform !== 'douyin' || hasCategoryName(product.category)) return product
+  const row = rows.value.find((item) => item.product_id === product.id)
+  return row ? { ...product, category: categoryPath(row) } : product
+})
 const previewIndex = computed(() => rows.value.findIndex((row) => row.product_id === detailId.value))
 function navigatePreview(direction: 'previous' | 'next') {
   const index = previewIndex.value + (direction === 'previous' ? -1 : 1)
@@ -268,7 +291,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   } },
   { title: '分组', key: 'group_name', width: 130, align: 'center', render: (row) => row.group_name || '未分组' },
   { title: '店铺', key: 'shop_name', width: 140, align: 'center', ellipsis: { tooltip: true } },
-  { title: '类目', key: 'category_path', width: 260, align: 'center', render: (row) => h(NEllipsis, { tooltip: true, lineClamp: 2 }, () => row.category_path || '—') },
+  { title: '类目', key: 'category_path', width: 260, align: 'center', render: (row) => h(NEllipsis, { tooltip: true, lineClamp: 2 }, () => categoryPath(row)) },
   { title: '当前价格', key: 'price', width: 120, align: 'center', render: (row) => priceRange(row) },
   { title: 'SKU', key: 'sku_count', width: 80, align: 'center' },
   { title: '采集时间', key: 'captured_at', width: 176, align: 'center', render: (row) => capturedTime(row.captured_at) },

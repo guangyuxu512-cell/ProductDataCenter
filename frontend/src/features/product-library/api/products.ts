@@ -46,6 +46,18 @@ export async function fetchAutoPrechecks(productIds: string[], signal?: AbortSig
   return (await http.post<{ items: AutoPrecheck[] }>('/prechecks/query', { productIds }, { signal })).data.items
 }
 
+export interface ResolvedProductCategory {
+  productId: string
+  status: 'resolved' | 'unavailable' | 'unsupported'
+  path: string
+  levels: Array<{ id: string; name: string }>
+}
+
+export async function resolveProductCategories(productIds: string[], signal?: AbortSignal) {
+  return (await http.post<{ items: ResolvedProductCategory[] }>('/category-lookup/resolve-products',
+    { productIds }, { signal, timeout: 120_000 })).data.items
+}
+
 export async function queuePrechecks(productIds: string[]) {
   return (await http.post<{ items: AutoPrecheck[]; missing: string[] }>('/prechecks/run', { productIds })).data
 }

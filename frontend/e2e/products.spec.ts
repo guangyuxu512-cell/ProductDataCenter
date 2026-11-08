@@ -607,6 +607,49 @@ test('抖音原类目直接取属性，切换商品时不使用旧响应', async
   expect(calls.every((item) => item.body.title === title)).toBe(true)
 })
 
+test('抖音类目自动解析后更新列表与编辑窗口，草稿不丢失', async ({ page }) => {
+  await fixtures(page)
+  const secondId = String(BigInt(firstId) + 1n)
+  const path = '居家日用 → 居家布艺 → 靠垫/抱枕/午睡枕'
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route('**/api/v1/products?**', (route) => route.fulfill({ json: {
+    items: [firstId, secondId].map((id) => ({ ...product(id), category_path: '' })),
+    total: 2, totalIncluded: true, limit: 20, offset: 0,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '', specImages: [], skus: [],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => route.fulfill({ json: {
+    product: { ...product(firstId), category_path: '' }, sourceCategoryId: '1000005114', skus: [], images: [],
+  } }))
+  await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
+    shopId: '00000000-0000-4000-8000-000000000111', categoryId: '1000005114', attributes: [],
+  } }))
+  await page.route('**/api/v1/category-lookup/resolve-products', async (route) => {
+    await gate
+    await route.fulfill({ json: { items: [
+      { productId: firstId, status: 'resolved', path, levels: [] },
+      { productId: secondId, status: 'unavailable', path: '', levels: [] },
+    ] } })
+  })
+  await page.goto('/#/products')
+  const first = page.locator('tr').filter({ hasText: firstId })
+  await expect(first).toContainText('类目解析中')
+  await first.getByRole('button', { name: '编辑', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  const title = dialog.getByRole('textbox', { name: '商品标题' })
+  await title.fill('未保存的草稿标题')
+  release()
+  await expect(first).toContainText(path)
+  await expect(page.locator('tr').filter({ hasText: secondId })).toContainText('类目待确认')
+  await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue(path)
+  await expect(title).toHaveValue('未保存的草稿标题')
+})
+
 test('抖音商品打开后提示具体缺失属性，填写后更新提示', async ({ page }) => {
   await fixtures(page)
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {

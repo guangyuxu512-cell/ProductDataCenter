@@ -213,6 +213,18 @@ class ProductRepository:
                 WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL
                 ORDER BY array_position(CAST(:ids AS text[]),product_id)"""), {"ids": product_ids}).mappings()]
 
+    def category_paths(self, product_ids: list[str]) -> list[dict]:
+        """Read only the category IDs needed for display; never load entire packages."""
+        with self.engine.connect().execution_options(
+            isolation_level="REPEATABLE READ", postgresql_readonly=True,
+        ) as conn, conn.begin():
+            return [dict(row) for row in conn.execute(text("""SELECT product_id, source_platform,
+                uu_json #>> '{goodsInfo,catId1}' AS cat1, uu_json #>> '{goodsInfo,catId2}' AS cat2,
+                uu_json #>> '{goodsInfo,catId3}' AS cat3, uu_json #>> '{goodsInfo,catId4}' AS cat4
+                FROM products WHERE product_id=ANY(CAST(:ids AS text[]))
+                ORDER BY array_position(CAST(:ids AS text[]),product_id)"""),
+                {"ids": product_ids}).mappings()]
+
     def edit_snapshot(self, product_id: str) -> dict:
         with self.engine.connect() as conn:
             row = conn.execute(text("SELECT uu_json::text AS package FROM products WHERE product_id=:id"),

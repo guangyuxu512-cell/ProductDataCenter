@@ -72,6 +72,21 @@ def test_exact_id_and_second_precision(engine):
     assert "uu_json" not in detail["product"]
 
 
+def test_category_paths_read_exact_package_fields_without_modifying_products(engine):
+    repo = ProductRepository(engine)
+    ids = ["3760269504500859111", "pdd:3760269504500859111"]
+    with engine.connect() as conn:
+        before = conn.execute(text("SELECT product_id, uu_json::text FROM products WHERE product_id=ANY(CAST(:ids AS text[])) ORDER BY product_id"),
+                              {"ids": ids}).all()
+    rows = repo.category_paths(ids)
+    assert [rows[0][key] for key in ("cat1", "cat2", "cat3", "cat4")] == ["100", "200", "300", "0"]
+    assert rows[1]["source_platform"] == "pinduoduo" and rows[1]["cat3"] == "999"
+    with engine.connect() as conn:
+        after = conn.execute(text("SELECT product_id, uu_json::text FROM products WHERE product_id=ANY(CAST(:ids AS text[])) ORDER BY product_id"),
+                             {"ids": ids}).all()
+    assert before == after
+
+
 def test_pdd_category_display_does_not_change_saved_ids(engine):
     product_id = "pdd:3760269504500859111"
     with engine.begin() as conn:

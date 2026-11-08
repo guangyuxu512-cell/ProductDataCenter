@@ -106,3 +106,60 @@ def test_rpa_reads_database_even_when_legacy_file_exists(client, tmp_path, monke
     # Old pinned hashes must not accidentally authorize a different package.
     assert client.get(path, headers=AUTH, params={"expected_sha256": hashlib.sha256(original).hexdigest()}).status_code == 409
     assert (tmp_path / "product.txt").read_bytes() == original
+
+
+def test_rpa_opt_in_category_names_preserves_ids_and_hash(client, monkeypatch):
+    import json
+    from app.modules.category_lookup.resolver import CategoryResolver
+
+    original = json.dumps({"goodsInfo": {"catId1": "100", "catId2": "200", "catId3": "0"},
+                           "goodsId": PRODUCT}, ensure_ascii=False)
+    monkeypatch.setattr(FakeRepository, "export_rows", lambda self, ids: [{
+        "product_id": PRODUCT, "source_platform": "douyin", "uu_text": original,
+    }])
+    monkeypatch.setattr(CategoryResolver, "resolve", lambda self, ids: [
+        {"id": ids[0], "name": "居家日用"}, {"id": ids[1], "name": "居家布艺"},
+    ])
+    path = f"/rpa/v1/products/{PRODUCT}/uu"
+    assert client.get(path, headers=AUTH).content == original.encode()
+    response = client.get(path, headers=AUTH, params={"category_names": "required"})
+    assert response.status_code == 200
+    assert response.json()["goodsInfo"]["catId2"] == "200"
+    assert response.json()["_productDataCenterCategory"]["path"] == "居家日用 → 居家布艺"
+    digest = hashlib.sha256(response.content).hexdigest()
+    assert response.headers["x-uu-sha256"] == digest
+    assert client.get(path, headers=AUTH, params={"category_names": "required", "expected_sha256": digest}).content == response.content
+    assert client.get(path, headers=AUTH, params={"category_names": "required", "expected_sha256": "0" * 64}).status_code == 409
+
+
+def test_rpa_required_names_fails_closed_when_unresolved_and_leaves_pdd_unchanged(client, monkeypatch):
+    from app.modules.category_lookup.resolver import CategoryResolutionError, CategoryResolver
+
+    row = {"product_id": PRODUCT, "source_platform": "douyin", "uu_text": '{"goodsInfo":{"catId1":"1"}}'}
+    monkeypatch.setattr(FakeRepository, "export_rows", lambda self, ids: [row])
+    def unavailable(self, ids):
+        raise CategoryResolutionError()
+    monkeypatch.setattr(CategoryResolver, "resolve", unavailable)
+    path = f"/rpa/v1/products/{PRODUCT}/uu"
+    response = client.get(path, headers=AUTH, params={"category_names": "required"})
+    assert response.status_code == 503 and response.json()["code"] == "RPA_CATEGORY_UNAVAILABLE"
+    assert client.get(path, headers=AUTH).json() == {"goodsInfo": {"catId1": "1"}}
+    row["source_platform"] = "pinduoduo"
+    assert client.get(path, headers=AUTH, params={"category_names": "required"}).json() == {"goodsInfo": {"catId1": "1"}}
+
+
+def test_management_category_resolution_does_not_expand_rpa_permissions(client, monkeypatch):
+    from app.modules.category_lookup.resolver import CategoryResolver
+
+    monkeypatch.setattr(FakeRepository, "category_paths", lambda self, ids: [{
+        "product_id": PRODUCT, "source_platform": "douyin", "cat1": "1", "cat2": "2", "cat3": "0", "cat4": "0",
+    }], raising=False)
+    monkeypatch.setattr(CategoryResolver, "resolve", lambda self, ids: [
+        {"id": "1", "name": "居家日用"}, {"id": "2", "name": "居家布艺"},
+    ])
+    path = "/api/v1/category-lookup/resolve-products"
+    body = {"productIds": [PRODUCT]}
+    assert client.post(path, headers=AUTH, json=body).status_code == 401
+    response = client.post(path, headers=ADMIN, json=body)
+    assert response.status_code == 200
+    assert response.json()["items"][0]["path"] == "居家日用 → 居家布艺"
