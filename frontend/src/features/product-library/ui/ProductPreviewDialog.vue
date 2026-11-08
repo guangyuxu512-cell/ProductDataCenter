@@ -113,7 +113,7 @@ const dirty = computed(() => !!props.product && (
   imageGroupIndex.value !== 0 || JSON.stringify(specGroups.value) !== JSON.stringify(initialSpecGroups.value) ||
   JSON.stringify(skuDrafts.value) !== JSON.stringify(initialSkuDrafts.value)))
 
-watch(() => [props.show, props.editable, props.product?.id] as const, () => {
+watch([() => props.show, () => props.editable, () => props.product?.id], () => {
   const request = ++editRequest
   const product = props.product
   editVersion.value = ''; editBusy.value = false; saving.value = false
@@ -627,8 +627,8 @@ watch(() => [draftTitle.value, draftMain.value[0]] as const, () => {
   predictionRequest += 1
   predictionBusy.value = false; predictionCandidates.value = []; predictionShop.value = null; predictionMessage.value = ''
 })
-watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.product?.id,
-  props.product?.sourceCategoryId, props.product?.targetCategory] as const, () => {
+watch([() => props.show, () => props.loading, () => props.categoryLookupEnabled, () => props.product?.id,
+  () => props.product?.sourceCategoryId, () => props.product?.targetCategory], () => {
   imageRetries.value = {}
   imageFallbacks.value = {}
   categoryRequest += 1
@@ -640,7 +640,7 @@ watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.produ
   if (!props.show || props.loading || !props.categoryLookupEnabled || !product) return
   if (product.platform === 'douyin' && product.sourceCategoryId) {
     selectedCategory.value = product.sourceCategoryId
-    categoryLabel.value = product.category || `原类目 ${product.sourceCategoryId}`
+    categoryLabel.value = product.category || '类目解析中'
   } else if (product.platform === 'pdd' && product.targetCategory?.length) {
     selectedCategory.value = product.targetCategory.at(-1)?.id ?? null
     categoryLabel.value = product.targetCategory.map((part) => part.name).join(' → ')
@@ -649,6 +649,13 @@ watch(() => [props.show, props.loading, props.categoryLookupEnabled, props.produ
   // requiring the user to discover the attributes tab first.
   if (product.platform === 'douyin' || tab.value === 'attributes') void loadAttributes()
 }, { immediate: true })
+watch(() => props.product?.category, (value) => {
+  const product = props.product
+  if (props.show && product?.platform === 'douyin' && product.sourceCategoryId &&
+      selectedCategory.value === product.sourceCategoryId && !selectedParts.value) {
+    categoryLabel.value = value || '类目待确认'
+  }
+})
 watch(() => props.show, (show) => { if (!show) tab.value = 'base' })
 watch(tab, (value) => { if (value === 'attributes') void loadAttributes() })
 

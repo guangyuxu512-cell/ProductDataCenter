@@ -44,6 +44,7 @@ export function useProductLibrary() {
   async function refresh() {
     counts.clear()
     selected.value = []
+    void client.invalidateQueries({ queryKey: ['product-category-paths'] })
     await Promise.all([
       client.invalidateQueries({ queryKey: ['products'] }),
       client.invalidateQueries({ queryKey: ['product-groups'] }),

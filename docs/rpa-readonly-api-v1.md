@@ -17,6 +17,8 @@ RPA 通过商品云库读取分组和 UU；无商品或分组写入权限。只�
 2. `GET /rpa/v1/product-groups/{groupId}/products?limit=50&offset=0&include_total=true`：`items[]` 只包含 `product_id`、`source_platform`、`source_product_id`、`title`、`main_image_url`；附 `total`、`limit`、`offset`。limit 为 1～200。不存在分组为 404。ID 都是字符串，`product_id` 是后续取 UU 的内部键。
 3. `GET /rpa/v1/products/{product_id}/uu`：返回数据库中当前商品包的 JSON 字节，并在 `X-UU-SHA256` 返回内容的 SHA-256。可传 `expected_sha256`；当前内容不一致时返回 409、`RPA_UU_VERSION_CHANGED`，不返回新版本内容。商品包缺失为 404，不可用为 409。无需下载图片。
 
+可选参数 `category_names=required` 为抖音商品增加经类目树核对的 `_productDataCenterCategory` 中文路径与逐级 ID/名称；无法解析时返回 503、`RPA_CATEGORY_UNAVAILABLE`。原 ID 字段不变，返回值的 SHA-256 包含增加的内容；校验 `expected_sha256` 时必须使用相同参数。未请求该参数时旧接口字节语义不变，拼多多包不增加此字段。详见 [抖音商品类目中文映射](douyin-category-mapping-20261109.md)。
+
 读取以 PostgreSQL 中的 JSON 为准，磁盘旧文件不再作为商品包数据来源。JSONB 输出的空格或键顺序可能与旧文件不同，SHA-256 对实际返回字节计算。RPA 首次读取应保存实际商品包内容和 SHA-256，再将相同内容用于本次任务。切换后以旧文件字节固定的 SHA 可能收到 409，需重新读取并确认任务。
 
 分组商品沿用现有查询：`captured_at DESC NULLS LAST, updated_at DESC, product_id`。分页使用原有 OFFSET；不同页之间若发生采集、编辑或分组变化，顺序和集合可能变化，V1 不保证跨请求数据库快照。RPA 应在执行开始时固定实际读取到的商品和 UU 内容；需要在高并发变更期间严格固定全组成员时，须另行设计服务端快照，不能声称现有分页已满足。

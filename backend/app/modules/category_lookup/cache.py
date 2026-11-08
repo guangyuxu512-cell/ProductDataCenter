@@ -73,6 +73,30 @@ class CategoryCache:
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
 
+    def tree_branches(self, parents: list[str]) -> dict[str, dict[str, list]]:
+        """Read cached tree branches grouped by shop, without a platform request."""
+        if not parents:
+            return {}
+        try:
+            placeholders = ",".join("?" for _ in parents)
+            with self._transaction() as db:
+                rows = db.execute(
+                    f"SELECT shop_id, cache_key, payload FROM category_cache "
+                    f"WHERE kind='tree' AND cache_key IN ({placeholders}) ORDER BY shop_id",
+                    tuple(parents),
+                ).fetchall()
+            shops: dict[str, dict[str, list]] = {}
+            for shop, parent, raw in rows:
+                try:
+                    value = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(value, list):
+                    shops.setdefault(shop, {})[parent] = value
+            return shops
+        except (sqlite3.Error, OSError, ValueError, TypeError):
+            raise CacheUnavailable() from None
+
     def schema_version(self, key: str) -> int:
         try:
             with self._transaction() as db:
@@ -92,7 +116,7 @@ class CategoryCache:
                 db.execute("BEGIN IMMEDIATE")
                 if refresh_tree:
                     db.execute("UPDATE category_cache_meta SET version=version+1 WHERE name='tree'")
-                    db.execute("DELETE FROM category_cache WHERE kind='tree'")
+                    db.execute("DELETE FROM category_cache WHERE kind IN ('tree', 'tree_probe')")
                 elif kind == 'tree' and tree_version is not None:
                     current = int(db.execute("SELECT version FROM category_cache_meta WHERE name='tree'").fetchone()[0])
                     if current != tree_version:

@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -42,6 +42,12 @@ class UuVersionChanged(AppError):
     status_code = 409
 
 
+class CategoryUnavailable(AppError):
+    code = "RPA_CATEGORY_UNAVAILABLE"
+    message = "类目暂未解析，请稍后重试或确认类目"
+    status_code = 503
+
+
 @router.get("/product-groups", response_model=GroupsRead)
 def groups(service: Service):
     return service.groups()
@@ -58,7 +64,8 @@ def group_products(group_id: UUID, service: Service, limit: int = Query(50, ge=1
 
 @router.get("/products/{product_id}/uu")
 def product_uu(product_id: str, service: Service,
-               expected_sha256: str | None = Query(None, min_length=64, max_length=64)):
+               expected_sha256: str | None = Query(None, min_length=64, max_length=64),
+               category_names: Literal["required"] | None = Query(None)):
     if len(product_id) > 128 or not EXACT_PRODUCT_ID_PATTERN.fullmatch(product_id):
         raise ProductNotFound()
     if expected_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
@@ -70,6 +77,15 @@ def product_uu(product_id: str, service: Service,
     content, _ = current_uu_bytes(rows[0], service.settings.export_max_bytes,
                                   service.settings.image_public_base_url,
                                   service.settings.image_legacy_base_urls)
+    if category_names == "required" and rows[0].get("source_platform") == "douyin":
+        from app.modules.category_lookup.resolver import CategoryResolutionError, CategoryResolver, enrich_uu
+        try:
+            content = enrich_uu(content, CategoryResolver(service.settings))
+        except CategoryResolutionError:
+            raise CategoryUnavailable() from None
+        if len(content) > service.settings.export_max_bytes:
+            from .errors import ExportUnavailable
+            raise ExportUnavailable("商品数据过大，无法读取")
     digest = hashlib.sha256(content).hexdigest()
     if expected_sha256 is not None and expected_sha256 != digest:
         raise UuVersionChanged()

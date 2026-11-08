@@ -1,6 +1,7 @@
 """Read-only category candidates and attribute definitions for the editor."""
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from threading import BoundedSemaphore, Lock
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -14,6 +15,7 @@ from app.core.security.access import require_api_access
 from app.modules.central.client import CentralApplicationClient, CentralConnectionError, eligible_douyin_shops
 from app.modules.products.api import get_service
 from app.modules.products.queries import EXACT_PRODUCT_ID_PATTERN
+from app.modules.products.schemas import ProductIds
 from app.modules.products.service import ProductService
 from .cache import CacheUnavailable, CategoryCache
 from .client import DouyinCategoryClient, LookupError
@@ -298,6 +300,34 @@ def category_tree(body: TreeBody, response: Response,
     _cache_call(cache.put, "tree", str(shop_id), body.parentId, items,
                 tree_version=version, refresh_tree=body.refresh)
     return TreeResponse(shopId=shop_id, parentId=body.parentId, items=items, fromCache=False)
+
+
+@router.post("/resolve-products")
+def resolve_products(body: ProductIds, response: Response,
+                     central: Annotated[CentralApplicationClient, Depends(get_central)],
+                     lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)],
+                     service: Annotated[ProductService, Depends(get_service)]):
+    """Resolve saved Douyin category paths without changing products or prechecks."""
+    from .resolver import CategoryResolutionError, CategoryResolver, category_ids, category_metadata
+
+    response.headers["Cache-Control"] = "no-store"
+    rows = service.repository.category_paths(body.productIds)
+    resolver = CategoryResolver(lookup.settings, central=central, lookup=lookup)
+
+    def one(row):
+        item = {"productId": row["product_id"], "status": "unavailable", "path": "", "levels": []}
+        if row["source_platform"] != "douyin":
+            item["status"] = "unsupported"
+            return item
+        try:
+            ids = category_ids({f"catId{i}": row[f"cat{i}"] for i in range(1, 5)})
+            mapping = category_metadata(resolver.resolve(ids))
+            return {**item, "status": "resolved", "path": mapping["path"], "levels": mapping["levels"]}
+        except CategoryResolutionError:
+            return item
+
+    with ThreadPoolExecutor(max_workers=min(3, max(1, len(rows)))) as pool:
+        return {"items": list(pool.map(one, rows))}
 
 
 @router.post("/search", response_model=SearchResponse)
