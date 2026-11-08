@@ -1557,6 +1557,11 @@ test('规格增改会生成新 SKU，保留原有稀疏组合和来源 ID', asyn
   await expect(dialog.locator('.product-preview__axis').first().getByRole('textbox', { name: '规格类型' })).toHaveValue('颜色')
   await dialog.getByLabel('颜色规格值').first().fill('深黑色')
   await dialog.getByRole('button', { name: '添加规格值' }).first().click()
+  await page.getByLabel('规格值名称').fill('取消的规格值')
+  await page.keyboard.press('Escape')
+  await expect(page.getByLabel('规格值名称')).not.toBeVisible()
+  await expect(dialog.getByLabel('颜色规格值').first()).toHaveValue('深黑色')
+  await dialog.getByRole('button', { name: '添加规格值' }).first().click()
   await page.getByLabel('规格值名称').fill('红色')
   await page.getByRole('button', { name: '添加', exact: true }).click()
   await expect(dialog.locator('.n-data-table-tbody .n-data-table-tr')).toHaveCount(4)
@@ -1582,4 +1587,80 @@ test('规格增改会生成新 SKU，保留原有稀疏组合和来源 ID', asyn
   expect(structure.skus[2].specIds[0]).toMatch(/^local-/)
   expect(structure.skus.map((row) => row.specIds.slice(0, 2).join('_'))).not.toContain('11_22')
   expect(structure.skus.map((row) => row.specIds.slice(0, 2).join('_'))).not.toContain('12_21')
+})
+
+test('SKU 表按规格分组展示，价格定位和保存仍对应原 SKU', async ({ page }) => {
+  await fixtures(page)
+  let payload: ProductPatch | null = null
+  const combinations: Array<['black' | 'leopard', number]> = [
+    ['leopard', 37], ['leopard', 36], ['black', 35], ['leopard', 39], ['black', 40], ['black', 38],
+    ['leopard', 40], ['leopard', 38], ['black', 37], ['black', 36], ['leopard', 35], ['black', 39],
+  ]
+  const rows = combinations.map(([color, size]) => ({ skuId: `sku-${color}${size}`,
+    specIds: [color === 'black' ? '11' : '12', String(size - 14)],
+    name: `颜色: ${color === 'black' ? '黑色' : '豹纹'} / 尺码: ${size}`,
+    price: color === 'leopard' && size === 35 ? '' : `${size + (color === 'black' ? 0 : 10)}.00`,
+    stock: size + (color === 'black' ? 0 : 10),
+  }))
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false, autoPrecheck: true,
+  } }))
+  await page.route('**/api/v1/prechecks/query', (route) => route.fulfill({ json: { items: [{
+    productId: firstId, revision: 1, state: 'done', error: null, updatedAt: '2026-11-08T00:00:00Z',
+    result: { productId: firstId, title: '测试商品', status: 'needs_completion', issues: ['第 11 个 SKU 价格无效'],
+      issueDetails: [{ code: 'sku_price_invalid', message: '第 11 个 SKU 价格无效', tab: 'sku',
+        fieldId: 'price', skuIndex: 10, skuId: 'sku-leopard35' }] },
+  }] } }))
+  await page.route('**/api/v1/prechecks/run', (route) => route.fulfill({ json: { missing: [], items: [{
+    productId: firstId, revision: 2, state: 'pending', result: null, error: null, updatedAt: '2026-11-08T00:00:01Z',
+  }] } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '颜色', specImages: [],
+    specGroups: [
+      { index: 0, name: '颜色', movable: false, values: [{ id: '11', name: '黑色', url: '' }, { id: '12', name: '豹纹', url: '' }] },
+      { index: 1, name: '尺码', movable: true, values: Array.from({ length: 6 }, (_, i) => ({ id: String(21 + i), name: String(35 + i), url: '' })) },
+    ],
+    skus: rows.map(({ skuId, specIds, price, stock }) => ({ skuId, specIds, price, stock, enabled: true, merchantCode: '' })),
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      payload = route.request().postDataJSON() as ProductPatch
+      return route.fulfill({ json: { version: 'b'.repeat(64) } })
+    }
+    return route.fulfill({ json: { product: product(firstId), skus: rows.map((row, index) => ({
+      sku_id: row.skuId, sku_name: row.name, current_price: row.price || null, image_rel_path: '', sort_order: index,
+    })), images: [{ image_type: 'main', sort_order: 0, rel_path: '', source_url: image }] } })
+  })
+  await page.goto('/#/products')
+  await expect(page.getByText('待完善 1 项', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
+  const tableRows = dialog.locator('.n-data-table-tbody .n-data-table-tr')
+  await expect(tableRows).toHaveCount(12)
+  for (const [index, color] of [[0, '黑色'], [6, '豹纹']] as const) {
+    const groupCell = tableRows.nth(index).locator('.n-data-table-td').first()
+    await expect(groupCell).toHaveText(color)
+    await expect(groupCell).toHaveAttribute('rowspan', '6')
+  }
+  for (let index = 0; index < 12; index++) {
+    const color = index < 6 ? 'black' : 'leopard'
+    const size = 35 + index % 6
+    const offset = index % 6 === 0 ? 1 : 0
+    const row = tableRows.nth(index)
+    await expect(row.locator('.n-data-table-td').nth(offset)).toHaveText(String(size))
+    await expect(row.locator('.n-data-table-td').nth(offset + 3)).toHaveText(`sku-${color}${size}`)
+    await expect(row.getByRole('textbox', { name: 'SKU 库存' })).toHaveValue(String(size + (color === 'black' ? 0 : 10)))
+    await expect(row.getByRole('textbox', { name: `第 ${index + 1} 个 SKU 价格` }))
+      .toHaveValue(color === 'leopard' && size === 35 ? '' : `${size + (color === 'black' ? 0 : 10)}.00`)
+  }
+  await expect(dialog.getByRole('status')).toContainText('第 7 个 SKU 价格无效')
+  await dialog.getByRole('button', { name: '定位问题' }).click()
+  const missingPrice = dialog.locator('[data-precheck-sku-id="sku-leopard35"] input')
+  await expect(missingPrice).toBeFocused()
+  await missingPrice.fill('45.00')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => payload).not.toBeNull()
+  expect(payload?.skus).toEqual([{ specIds: ['12', '21'], price: '45.00' }])
+  expect(payload).not.toHaveProperty('specStructure')
 })

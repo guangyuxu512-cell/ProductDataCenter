@@ -23,7 +23,7 @@
 
 原样复用文件的校验记录在 `docs/source-baseline.json`。商品页面数据绑定、详情字段和 HTTP 环境下的复制行为进行了适配，公共布局和样式没有重设计。
 
-桌面客户端和免网页登录的局域网部署方式见 [桌面客户端说明](docs/product-desktop-lan-v1.md)。RPA 专用只读凭据保持独立。
+桌面客户端和免网页登录的局域网部署方式见 [桌面客户端说明](docs/product-desktop-lan-v1.md)；SKU 表格及桌面输入修复见 [SKU 表格整理](docs/sku-table-order-20261108.md)。RPA 专用只读凭据保持独立。
 
 ## 本地运行
 

@@ -14,6 +14,7 @@ import { createManualProduct, fetchEditSnapshot, saveProduct, uploadProductImage
 import type { LibraryProduct, ProductAttributeValue, ProductSku } from '../model/contracts'
 import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
+import { orderSkuRows, skuGroupRowSpans } from '../model/sku-order'
 import { normalizeMultiValues, originalAttributeValues, pddAttributeValues } from '../model/source-attributes'
 import { validMeasure } from '../model/measure'
 import type { AutoPrecheck, CategoryPrediction, PrecheckIssue } from '../model/precheck'
@@ -340,9 +341,13 @@ const structureSignature = (groups: SpecGroup[]) => JSON.stringify(groups.map((g
 const structureDirty = computed(() => structureSignature(specGroups.value) !== structureSignature(initialSpecGroups.value) ||
   skuDrafts.value.some((row, index) => !initialSkuDrafts.value[index] ||
     JSON.stringify(row.specIds) !== JSON.stringify(initialSkuDrafts.value[index].specIds)))
+const activeSkuDrafts = computed(() => {
+  const active = skuDrafts.value.filter((row) => !row.deleted)
+  return canStructure.value ? orderSkuRows(active, specGroups.value, imageGroupIndex.value) : active
+})
 const visibleSkus = computed<ProductSku[]>(() => {
   if (!canStructure.value) return (props.product?.skus ?? []).filter((row) => !skuDraft(row)?.deleted)
-  return skuDrafts.value.filter((row) => !row.deleted).map((row) => {
+  return activeSkuDrafts.value.map((row) => {
     const original = props.product?.skus.find((item) => item.draftKey === row.skuId)
     return { draftKey: row.skuId, sourceSkuId: row.skuId.startsWith('local-') ? null : (original?.sourceSkuId ?? row.skuId),
       name: original?.name ?? '', currentPrice: row.price || null, stockLabel: row.stock || null,
@@ -774,7 +779,7 @@ const draftIssues = computed<PrecheckIssue[]>(() => {
   const issues: PrecheckIssue[] = []
   if (!draftTitle.value.trim()) issues.push({ code: 'title_missing', message: '商品标题未填写', tab: 'base', fieldId: 'title' })
   if (!draftMain.value.length) issues.push({ code: 'main_image_missing', message: '商品主图未填写', tab: 'images', fieldId: 'mainImages' })
-  const active = skuDrafts.value.filter((item) => !item.deleted)
+  const active = activeSkuDrafts.value
   if (!active.length) issues.push({ code: 'sku_missing', message: 'SKU 规格未填写', tab: 'sku', fieldId: 'skus' })
   else active.forEach((item, index) => {
     if (!skuPriceValid(item.price)) issues.push({ code: 'sku_price_invalid', message: `第 ${index + 1} 个 SKU 价格无效`,
@@ -793,9 +798,15 @@ const draftIssues = computed<PrecheckIssue[]>(() => {
 const serverIssues = computed<PrecheckIssue[]>(() => {
   const result = props.autoResult?.result
   if (!result) return []
-  return result.issueDetails?.length
+  const issues: PrecheckIssue[] = result.issueDetails?.length
     ? result.issueDetails
     : result.issues.map((message) => ({ code: 'precheck_issue', message, tab: 'base' as const }))
+  return issues.map((issue) => {
+    if (issue.code !== 'sku_price_invalid') return issue
+    const id = issue.skuId || (issue.skuIndex === undefined ? undefined : props.product?.skus[issue.skuIndex]?.draftKey)
+    const index = id ? visibleSkus.value.findIndex((row) => row.draftKey === id) : -1
+    return index < 0 ? issue : { ...issue, skuId: id, skuIndex: index, message: `第 ${index + 1} 个 SKU 价格无效` }
+  })
 })
 const localPrecheckMode = computed(() => dirty.value || props.creating || (!props.autoResult && !!editVersion.value))
 const displayedPrecheckIssues = computed(() => localPrecheckMode.value ? draftIssues.value : serverIssues.value)
@@ -821,8 +832,10 @@ async function focusPrecheckIssue(issue: PrecheckIssue | null | undefined) {
   await nextTick()
   await nextTick()
   const candidates = [...document.querySelectorAll<HTMLElement>('[data-precheck-field]')]
+  const skuId = issue.skuId || (issue.skuIndex === undefined ? undefined : props.product?.skus[issue.skuIndex]?.draftKey)
   const target = candidates.find((element) => element.dataset.precheckField === issue.fieldId &&
-    (issue.skuIndex === undefined || element.dataset.precheckSkuIndex === String(issue.skuIndex)))
+    (skuId ? element.dataset.precheckSkuId === skuId :
+      issue.skuIndex === undefined || element.dataset.precheckSkuIndex === String(issue.skuIndex)))
   target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   const focusable = target?.matches('input,button,[tabindex]') ? target : target?.querySelector<HTMLElement>('input,button,[tabindex]')
   focusable?.focus({ preventScroll: true })
@@ -906,8 +919,11 @@ const displayAxes = computed(() => {
 })
 const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
   const layout = specLayout.value
+  const axes = displayAxes.value
+  const spans = canStructure.value && axes.length ? skuGroupRowSpans(activeSkuDrafts.value, axes[0].index) : []
   const specColumns: DataTableColumns<ProductSku> = layout
-    ? displayAxes.value.map(({ axis, index }) => ({ title: axis.name, key: `spec-${index}`, minWidth: 140,
+    ? axes.map(({ axis, index }, position) => ({ title: axis.name, key: `spec-${index}`, minWidth: 140,
+      ...(position === 0 && spans.length ? { rowSpan: (_row: ProductSku, rowIndex: number) => spans[rowIndex] ?? 1 } : {}),
       render: (row: ProductSku) => layout.rows[row.draftKey]?.[index] ?? '—' }))
     : [{ title: '规格', key: 'name', minWidth: 240, render: (row: ProductSku) =>
       h('div', { class: 'product-preview__sku' }, [
@@ -918,7 +934,8 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
     { title: '价格', key: 'price', width: 130, render: (row) => {
       const draft = skuDraft(row)
       const index = visibleSkus.value.findIndex((item) => item.draftKey === row.draftKey)
-      return h('div', { 'data-precheck-field': 'price', 'data-precheck-sku-index': String(index) }, [
+      return h('div', { 'data-precheck-field': 'price', 'data-precheck-sku-index': String(index),
+        'data-precheck-sku-id': row.draftKey }, [
         h(AppInput, { modelValue: draft?.price ?? (row.currentPrice === null ? '' : `¥${row.currentPrice}`),
           disabled: !canEdit.value || !draft, ariaLabel: `第 ${index + 1} 个 SKU 价格`, inputmode: 'decimal',
           'onUpdate:modelValue': (value: string) => { if (draft) draft.price = value } }),
