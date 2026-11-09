@@ -103,6 +103,36 @@ test('来源不允许跨域下载时显示失败，预览与商品页面保留',
   }
 })
 
+test('图片旧缓存缺少跨域头时，下载重新读取更新后的响应', async ({ page }) => {
+  let cors = false
+  let requests = 0
+  const server = createServer((_request, response) => {
+    requests++
+    response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=31536000, immutable',
+      ...(cors ? { 'Access-Control-Allow-Origin': '*' } : {}) })
+    response.end(png)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('image server unavailable')
+    await fixtures(page, `http://127.0.0.1:${address.port}/cached.png`)
+    await page.goto('/#/products')
+    const thumbnail = page.locator('.n-data-table-tbody tr').first().locator('.product-image img')
+    await expect.poll(() => requests).toBeGreaterThan(0)
+    await expect(thumbnail).toBeVisible()
+    cors = true
+    await thumbnail.click()
+    const [download] = await Promise.all([
+      page.waitForEvent('download'), page.getByRole('button', { name: '下载图片' }).click(),
+    ])
+    expect(await readFile((await download.path())!)).toEqual(png)
+    expect(requests).toBeGreaterThan(1)
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+})
+
 test('列表单件与批量商品数据包均触发文件下载', async ({ page }) => {
   await fixtures(page)
   await page.goto('/#/products')
