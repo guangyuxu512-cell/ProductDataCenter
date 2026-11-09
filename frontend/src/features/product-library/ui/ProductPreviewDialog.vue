@@ -8,6 +8,7 @@ import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppSelect, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
+import { useImagePreviewToolbar } from '@/shared/utils/image-preview-toolbar'
 import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictManualCategory, predictProductCategory,
   type CategoryAttribute, type CategoryTreeItem, type PredictedCategory } from '../api/category-lookup'
 import { createManualProduct, fetchEditSnapshot, saveProduct, uploadProductImage, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
@@ -91,6 +92,7 @@ const specGroups = ref<SpecGroup[]>([])
 const initialSpecGroups = ref<SpecGroup[]>([])
 const imageGroupIndex = ref(0)
 const specImageEnabled = ref(false)
+const specImagesEditable = ref(true)
 const specImages = computed(() => specGroups.value[imageGroupIndex.value]?.values ?? [])
 function copyGroups(groups: SpecGroup[]) { return groups.map((group) => ({ ...group, values: group.values.map((item) => ({ ...item })) })) }
 type SkuDraft = { skuId: string; sourceSpecIds: string[] | null; specIds: string[]; price: string; stock: string; enabled: boolean | null; merchantCode: string; deleted: boolean }
@@ -100,12 +102,17 @@ const selectedParts = ref<CategoryTreeItem[] | null>(null)
 const attributeInputs = ref<Record<string, ProductAttributeValue[]>>({})
 const touchedAttributes = ref<string[]>([])
 const imagePreviewSource = ref('')
+const renderPreviewToolbar = useImagePreviewToolbar(() => imagePreviewSource.value)
+type ImageLinkTarget = { kind: 'main' | 'detail' | 'sku'; index?: number; skuId?: string; request: number }
+const imageLinkTarget = ref<ImageLinkTarget | null>(null)
+const imageLinkValue = ref('')
 const specInputMode = ref<'group' | 'value' | null>(null)
 const specInputIndex = ref(-1)
 const specInputName = ref('')
 const specInputFirstValue = ref('')
 let editRequest = 0
 const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value && !uploading.value)
+const canEditSpecImages = computed(() => canEdit.value && specImagesEditable.value)
 const dirty = computed(() => !!props.product && (
   draftTitle.value !== initialTitle.value || selectedParts.value !== null || touchedAttributes.value.length > 0 ||
   JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value) ||
@@ -119,8 +126,10 @@ watch([() => props.show, () => props.editable, () => props.product?.id], () => {
   editVersion.value = ''; editBusy.value = false; saving.value = false
   selectedParts.value = null; attributeInputs.value = {}; touchedAttributes.value = []
   imagePreviewSource.value = ''
+  imageLinkTarget.value = null; imageLinkValue.value = ''
   specInputMode.value = null
   specGroups.value = []; initialSpecGroups.value = []; imageGroupIndex.value = 0; specImageEnabled.value = false
+  specImagesEditable.value = true
   skuDrafts.value = []; initialSkuDrafts.value = []
   if (!props.show || !product) return
   draftTitle.value = product.title; initialTitle.value = product.title
@@ -149,6 +158,7 @@ watch([() => props.show, () => props.editable, () => props.product?.id], () => {
 
 function setEditSnapshot(result: EditSnapshot) {
   editVersion.value = result.version
+  specImagesEditable.value = result.specImagesEditable !== false
   const groups = result.specGroups?.length ? result.specGroups :
     [{ index: 0, name: result.specImageGroup, values: result.specImages, movable: false }]
   specGroups.value = copyGroups(groups).map((group) => ({ ...group, sourceIndex: group.index }))
@@ -302,7 +312,8 @@ function specImageIndex(name: string) {
   return matching.length === 1 ? matching[0] : -1
 }
 function setSpecImageGroup(index: number, value: boolean) {
-  if (!canEdit.value) return
+  if (!canEditSpecImages.value) return
+  if (props.product?.platform === 'pdd' && index !== 0) return
   if (value && index !== imageGroupIndex.value) {
     if (index !== 0 && !specGroups.value[index]?.movable && !structureDirty.value) return
     const hasOldImages = specGroups.value.some((group, groupIndex) => groupIndex !== index && group.values.some((item) => item.url))
@@ -437,26 +448,38 @@ function moveSpecGroup(index: number, offset: number) {
 }
 function changeImage(kind: 'main' | 'detail' | 'sku', index?: number) {
   if (!canEdit.value) return
+  if (kind === 'sku' && !canEditSpecImages.value) return
   const images = kind === 'main' ? draftMain.value : kind === 'detail' ? draftDetail.value : null
   const original = kind === 'sku' ? specImages.value[index ?? -1]?.url : images?.[index ?? -1]
-  const result = window.prompt('请输入图片链接', original ?? '')
-  if (result === null) return
-  const url = result.trim()
+  const skuId = kind === 'sku' ? specImages.value[index ?? -1]?.id : undefined
+  if (kind === 'sku' && !skuId) return
+  if (images && index !== undefined && index >= images.length) return
+  imageLinkValue.value = original ?? ''
+  imageLinkTarget.value = { kind, index, skuId, request: editRequest }
+}
+function confirmImageLink() {
+  const target = imageLinkTarget.value
+  if (!target || !canEdit.value || !props.show || target.request !== editRequest) return
+  if (target.kind === 'sku' && !canEditSpecImages.value) return
+  const url = imageLinkValue.value.trim()
   if (!validImageUrl(url)) { message.error('请输入有效的 HTTP 或 HTTPS 图片链接'); return }
-  if (kind === 'sku' && index !== undefined && specImages.value[index]) {
-    specImages.value[index].url = url
+  if (target.kind === 'sku') {
+    const spec = specImages.value.find((item) => item.id === target.skuId)
+    if (!spec) return
+    spec.url = url
     specImageEnabled.value = true
+  } else {
+    const images = target.kind === 'main' ? draftMain.value : draftDetail.value
+    if (target.index === undefined) images.push(url)
+    else if (target.index < images.length) images[target.index] = url
   }
-  else if (images && index === undefined) images.push(url)
-  else if (images && index !== undefined) images[index] = url
+  imageLinkTarget.value = null
 }
 type UploadTarget = { kind: 'main' | 'detail' | 'sku'; index?: number; skuId?: string; request: number }
 let uploadTarget: UploadTarget | null = null
 function chooseLocalImage(kind: UploadTarget['kind'], index?: number) {
   if (!canEdit.value) return
-  if (kind === 'sku' && props.product?.platform === 'pdd') {
-    message.warning('拼多多商品的规格图片编辑尚未接入'); return
-  }
+  if (kind === 'sku' && !canEditSpecImages.value) return
   const skuId = kind === 'sku' ? specImages.value[index ?? -1]?.id : undefined
   if (kind === 'sku' && !skuId) return
   uploadTarget = { kind, index, skuId, request: editRequest }
@@ -488,6 +511,7 @@ async function receiveLocalImage(event: Event) {
 }
 function removeImage(kind: 'main' | 'detail' | 'sku', index: number) {
   if (!canEdit.value) return
+  if (kind === 'sku' && !canEditSpecImages.value) return
   if (kind === 'sku') { if (specImages.value[index]) specImages.value[index].url = ''; return }
   ;(kind === 'main' ? draftMain.value : draftDetail.value).splice(index, 1)
 }
@@ -856,15 +880,15 @@ const imageSections = computed(() => {
     { key: 'main' as const, label: '主图', images: (props.editable ? draftMain.value : (product.previewMainImageUrls ??
       (product.mainImageUrl ? [product.mainImageUrl] : []))).map((src, index) => ({
         key: `main:${src}:${index}`, src, label: `主图 ${index + 1}`, caption: '', skuKey: undefined,
-        canLocal: true, canLink: false, canDelete: true,
+        canLocal: true, canLink: true, canDelete: true,
       })) },
     { key: 'detail' as const, label: '详情图', images: (props.editable ? draftDetail.value : product.detailImageUrls).map((src, index) => ({
       key: `detail:${src}:${index}`, src, label: `详情图 ${index + 1}`, caption: '', skuKey: undefined,
-      canLocal: true, canLink: false, canDelete: true,
+      canLocal: true, canLink: true, canDelete: true,
     })) },
     { key: 'sku' as const, label: '规格图', images: props.editable && specImages.value.length
       ? [...specImages.value.map((item) => ({ key: `sku:${item.id}`, src: item.url, label: item.name || specGroups.value[imageGroupIndex.value]?.name || '规格图',
-        caption: '', skuKey: item.id, canLocal: product.platform !== 'pdd', canLink: true, canDelete: true })), ...(product.previewSkuImageUrls ?? [])
+        caption: '', skuKey: item.id, canLocal: specImagesEditable.value, canLink: specImagesEditable.value, canDelete: specImagesEditable.value })), ...(product.previewSkuImageUrls ?? [])
         .filter((url) => imageGroupIndex.value === 0 && !initialSpecGroups.value[0]?.values.some((item) => item.url === url) &&
           !specImages.value.some((item) => item.url === url))
         .map((src, index) => ({ key: `sku:other:${src}:${index}`, src, label: `其他规格图 ${index + 1}`, caption: '', skuKey: undefined,
@@ -973,7 +997,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
 
 <template>
   <AppDialog :show="show" :title="creating ? '手动新建商品' : '编辑商品'" size="workspace" :content-scrollable="false"
-    :close-on-esc="!imagePreviewSource && !specInputMode"
+    :close-on-esc="!imagePreviewSource && !specInputMode && !imageLinkTarget"
     positive-text="保存" negative-text="关闭" :loading="saving" :positive-disabled="!canEdit || !dirty"
     :positive-disabled-reason="!editable ? '商品编辑尚未启用' : null"
     @confirm="submitEdit" @update:show="!$event && closeEditor()">
@@ -1057,6 +1081,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                 </div>
                 <AppButton v-else tone="link" size="small" @click="tab = 'sku'">在规格与 SKU 中设置</AppButton>
               </header>
+              <NText v-if="section.key === 'sku' && editable && !specImagesEditable" depth="3">该商品的规格图暂不支持更换</NText>
               <ProductImageList :items="section.images" :editable="canEdit"
                 :draggable="section.key !== 'sku'" :uploading="uploading"
                 @preview="openImagePreview"
@@ -1116,7 +1141,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   @update:model-value="specGroups[axisIndex] && (specGroups[axisIndex].name = $event)" />
                 <span class="product-preview__status"><NSwitch
                   :value="axisIndex === imageGroupIndex && specImageEnabled"
-                  :disabled="!canEdit || !specGroups[axisIndex]?.values.length || (axisIndex !== imageGroupIndex && axisIndex !== 0 && !specGroups[axisIndex]?.movable && !structureDirty)"
+                  :disabled="!canEditSpecImages || !specGroups[axisIndex]?.values.length || (product.platform === 'pdd' && axisIndex !== 0) || (axisIndex !== imageGroupIndex && axisIndex !== 0 && !specGroups[axisIndex]?.movable && !structureDirty)"
                   :aria-label="`${axis.name}规格图开关`" @update:value="setSpecImageGroup(axisIndex, $event)" />添加规格图</span>
                 <div class="product-preview__actions">
                   <AppButton tone="link" size="small" :disabled="!canStructure || axisIndex === 0" @click="moveSpecGroup(axisIndex, -1)">上移</AppButton>
@@ -1137,16 +1162,16 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                       @error="fallbackImage(`spec:${axisIndex}:${specImageIndex(value)}`, specImages[specImageIndex(value)].url)">
                       <template #error><AppButton size="small" @click.stop="retryImage(`spec:${axisIndex}:${specImageIndex(value)}`)">重试</AppButton></template>
                     </NImage>
-                    <button v-else type="button" class="product-preview__spec-image-add" :disabled="!canEdit || product.platform === 'pdd'"
+                    <button v-else type="button" class="product-preview__spec-image-add" :disabled="!canEditSpecImages"
                       :aria-label="`更换${value}规格图片`" @click="changeImage('sku', specImageIndex(value))">＋</button>
                   </div>
                   <AppInput :model-value="value" :aria-label="`${axis.name}规格值`" :readonly="!canStructure"
                     @update:model-value="specGroups[axisIndex]?.values[valueIndex] && (specGroups[axisIndex].values[valueIndex].name = $event)" />
                   <AppButton v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0 && specImages[specImageIndex(value)]?.url"
-                    tone="link" size="small" :disabled="!canEdit" :aria-label="`更换${value}规格图片`"
+                    tone="link" size="small" :disabled="!canEditSpecImages" :aria-label="`更换${value}规格图片`"
                     @click="changeImage('sku', specImageIndex(value))">更换</AppButton>
                   <AppButton v-if="editable && axisIndex === imageGroupIndex && specImageEnabled && specImageIndex(value) >= 0"
-                    tone="link" size="small" :disabled="!canEdit || product.platform === 'pdd'" :aria-label="`上传${value}规格图片`"
+                    tone="link" size="small" :disabled="!canEditSpecImages" :aria-label="`上传${value}规格图片`"
                     @click="chooseLocalImage('sku', specImageIndex(value))">上传</AppButton>
                   <AppButton tone="link" size="small" :disabled="!canStructure" @click="deleteSpecValue(axisIndex, specGroups[axisIndex].values[valueIndex].id)">删除</AppButton>
                 </div>
@@ -1179,7 +1204,14 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
       </NFormItem>
     </div>
   </AppDialog>
-  <NImagePreview :show="!!imagePreviewSource" :src="imagePreviewSource" @update:show="closeImagePreview" />
+  <AppDialog :show="!!imageLinkTarget" title="图片链接" size="sm" positive-text="确定"
+    :positive-disabled="!imageLinkValue.trim()" @confirm="confirmImageLink" @update:show="!$event && (imageLinkTarget = null)">
+    <div @keydown.enter.stop.prevent="confirmImageLink">
+      <NFormItem label="图片链接"><AppInput v-model="imageLinkValue" aria-label="图片链接" autofocus /></NFormItem>
+    </div>
+  </AppDialog>
+  <NImagePreview :show="!!imagePreviewSource" :src="imagePreviewSource" :render-toolbar="renderPreviewToolbar"
+    @update:show="closeImagePreview" />
 </template>
 
 <style scoped>

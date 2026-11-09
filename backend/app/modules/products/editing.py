@@ -386,6 +386,72 @@ def _edit_shared_text_images(data: dict, goods: dict, edit: ProductEdit) -> None
             for url, image in zip(edit.detailImages, details["detail_imgs"], strict=True)]
 
 
+def _edit_spec_images(data: dict, images) -> None:
+    value_groups = _mapping(data.get("spec_detail_value"), "商品缺少规格图片信息").get("value")
+    sku_groups = _mapping(data.get("goodsSkuInfo"), "商品缺少销售规格").get("sku_detail")
+    if not isinstance(value_groups, list) or not value_groups or not isinstance(sku_groups, list) or not sku_groups:
+        raise ProductRequestError("商品缺少第一组销售规格")
+    value_items = _mapping(value_groups[0], "商品规格格式无效").get("spec_values")
+    sku_items = _mapping(sku_groups[0], "商品规格格式无效").get("spec_item_list")
+    if not isinstance(value_items, list) or not isinstance(sku_items, list):
+        raise ProductRequestError("商品规格格式无效")
+    for item in images:
+        matches = [value for value in value_items if isinstance(value, dict) and str(value.get("id", "")) == item.specId]
+        linked = [value for value in sku_items if isinstance(value, dict) and str(value.get("spec_item_id", "")) == item.specId]
+        if len(matches) != 1 or len(linked) != 1:
+            raise ProductRequestError("规格图片与原数据包不能唯一对应，请刷新后重试")
+        matches[0]["img_url"] = item.url
+        linked[0]["big_pic"] = item.url
+        if "small_pic" in linked[0]:
+            linked[0]["small_pic"] = item.url
+
+
+def _validate_pdd_spec_images(data: dict) -> None:
+    """Only edit converted packages whose complete SKU links are unambiguous."""
+    goods = _mapping(data.get("goodsInfo"), "拼多多规格图片格式暂不支持")
+    source_map = _mapping(goods.get("skuInfoMap"), "拼多多 SKU 来源映射不完整")
+    groups = _mapping(data.get("spec_detail_value"), "拼多多规格图片格式暂不支持").get("value")
+    info = _mapping(data.get("goodsSkuInfo"), "拼多多规格图片格式暂不支持")
+    sku_groups = info.get("sku_detail")
+    rows = _mapping(info.get("spec_detail"), "拼多多 SKU 来源映射不完整").get("value")
+    if (not isinstance(groups, list) or not groups or not isinstance(sku_groups, list) or
+            len(groups) != len(sku_groups) or not isinstance(rows, list) or not rows):
+        raise ProductRequestError("拼多多规格图片与 SKU 无法安全对应")
+    axes = []
+    for group, sku_group in zip(groups, sku_groups, strict=True):
+        group = _mapping(group, "拼多多规格格式无效")
+        sku_group = _mapping(sku_group, "拼多多规格格式无效")
+        values, items = group.get("spec_values"), sku_group.get("spec_item_list")
+        if not isinstance(values, list) or not isinstance(items, list) or not values:
+            raise ProductRequestError("拼多多规格图片与 SKU 无法安全对应")
+        ids = [str(value["id"]) for value in values if isinstance(value, dict) and value.get("id") is not None]
+        linked = [str(value["spec_item_id"]) for value in items if isinstance(value, dict) and value.get("spec_item_id") is not None]
+        normal = lambda value: re.sub(r"\s*[（(]\d+[）)]\s*$", "", str(value or "")).strip()
+        if (len(ids) != len(values) or len(linked) != len(items) or len(set(ids)) != len(ids) or
+                len(set(linked)) != len(linked) or set(ids) != set(linked) or any(not key or "_" in key for key in ids) or
+                not normal(group.get("name")) or normal(group.get("name")) != normal(sku_group.get("name"))):
+            raise ProductRequestError("拼多多规格图片与 SKU 无法安全对应")
+        axes.append(set(ids))
+    all_ids = [identity for axis in axes for identity in axis]
+    if len(set(all_ids)) != len(all_ids):
+        raise ProductRequestError("拼多多规格标识重复，无法安全更换图片")
+    keys, sku_ids = [], []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("spec_detail_ids"), list):
+            raise ProductRequestError("拼多多 SKU 来源映射不完整")
+        ids = [str(value) for value in row["spec_detail_ids"]]
+        if len(ids) != len(axes) or any(identity not in axes[index] for index, identity in enumerate(ids)):
+            raise ProductRequestError("拼多多规格图片与 SKU 无法安全对应")
+        key = "_".join(ids)
+        source = source_map.get(key)
+        if not isinstance(source, dict):
+            raise ProductRequestError("拼多多 SKU 来源映射不完整")
+        keys.append(key)
+        sku_ids.append(_sku_key(source, key))
+    if len(set(keys)) != len(keys) or len(set(sku_ids)) != len(sku_ids) or set(keys) != set(source_map):
+        raise ProductRequestError("拼多多 SKU 来源映射不唯一，无法安全更换图片")
+
+
 def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
     """Return a modified copy; reject shapes we cannot faithfully translate."""
     data = deepcopy(_mapping(source, "商品数据包格式无效"))
@@ -399,23 +465,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
             move_spec_image_group(data, edit.specImageGroupIndex)
         _edit_shared_text_images(data, goods, edit)
         if edit.specImages is not None:
-            value_groups = _mapping(data.get("spec_detail_value"), "商品缺少规格图片信息").get("value")
-            sku_groups = _mapping(data.get("goodsSkuInfo"), "商品缺少销售规格").get("sku_detail")
-            if not isinstance(value_groups, list) or not value_groups or not isinstance(sku_groups, list) or not sku_groups:
-                raise ProductRequestError("商品缺少第一组销售规格")
-            value_items = _mapping(value_groups[0], "商品规格格式无效").get("spec_values")
-            sku_items = _mapping(sku_groups[0], "商品规格格式无效").get("spec_item_list")
-            if not isinstance(value_items, list) or not isinstance(sku_items, list):
-                raise ProductRequestError("商品规格格式无效")
-            for item in edit.specImages:
-                matches = [value for value in value_items if isinstance(value, dict) and str(value.get("id", "")) == item.specId]
-                linked = [value for value in sku_items if isinstance(value, dict) and str(value.get("spec_item_id", "")) == item.specId]
-                if len(matches) != 1 or len(linked) != 1:
-                    raise ProductRequestError("规格图片与原数据包不能唯一对应，请刷新后重试")
-                matches[0]["img_url"] = item.url
-                linked[0]["big_pic"] = item.url
-                if "small_pic" in linked[0]:
-                    linked[0]["small_pic"] = item.url
+            _edit_spec_images(data, edit.specImages)
         if edit.category is not None:
             previous_id = next((str(goods.get(f"catId{level}")) for level in range(4, 0, -1)
                                 if goods.get(f"catId{level}") not in (None, "", "0", 0)), "")
@@ -448,8 +498,13 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
         goods = data.get("goodsInfo")
         if not isinstance(product, dict) and not isinstance(goods, dict):
             raise ProductRequestError("拼多多商品数据包缺少商品信息")
-        if edit.specImages is not None or edit.specImageGroupIndex is not None or edit.skus is not None or edit.specStructure is not None:
+        if edit.specImageGroupIndex is not None or edit.skus is not None or edit.specStructure is not None:
             raise ProductRequestError("拼多多数据包的规格编辑尚未接入")
+        if edit.specImages is not None:
+            if isinstance(product, dict):
+                raise ProductRequestError("该拼多多数据包暂不支持更换规格图片")
+            _validate_pdd_spec_images(data)
+            _edit_spec_images(data, edit.specImages)
         if edit.category is not None or edit.attributes is not None:
             target = _mapping(data.setdefault("douyinTarget", {}), "抖店类目数据格式无效")
             if edit.category is not None:

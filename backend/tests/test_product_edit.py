@@ -149,6 +149,39 @@ def test_spec_image_changes_both_package_representations_and_preserves_off_sale(
         apply_edit(douyin, "douyin", ProductEdit(expectedVersion=VERSION, specImages=[{"specId": "unknown", "url": ""}]))
 
 
+def test_pdd_converted_spec_image_updates_only_the_uniquely_linked_value():
+    package = {"goodsInfo": {"goodsName": "拼多多商品", "skuInfoMap": {
+        "11": {"sku_id": "101", "keep": True}, "12": {"sku_id": "102"}}},
+        "spec_detail_value": {"value": [{"name": "颜色（2）", "spec_values": [
+            {"id": "11", "name": "黑色", "img_url": "https://example.test/black"},
+            {"id": "12", "name": "白色", "img_url": "https://example.test/white"}]}]},
+        "goodsSkuInfo": {"sku_detail": [{"name": "颜色", "spec_item_list": [
+            {"spec_item_id": "11", "big_pic": "https://example.test/black", "small_pic": "https://example.test/black"},
+            {"spec_item_id": "12", "big_pic": "https://example.test/white"}]}],
+            "spec_detail": {"value": [{"spec_detail_ids": ["11"], "price": "2", "sku_status": False},
+                                       {"spec_detail_ids": ["12"], "price": "3", "sku_status": True}]}},
+        "unknown": {"keep": True}}
+    original = deepcopy(package)
+    edit = ProductEdit(expectedVersion=VERSION, specImages=[{"specId": "11", "url": "https://example.test/new"}])
+    saved = apply_edit(package, "pinduoduo", edit)
+    expected = deepcopy(original)
+    expected["spec_detail_value"]["value"][0]["spec_values"][0]["img_url"] = "https://example.test/new"
+    first = expected["goodsSkuInfo"]["sku_detail"][0]["spec_item_list"][0]
+    first["big_pic"] = first["small_pic"] = "https://example.test/new"
+    assert package == original and saved == expected
+
+    broken = deepcopy(package)
+    broken["goodsSkuInfo"]["sku_detail"][0]["spec_item_list"][1]["spec_item_id"] = "11"
+    with pytest.raises(ProductRequestError):
+        apply_edit(broken, "pinduoduo", edit)
+    wrong_sku = deepcopy(package)
+    wrong_sku["goodsInfo"]["skuInfoMap"]["12"]["sku_id"] = "101"
+    with pytest.raises(ProductRequestError):
+        apply_edit(wrong_sku, "pinduoduo", edit)
+    with pytest.raises(ProductRequestError):
+        apply_edit({"product": {"title": "原始拼多多包"}, **package}, "pinduoduo", edit)
+
+
 def test_sku_edit_and_deletion_do_not_recreate_missing_or_change_off_sale_variants(douyin):
     douyin["goodsInfo"]["skuInfoMap"] = {
         "11_21": {"sku_id": "1001", "extra_business_info": '{"first_price":{"left_price_num":1200}}'},

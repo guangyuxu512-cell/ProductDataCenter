@@ -54,6 +54,113 @@ async function fixtures(page: Page) {
   return { listRequests }
 }
 
+async function confirmImageLink(page: Page, value: string) {
+  await page.getByRole('textbox', { name: '图片链接', exact: true }).fill(value)
+  await page.getByRole('dialog').last().getByRole('button', { name: '确定', exact: true }).click()
+}
+
+for (const platform of ['douyin', 'pinduoduo']) {
+  test(`${platform} 图片链接和本地替换保存后读回，规格关联保持不变`, async ({ page }) => {
+    await fixtures(page)
+    await page.addInitScript(() => { window.prompt = () => { throw new Error('desktop does not support prompt') } })
+    const urls = {
+      main: 'https://example.test/main.jpg', detail: 'https://example.test/detail.jpg',
+      black: 'https://example.test/black.jpg', white: 'https://example.test/white.jpg',
+      newMain: 'https://example.test/main-new.jpg', newDetail: 'https://example.test/detail-new.jpg',
+      newBlack: 'https://example.test/black-new.jpg',
+    }
+    let main = urls.main, detail = urls.detail, black = urls.black, version = 'a'.repeat(64)
+    let saved: ProductPatch | undefined
+    await page.route('https://example.test/**', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml',
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' }))
+    await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+      groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false,
+    } }))
+    await page.route('**/api/v1/product-images', (route) => route.fulfill({ status: 201, json: { url: urls.newDetail } }))
+    await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+      version, specImageGroup: '颜色', specImagesEditable: true,
+      specImages: [{ id: '11', name: '黑色', url: black }, { id: '12', name: '白色', url: urls.white }],
+      specGroups: [{ index: 0, name: '颜色', movable: false, values: [
+        { id: '11', name: '黑色', url: black }, { id: '12', name: '白色', url: urls.white }] }],
+      skus: [{ skuId: 'sku-1', specIds: ['11'], price: '19.99', stock: 9, enabled: true, merchantCode: '' },
+        { skuId: 'sku-2', specIds: ['12'], price: '20.99', stock: 8, enabled: true, merchantCode: '' }],
+    } }))
+    await page.route(`**/api/v1/products/${firstId}`, (route) => {
+      if (route.request().method() === 'PATCH') {
+        saved = route.request().postDataJSON() as ProductPatch
+        main = saved.mainImages?.[0] ?? main; detail = saved.detailImages?.[0] ?? detail
+        black = saved.specImages?.find((item) => item.specId === '11')?.url ?? black
+        version = 'b'.repeat(64)
+        return route.fulfill({ json: { version } })
+      }
+      return route.fulfill({ json: { product: product(firstId, platform), sourceCategoryId: null,
+        skus: [{ sku_id: 'sku-1', sku_name: '颜色: 黑色', current_price: '19.99', image_rel_path: '', sort_order: 0 },
+          { sku_id: 'sku-2', sku_name: '颜色: 白色', current_price: '20.99', image_rel_path: '', sort_order: 1 }],
+        images: [{ image_type: 'main', sort_order: 0, rel_path: '', source_url: main },
+          { image_type: 'detail', sort_order: 0, rel_path: '', source_url: detail },
+          { image_type: 'sku', sort_order: 0, rel_path: '', source_url: black },
+          { image_type: 'sku', sort_order: 1, rel_path: '', source_url: urls.white }] } })
+    })
+    await page.goto('/#/products')
+    await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+    const editor = page.getByRole('dialog').first()
+    await editor.getByRole('tab', { name: '图文信息' }).click()
+    const sections = editor.locator('.product-preview__image-section')
+    await sections.nth(0).getByRole('button', { name: '更换链接' }).click()
+    await page.keyboard.press('Escape')
+    await expect(editor).toBeVisible()
+    await expect(page.getByRole('textbox', { name: '图片链接', exact: true })).toHaveCount(0)
+    await sections.nth(0).getByRole('button', { name: '更换链接' }).click()
+    await confirmImageLink(page, urls.newMain)
+    const chooser = page.waitForEvent('filechooser')
+    await sections.nth(1).getByRole('button', { name: '本地替换' }).click()
+    await (await chooser).setFiles({ name: 'detail.png', mimeType: 'image/png', buffer: Buffer.from('image') })
+    await expect(sections.nth(1).locator('img')).toHaveAttribute('src', urls.newDetail)
+    await sections.nth(2).getByRole('button', { name: '更换链接' }).first().click()
+    await confirmImageLink(page, urls.newBlack)
+    await editor.getByRole('button', { name: '保存', exact: true }).click()
+    await expect.poll(() => saved).toMatchObject({ mainImages: [urls.newMain], detailImages: [urls.newDetail],
+      specImages: [{ specId: '11', url: urls.newBlack }] })
+    await expect(page.getByText('商品已保存', { exact: true })).toBeVisible()
+    await editor.getByRole('button', { name: '关闭', exact: true }).click()
+    await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+    await editor.getByRole('tab', { name: '图文信息' }).click()
+    await expect(sections.nth(0).locator('img')).toHaveAttribute('src', urls.newMain)
+    await expect(sections.nth(1).locator('img')).toHaveAttribute('src', urls.newDetail)
+    await expect(sections.nth(2).locator('img').nth(0)).toHaveAttribute('src', urls.newBlack)
+    await expect(sections.nth(2).locator('img').nth(1)).toHaveAttribute('src', urls.white)
+  })
+}
+
+test('规格和 SKU 无法可靠对应时不允许更换规格图', async ({ page }) => {
+  await fixtures(page)
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '颜色', specImagesEditable: false,
+    specImages: [{ id: '11', name: '黑色', url: 'https://example.test/black.jpg' }],
+    specGroups: [{ index: 0, name: '颜色', movable: false,
+      values: [{ id: '11', name: '黑色', url: 'https://example.test/black.jpg' }] }], skus: [],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => route.fulfill({ json: {
+    product: product(firstId, 'pinduoduo'), skus: [], images: [],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  const editor = page.getByRole('dialog').first()
+  await editor.getByRole('tab', { name: '图文信息' }).click()
+  const spec = editor.locator('.product-preview__image-section').nth(2)
+  await expect(spec.getByText('该商品的规格图暂不支持更换')).toBeVisible()
+  await expect(spec.getByRole('button', { name: '更换链接' })).toHaveCount(0)
+  await editor.getByRole('tab', { name: '规格与 SKU' }).click()
+  const toggle = editor.getByRole('switch', { name: '颜色规格图开关' })
+  await expect(toggle).toHaveClass(/n-switch--disabled/)
+  await toggle.click({ force: true })
+  await expect(toggle).toHaveAttribute('aria-checked', 'true')
+  await expect(editor.getByRole('button', { name: '更换黑色规格图片' })).toBeDisabled()
+})
+
 test('中控布局、内部滚动、详情、复制和分页总数复用', async ({ page }, testInfo) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -912,8 +1019,8 @@ test('手动新建打开完整弹窗，仅保存时创建商品', async ({ page 
   await category.getByRole('button', { name: '家居', exact: true }).click()
   await category.getByRole('button', { name: '确认' }).click()
   await dialog.getByRole('tab', { name: '图文信息' }).click()
-  page.once('dialog', (prompt) => prompt.accept('https://example.test/main.jpg'))
   await dialog.getByRole('button', { name: '添加图片链接' }).first().click()
+  await confirmImageLink(page, 'https://example.test/main.jpg')
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
   await dialog.getByRole('textbox', { name: 'SKU 价格' }).fill('9.90')
   await dialog.getByRole('textbox', { name: 'SKU 库存' }).fill('5')
@@ -1480,8 +1587,8 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
   await expect(titleInput).toBeEditable()
   await titleInput.fill('修改后的商品')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
-  page.once('dialog', (prompt) => prompt.accept('https://example.test/new-white.jpg'))
-  await dialog.getByRole('button', { name: '更换链接', exact: true }).click()
+  await dialog.locator('.product-preview__image-section').nth(2).getByRole('button', { name: '更换链接', exact: true }).click()
+  await confirmImageLink(page, 'https://example.test/new-white.jpg')
   await dialog.getByRole('tab', { name: '规格与 SKU' }).click()
   await expect(dialog.getByRole('switch', { name: '颜色规格图开关' })).toBeChecked()
   const skuImage = dialog.getByRole('img', { name: '白色规格图片' })
@@ -1492,8 +1599,8 @@ test('编辑商品保存原包字段，规格图在两个页签共用', async ({
   await expect(preview.locator('img.n-image-preview')).toHaveAttribute('src', 'https://example.test/new-white.jpg')
   await preview.locator('.n-image-preview-overlay').click({ position: { x: 10, y: 10 } })
   await expect(preview).not.toBeVisible()
-  page.once('dialog', (prompt) => prompt.accept('https://example.test/final-white.jpg'))
   await dialog.getByRole('button', { name: '更换白色规格图片' }).click()
+  await confirmImageLink(page, 'https://example.test/final-white.jpg')
   await expect(skuImage).toHaveAttribute('src', 'https://example.test/final-white.jpg')
   await dialog.getByRole('textbox', { name: 'SKU 价格' }).fill('25.50')
   await dialog.getByRole('textbox', { name: 'SKU 库存' }).fill('8')
@@ -1553,8 +1660,8 @@ test('切换规格图的组会置顶，图片与对应规格一起保存', async
   await dialog.getByRole('switch', { name: '款式规格图开关' }).click()
   await expect(dialog.locator('.product-preview__axis').first().getByRole('textbox', { name: '规格类型' })).toHaveValue('款式')
   await expect(dialog.getByRole('switch', { name: '规格规格图开关' })).not.toBeChecked()
-  page.once('dialog', (prompt) => prompt.accept('https://example.test/long.jpg'))
   await dialog.getByRole('button', { name: '更换长款规格图片' }).click()
+  await confirmImageLink(page, 'https://example.test/long.jpg')
   await dialog.getByRole('tab', { name: '图文信息' }).click()
   await expect(dialog.getByText('长款', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: '保存', exact: true }).click()

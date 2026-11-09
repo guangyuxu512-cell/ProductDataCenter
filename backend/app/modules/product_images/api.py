@@ -105,4 +105,5 @@ def read_image(name: str):
     media_types = {"jpg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}
     return FileResponse(path, media_type=media_types[path.suffix[1:]], headers={
         "Cache-Control": "public, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff",
+        "Access-Control-Allow-Origin": "*",
     })

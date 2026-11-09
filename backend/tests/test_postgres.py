@@ -750,6 +750,78 @@ def test_sku_changes_and_image_are_consistent_in_database_package_and_projection
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
 
 
+def test_pdd_spec_image_replacement_preserves_other_skus_and_unmapped_images(engine, tmp_path):
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.main import create_application
+    from app.modules.products.api import get_service
+    from app.modules.products.errors import ProductRequestError
+    from app.modules.products.export import current_uu_bytes
+    from app.modules.products.schemas import ProductEdit
+
+    identity = "pdd:9999999999999999915"
+    package = {"goodsInfo": {"goodsName": "拼多多规格图测试", "skuInfoMap": {
+        "11": {"sku_id": "1001"}, "12": {"sku_id": "1002"}}},
+        "spec_detail_value": {"value": [{"name": "颜色", "spec_values": [
+            {"id": "11", "name": "黑色", "img_url": "https://example.test/black"},
+            {"id": "12", "name": "白色", "img_url": "https://example.test/white"}]}]},
+        "goodsSkuInfo": {"sku_detail": [{"name": "颜色", "spec_item_list": [
+            {"spec_item_id": "11", "big_pic": "https://example.test/black"},
+            {"spec_item_id": "12", "big_pic": "https://example.test/white"}]}],
+            "spec_detail": {"value": [{"spec_detail_ids": ["11"], "price": "2", "sku_status": False},
+                                       {"spec_detail_ids": ["12"], "price": "3", "sku_status": True}]}},
+        "unknown": {"keep": True}}
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO products(product_id,source_platform,source_product_id,title,uu_json,sku_count)
+            VALUES (:id,'pinduoduo','9999999999999999915','隔离商品',CAST(:package AS jsonb),2)"""),
+            {"id": identity, "package": json.dumps(package, ensure_ascii=False)})
+        conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,image_rel_path,sort_order)
+            VALUES (:id,'1001','黑色',2,'black-file',0),(:id,'1002','白色',3,'white-file',1)"""), {"id": identity})
+        conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url) VALUES
+            (:id,'sku',0,'black-file','https://example.test/black'),
+            (:id,'sku',1,'white-file','https://example.test/white'),
+            (:id,'sku',2,'other-file','https://example.test/unmapped'),
+            (:id,'sku',3,'local-only-file',''),
+            (:id,'sku',4,'duplicate-file','https://example.test/white')"""), {"id": identity})
+    try:
+        repo = ProductRepository(engine)
+        snapshot = repo.edit_snapshot(identity)
+        assert snapshot["specImagesEditable"] is True
+        repo.save_edit(identity, ProductEdit(expectedVersion=snapshot["version"],
+            specImages=[{"specId": "11", "url": "https://example.test/new"}]))
+        detail = repo.detail(identity)
+        image_rows = [image for image in detail["images"] if image["image_type"] == "sku"]
+        assert [(row["source_url"], row["rel_path"]) for row in image_rows] == [
+            ("https://example.test/new", ""), ("https://example.test/white", "white-file"),
+            ("https://example.test/unmapped", "other-file"), ("", "local-only-file"),
+            ("https://example.test/white", "duplicate-file")]
+        assert [sku["image_rel_path"] for sku in detail["skus"]] == ["", "white-file"]
+        exported, _ = current_uu_bytes(repo.export_rows([identity])[0], 1_000_000)
+        result = json.loads(exported)
+        assert result["spec_detail_value"]["value"][0]["spec_values"][0]["img_url"] == "https://example.test/new"
+        assert result["spec_detail_value"]["value"][0]["spec_values"][1]["img_url"] == "https://example.test/white"
+        assert result["goodsSkuInfo"]["spec_detail"] == package["goodsSkuInfo"]["spec_detail"]
+        assert result["goodsInfo"] == package["goodsInfo"] and result["unknown"] == package["unknown"]
+        settings = Settings(_env_file=None, data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
+        app = create_application()
+        app.dependency_overrides[get_service] = lambda: ProductService(repo, settings)
+        with patch("app.core.security.access.get_settings", return_value=settings), TestClient(app) as client:
+            response = client.get(f"/rpa/v1/products/{identity}/uu", headers={"Authorization": "Bearer rpa-test"})
+            assert response.status_code == 200 and response.content == exported
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM product_skus WHERE product_id=:id AND sku_id='1002'"), {"id": identity})
+        unsafe = repo.edit_snapshot(identity)
+        assert unsafe["specImagesEditable"] is False
+        with pytest.raises(ProductRequestError):
+            repo.save_edit(identity, ProductEdit(expectedVersion=unsafe["version"],
+                specImages=[{"specId": "11", "url": "https://example.test/rejected"}]))
+        after, _ = current_uu_bytes(repo.export_rows([identity])[0], 1_000_000)
+        assert after == exported
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": identity})
+
+
 def test_uploaded_image_urls_round_trip_through_postgres_and_rpa(engine, tmp_path):
     import base64
     from unittest.mock import patch
