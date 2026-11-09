@@ -14,7 +14,7 @@ from .queries import ProductListOptions, build_product_list_queries
 from .pdd_categories import source_category_path
 from .source_attributes import source_attributes
 from .manual import manual_package
-from .editing import _sku_key, apply_edit, move_spec_image_group
+from .editing import _sku_key, _validate_pdd_spec_images, apply_edit, move_spec_image_group
 from .errors import ProductEditConflict, ProductNotFound, ProductRequestError
 
 
@@ -227,8 +227,12 @@ class ProductRepository:
 
     def edit_snapshot(self, product_id: str) -> dict:
         with self.engine.connect() as conn:
-            row = conn.execute(text("SELECT uu_json::text AS package FROM products WHERE product_id=:id"),
+            row = conn.execute(text("SELECT uu_json::text AS package, source_platform FROM products WHERE product_id=:id"),
                                {"id": product_id}).mappings().first()
+            projection_ids = None
+            if row is not None and row["source_platform"] in {"pinduoduo", "pdd"}:
+                projection_ids = set(conn.execute(text("SELECT sku_id FROM product_skus WHERE product_id=:id"),
+                                                  {"id": product_id}).scalars())
         if row is None:
             raise ProductNotFound()
         if not row["package"]:
@@ -280,9 +284,19 @@ class ProductRepository:
                     "stock": stock.get("stock_num") if isinstance(stock, dict) else None,
                     "enabled": item.get("sku_status") if isinstance(item.get("sku_status"), bool) else None,
                     "merchantCode": str(item.get("merchant_code") or "")})
+        spec_images_editable = True
+        if row["source_platform"] in {"pinduoduo", "pdd"}:
+            try:
+                if isinstance(package.get("product"), dict):
+                    raise ProductRequestError("原始拼多多包未接入规格图编辑")
+                _validate_pdd_spec_images(package)
+                if {item["skuId"] for item in sku_rows} != projection_ids:
+                    raise ProductRequestError("拼多多 SKU 记录与数据包无法安全对应")
+            except ProductRequestError:
+                spec_images_editable = False
         return {"version": hashlib.sha256(row["package"].encode("utf-8")).hexdigest(),
                 "specImageGroup": str(first.get("name") or ""), "specImages": spec_images,
-                "specGroups": spec_groups, "skus": sku_rows}
+                "specGroups": spec_groups, "specImagesEditable": spec_images_editable, "skus": sku_rows}
 
     def save_edit(self, product_id: str, edit, conn: Connection | None = None, mark_modified: bool = True) -> dict:
         with (nullcontext(conn) if conn is not None else self.engine.begin()) as conn:
@@ -297,6 +311,13 @@ class ProductRepository:
                 raise ProductEditConflict()
             original_package = json.loads(row["package"])
             package = apply_edit(original_package, row["source_platform"], edit)
+            if row["source_platform"] in {"pinduoduo", "pdd"} and edit.specImages is not None:
+                sku_map = package["goodsInfo"]["skuInfoMap"]
+                expected_ids = {_sku_key(source, key) for key, source in sku_map.items()}
+                actual_ids = set(conn.execute(text("SELECT sku_id FROM product_skus WHERE product_id=:id"),
+                                              {"id": product_id}).scalars())
+                if expected_ids != actual_ids:
+                    raise ProductRequestError("拼多多 SKU 记录与数据包无法安全对应")
             original_sku_paths = {}
             original_sku_urls = {}
             if edit.specStructure is not None:
@@ -348,15 +369,44 @@ class ProductRepository:
                 image_groups = [_spec_image_values(groups, sku_groups, index) for index in range(len(groups))]
                 sku_urls = list(dict.fromkeys(item["url"] for group in image_groups for item in group
                     if item["url"].startswith(("http://", "https://"))))
-                old = conn.execute(text("""SELECT source_url, rel_path FROM product_images
-                    WHERE product_id=:id AND image_type='sku'"""), {"id": product_id}).mappings()
+                old = list(conn.execute(text("""SELECT source_url, rel_path FROM product_images
+                    WHERE product_id=:id AND image_type='sku' ORDER BY sort_order"""), {"id": product_id}).mappings())
                 paths = {item["source_url"]: item["rel_path"] for item in old if item["source_url"] and item["rel_path"]}
+                entries = [(url, paths.get(url, "")) for url in sku_urls]
+                if row["source_platform"] in {"pinduoduo", "pdd"}:
+                    original_groups = original_package["spec_detail_value"]["value"]
+                    original_sku_groups = original_package["goodsSkuInfo"]["sku_detail"]
+                    original_images = {item["id"]: item["url"] for item in
+                                       _spec_image_values(original_groups, original_sku_groups, 0)}
+                    replacements = {}
+                    for change in edit.specImages or []:
+                        original_url = original_images.get(change.specId)
+                        if original_url:
+                            replacements.setdefault(original_url, []).append(change.url)
+                    # Preserve every unrelated row, even duplicate URLs and local-only images.
+                    # A changed URL is removed only when no remaining spec references it.
+                    surviving = {item["source_url"] for item in old if item["source_url"] and
+                                 not (item["source_url"] in replacements and item["source_url"] not in sku_urls)}
+                    entries = []
+                    for item in old:
+                        old_url = item["source_url"] or ""
+                        if old_url in replacements and old_url not in sku_urls:
+                            for new_url in replacements[old_url]:
+                                if new_url and new_url in sku_urls and new_url not in surviving:
+                                    entries.append((new_url, paths.get(new_url, "")))
+                                    surviving.add(new_url)
+                        else:
+                            entries.append((old_url, item["rel_path"] or ""))
+                    for url in sku_urls:
+                        if url not in surviving:
+                            entries.append((url, paths.get(url, "")))
+                            surviving.add(url)
                 conn.execute(text("DELETE FROM product_images WHERE product_id=:id AND image_type='sku'"), {"id": product_id})
-                for index, url in enumerate(sku_urls):
+                for index, (url, image_path) in enumerate(entries):
                     conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
                         VALUES (:id,'sku',:position,:path,:url)"""),
-                        {"id": product_id, "position": index, "path": paths.get(url, ""), "url": url})
-                params["sku_count_images"] = len(sku_urls)
+                        {"id": product_id, "position": index, "path": image_path, "url": url})
+                params["sku_count_images"] = len(entries)
                 sql += ", sku_image_count=:sku_count_images"
                 spec_to_url = {item["id"]: item["url"] for item in image_groups[0]}
                 sku_map = package.get("goodsInfo", {}).get("skuInfoMap", {})
@@ -364,6 +414,9 @@ class ProductRepository:
                     if not isinstance(sku_row, dict) or not isinstance(sku_row.get("spec_detail_ids"), list):
                         continue
                     ids = [str(value) for value in sku_row["spec_detail_ids"]]
+                    if (row["source_platform"] in {"pinduoduo", "pdd"} and edit.specImages is not None and
+                            (not ids or ids[0] not in {item.specId for item in edit.specImages})):
+                        continue
                     changed = spec_to_url.get(ids[0]) if ids else None
                     source = sku_map.get("_".join(ids), {}) if isinstance(sku_map, dict) else {}
                     source_id = _sku_key(source, "_".join(ids)) if isinstance(source, dict) else None
