@@ -413,9 +413,11 @@ def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engin
     package = {"product": {"title": title}, "images": {"main": [{"url": image}]}}
     settings = Settings(data_root=tmp_path, douyin_category_lookup_enabled=True)
     class Central:
-        def list_shops(self):
-            return [CentralShop(shop_id=shop_id, display_name="隔离店铺", platform="douyin", session_status="valid")]
-        def read_session(self, requested, expected_platform):
+        def list_shops(self, *, purpose="generic"):
+            assert purpose == "merchant"
+            return [CentralShop(shop_id=shop_id, display_name="隔离店铺", platform="douyin", session_status="valid", session_version=1)]
+        def read_session(self, requested, expected_platform, *, purpose="generic"):
+            assert purpose == "merchant"
             return CentralShopSession(shop_id=requested, platform=expected_platform, session_version=1,
                 cookies=(CentralCookie(name="sessionid", value="synthetic", domain=".jinritemai.com"),))
     class Lookup:
@@ -496,9 +498,11 @@ def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, 
                         douyin_category_lookup_enabled=True)
     shop_id = uuid4()
     class Central:
-        def list_shops(self):
-            return [CentralShop(shop_id=shop_id, display_name="测试店", platform="douyin", session_status="valid")]
-        def read_session(self, requested, expected_platform):
+        def list_shops(self, *, purpose="generic"):
+            assert purpose == "merchant"
+            return [CentralShop(shop_id=shop_id, display_name="测试店", platform="douyin", session_status="valid", session_version=1)]
+        def read_session(self, requested, expected_platform, *, purpose="generic"):
+            assert purpose == "merchant"
             return CentralShopSession(shop_id=requested, platform=expected_platform, session_version=1,
                 cookies=(CentralCookie(name="sessionid", value="synthetic", domain=".jinritemai.com"),))
     class Lookup:

@@ -15,8 +15,9 @@ from app.core.config import Settings, get_settings
 from app.main import create_application
 from app.modules.category_lookup.api import get_central, get_lookup
 from app.modules.category_lookup.client import DouyinCategoryClient, LookupError, normalize_candidates, normalize_fields
+from app.modules.category_lookup.cache import merchant_cache_scope
 from app.modules.category_lookup import pure_signer
-from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession
+from app.modules.central.client import CentralConnectionError, CentralCookie, CentralShop, CentralShopSession
 
 PRODUCT_KEY = "synthetic-product-token-1234567890"
 RPA_KEY = "synthetic-rpa-token-1234567890"
@@ -296,11 +297,14 @@ def test_prediction_empty_and_invalid_category_paths_are_not_invented():
 class FakeCentral:
     def __init__(self, ids):
         self.ids = ids
-    def list_shops(self):
-        return [CentralShop(shop_id=i, display_name="测试店", platform="douyin", session_status="valid") for i in self.ids]
-    def read_session(self, shop_id, expected_platform):
-        assert shop_id in self.ids and expected_platform == "douyin"
-        return make_session(shop_id)
+        self.versions = {shop_id: 1 for shop_id in ids}
+    def list_shops(self, *, purpose="generic"):
+        assert purpose == "merchant"
+        return [CentralShop(shop_id=i, display_name="测试店", platform="douyin", session_status="valid",
+                            session_version=self.versions[i]) for i in self.ids]
+    def read_session(self, shop_id, expected_platform, *, purpose="generic"):
+        assert shop_id in self.ids and expected_platform == "douyin" and purpose == "merchant"
+        return make_session(shop_id).model_copy(update={"session_version": self.versions[shop_id]})
 
 
 class FakeLookup:
@@ -451,8 +455,9 @@ def test_tree_and_attribute_cache_survive_restart_and_refresh_only_on_request(se
         assert client.post(path, json={}, headers={"Authorization": "Bearer " + RPA_KEY}).status_code == 401
     from app.modules.category_lookup.cache import CategoryCache
     cache = CategoryCache(settings.category_cache_file)
-    assert cache.get("tree", str(shop_id), "100")[0]["name"] == "类目2"
-    assert cache.get("schema", str(shop_id), "101")[0]["label"] == "材质2"
+    scope = merchant_cache_scope(shop_id, 1)
+    assert cache.get("tree", scope, "100")[0]["name"] == "类目2"
+    assert cache.get("schema", scope, "101")[0]["label"] == "材质2"
     assert COOKIE.encode() not in settings.category_cache_file.read_bytes()
     assert "旧标题".encode() not in settings.category_cache_file.read_bytes()
     get_settings.cache_clear()
@@ -493,16 +498,372 @@ def test_schema_cache_isolated_by_shop_and_missing_cache_fails_closed(settings, 
 def test_old_inflight_tree_result_cannot_repopulate_after_manual_refresh(settings):
     from app.modules.category_lookup.cache import CategoryCache
     cache = CategoryCache(settings.category_cache_file)
-    version = cache.tree_version()
+    version = cache.tree_version("shop")
     cache.put("tree", "shop", "0", [{"name": "new"}], refresh_tree=True)
     cache.put("tree", "shop", "123", [{"name": "old"}], tree_version=version)
     assert cache.get("tree", "shop", "0") == [{"name": "new"}]
     assert cache.get("tree", "shop", "123") is None
-    schema_version = cache.schema_version("123")
+    schema_version = cache.schema_version("shop", "123")
     cache.put("schema", "shop", "123", [{"label": "new"}], refresh_schema=True)
-    cache.put("schema", "other-shop", "123", [{"label": "old"}], schema_version=schema_version)
+    cache.put("schema", "shop", "123", [{"label": "old"}], schema_version=schema_version)
     assert cache.get("schema", "shop", "123") == [{"label": "new"}]
-    assert cache.get("schema", "other-shop", "123") is None
+
+
+def test_refresh_only_invalidates_verified_scope_and_rejects_stale_writes(settings):
+    from app.modules.category_lookup.cache import CategoryCache
+    cache = CategoryCache(settings.category_cache_file)
+    shop_a, shop_b = uuid4(), uuid4()
+    a1, a2 = merchant_cache_scope(shop_a, 1), merchant_cache_scope(shop_a, 2)
+    b1, legacy = merchant_cache_scope(shop_b, 1), str(shop_a)
+    for scope in (a1, a2, b1, legacy):
+        cache.put("tree", scope, "0", [{"name": scope}])
+        cache.put("tree_probe", scope, "0", {"checkedAt": 1})
+        cache.put("schema", scope, "123", [{"label": scope}])
+
+    tree_version = cache.tree_version(a2)
+    schema_version = cache.schema_version(a2, "123")
+    cache.put("tree", a2, "0", [{"name": "new"}], refresh_tree=True, tree_version=tree_version)
+    cache.put("schema", a2, "123", [{"label": "new"}],
+              refresh_schema=True, schema_version=schema_version)
+    cache.put("tree", a2, "0", [{"name": "late"}], tree_version=tree_version)
+    cache.put("tree_probe", a2, "0", {"checkedAt": 2}, tree_version=tree_version)
+    cache.put("schema", a2, "123", [{"label": "late"}], schema_version=schema_version)
+    cache.put("tree", a2, "0", [{"name": "late-refresh"}],
+              refresh_tree=True, tree_version=tree_version)
+    cache.put("schema", a2, "123", [{"label": "late-refresh"}],
+              refresh_schema=True, schema_version=schema_version)
+
+    assert cache.get("tree", a2, "0") == [{"name": "new"}]
+    assert cache.get("tree_probe", a2, "0") is None
+    assert cache.get("schema", a2, "123") == [{"label": "new"}]
+    for scope in (a1, b1, legacy):
+        assert cache.get("tree", scope, "0") == [{"name": scope}]
+        assert cache.get("tree_probe", scope, "0") == {"checkedAt": 1}
+        assert cache.get("schema", scope, "123") == [{"label": scope}]
+
+
+def test_tree_cache_uses_current_authorized_version_and_refresh_is_local(settings, monkeypatch):
+    from app.modules.category_lookup.cache import CategoryCache
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    shop_a, shop_b = uuid4(), uuid4()
+    central = FakeCentral([shop_a, shop_b])
+    calls, reads = [], []
+    original_read = central.read_session
+
+    def tracked_read(shop_id, expected_platform, *, purpose="generic"):
+        reads.append((shop_id, central.versions[shop_id]))
+        return original_read(shop_id, expected_platform, purpose=purpose)
+
+    central.read_session = tracked_read
+
+    class TrackedLookup(FakeLookup):
+        def category_options(self, session, parent_id):
+            calls.append((session.shop_id, session.session_version, parent_id))
+            return [{"id": "100", "name": f"v{session.session_version}", "isLeaf": True, "enabled": True}]
+
+    cache = CategoryCache(settings.category_cache_file)
+    cache.put("tree", str(shop_a), "0", [{"id": "999", "name": "unverified"}])
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: TrackedLookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client:
+        path = "/api/v1/category-lookup/tree"
+        a, b = {"shopId": str(shop_a)}, {"shopId": str(shop_b)}
+        assert client.post(path, json=a, headers=auth).json()["items"][0]["name"] == "v1"
+        assert client.post(path, json=b, headers=auth).json()["items"][0]["name"] == "v1"
+        assert client.post(path, json=a, headers=auth).json()["fromCache"] is True
+        assert reads == [(shop_a, 1), (shop_b, 1)]
+        central.versions[shop_a] = 2
+        assert client.post(path, json=a, headers=auth).json()["items"][0]["name"] == "v2"
+        assert client.post(path, json=b, headers=auth).json()["fromCache"] is True
+        assert reads == [(shop_a, 1), (shop_b, 1), (shop_a, 2)]
+        assert client.post(path, json={**a, "refresh": True}, headers=auth).status_code == 200
+    assert calls == [(shop_a, 1, "0"), (shop_b, 1, "0"), (shop_a, 2, "0"), (shop_a, 2, "0")]
+    assert cache.get("tree", str(shop_a), "0")[0]["name"] == "unverified"
+    assert cache.get("tree", merchant_cache_scope(shop_a, 1), "0")[0]["name"] == "v1"
+    assert cache.get("tree", merchant_cache_scope(shop_b, 1), "0")[0]["name"] == "v1"
+    get_settings.cache_clear()
+
+
+def test_old_inflight_session_cannot_populate_new_version_cache(settings, monkeypatch):
+    from app.modules.category_lookup.cache import CategoryCache
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    central, calls = FakeCentral([shop_id]), []
+
+    class Lookup(FakeLookup):
+        def category_options(self, session, parent_id):
+            calls.append(session.session_version)
+            if session.session_version == 1:
+                central.versions[shop_id] = 2  # An update lands during the old platform request.
+            return [{"id": "100", "name": f"v{session.session_version}", "isLeaf": True, "enabled": True}]
+
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: Lookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client:
+        path, body = "/api/v1/category-lookup/tree", {"shopId": str(shop_id)}
+        assert client.post(path, json=body, headers=auth).json()["items"][0]["name"] == "v1"
+        assert client.post(path, json=body, headers=auth).json()["items"][0]["name"] == "v2"
+        assert client.post(path, json=body, headers=auth).json()["fromCache"] is True
+    assert calls == [1, 2]
+    cache = CategoryCache(settings.category_cache_file)
+    assert cache.get("tree", merchant_cache_scope(shop_id, 1), "0")[0]["name"] == "v1"
+    assert cache.get("tree", merchant_cache_scope(shop_id, 2), "0")[0]["name"] == "v2"
+    get_settings.cache_clear()
+
+
+def test_unavailable_or_revoked_shop_cannot_use_existing_versioned_cache(settings, monkeypatch):
+    from app.modules.category_lookup.cache import CategoryCache
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    cache = CategoryCache(settings.category_cache_file)
+    cache.put("tree", merchant_cache_scope(shop_id, 1), "0", [{"id": "100", "name": "old"}])
+    central = FakeCentral([shop_id])
+    state = {"status": "invalid"}
+
+    def list_shops(*, purpose="generic"):
+        assert purpose == "merchant"
+        if state["status"] == "revoked":
+            return []
+        return [CentralShop(shop_id=shop_id, display_name="测试店", platform="douyin",
+                            session_status=state["status"], session_version=1)]
+
+    central.list_shops = list_shops
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: FakeLookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client:
+        path, body = "/api/v1/category-lookup/tree", {"shopId": str(shop_id)}
+        assert client.post(path, json=body, headers=auth).status_code == 503
+        state["status"] = "revoked"
+        assert client.post(path, json=body, headers=auth).status_code == 503
+    assert cache.get("tree", merchant_cache_scope(shop_id, 1), "0")[0]["name"] == "old"
+    get_settings.cache_clear()
+
+
+def test_auto_selection_skips_only_explicit_unverified_shop(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setattr("app.modules.category_lookup.api._next", 0)
+    get_settings.cache_clear()
+    shop_a, shop_b = sorted([uuid4(), uuid4()], key=str)
+    central, reads, lookups = FakeCentral([shop_a, shop_b]), [], []
+    original_read = central.read_session
+    reason = {"value": "merchant_unverified"}
+
+    def read(shop_id, expected_platform, *, purpose="generic"):
+        reads.append(shop_id)
+        if shop_id == shop_a:
+            raise CentralConnectionError(reason["value"])
+        return original_read(shop_id, expected_platform, purpose=purpose)
+
+    central.read_session = read
+
+    class Lookup(FakeLookup):
+        def search(self, session, keyword):
+            lookups.append(session.shop_id)
+            return super().search(session, keyword)
+
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: Lookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client:
+        result = client.post("/api/v1/category-lookup/search", json={"keyword": "勺子"}, headers=auth)
+        assert result.status_code == 200 and result.json()["shopId"] == str(shop_b)
+        assert reads == [shop_a, shop_b] and lookups == [shop_b]
+        reads.clear()
+        result = client.post("/api/v1/category-lookup/tree", json={"shopId": str(shop_a)}, headers=auth)
+        assert result.status_code == 409 and "身份尚未确认" in result.json()["detail"]
+        assert reads == []  # Same version's explicit 409 is briefly suppressed.
+        central.versions[shop_a] = 2
+        reason["value"] = "upstream_unavailable"
+        monkeypatch.setattr("app.modules.category_lookup.api._next", 0)
+        result = client.post("/api/v1/category-lookup/search", json={"keyword": "勺子"}, headers=auth)
+        assert result.status_code == 503 and reads == [shop_a]
+    get_settings.cache_clear()
+
+
+def test_schema_cache_requires_current_shop_version_without_clearing_history(settings, monkeypatch):
+    from app.modules.category_lookup.cache import CategoryCache
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    central, calls, reads = FakeCentral([shop_id]), [], []
+    original_read = central.read_session
+
+    def read(shop_id, expected_platform, *, purpose="generic"):
+        reads.append(central.versions[shop_id])
+        return original_read(shop_id, expected_platform, purpose=purpose)
+
+    central.read_session = read
+
+    class Lookup(FakeLookup):
+        def schema(self, session, category_id, title):
+            calls.append(session.session_version)
+            return [{"id": "12", "label": f"v{session.session_version}", "required": True, "options": []}]
+
+    cache = CategoryCache(settings.category_cache_file)
+    cache.put("schema", str(shop_id), "123", [{"id": "12", "label": "unverified"}])
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: Lookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    body = {"shopId": str(shop_id), "categoryId": "123"}
+    with TestClient(app) as client:
+        path = "/api/v1/category-lookup/schema"
+        assert client.post(path, json=body, headers=auth).json()["attributes"][0]["label"] == "v1"
+        assert client.post(path, json=body, headers=auth).json()["attributes"][0]["label"] == "v1"
+        assert reads == [1] and calls == [1]
+        central.versions[shop_id] = 2
+        assert client.post(path, json=body, headers=auth).json()["attributes"][0]["label"] == "v2"
+        assert reads == [1, 2] and calls == [1, 2]
+    assert cache.get("schema", str(shop_id), "123")[0]["label"] == "unverified"
+    assert cache.get("schema", merchant_cache_scope(shop_id, 1), "123")[0]["label"] == "v1"
+    get_settings.cache_clear()
+
+
+def test_mixed_unverified_and_platform_rejection_are_reported_separately(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setattr("app.modules.category_lookup.api._next", 0)
+    get_settings.cache_clear()
+    shop_a, shop_b = sorted([uuid4(), uuid4()], key=str)
+    central = FakeCentral([shop_a, shop_b])
+    original_read = central.read_session
+
+    def read(shop_id, expected_platform, *, purpose="generic"):
+        if shop_id == shop_a:
+            raise CentralConnectionError("merchant_unverified")
+        return original_read(shop_id, expected_platform, purpose=purpose)
+
+    central.read_session = read
+
+    class Lookup(FakeLookup):
+        def search(self, session, keyword):
+            raise LookupError("platform_rejected", 10008)
+
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: Lookup(settings)
+    with TestClient(app) as client:
+        result = client.post("/api/v1/category-lookup/search", json={"keyword": "勺子"},
+                             headers={"Authorization": "Bearer " + PRODUCT_KEY})
+    assert result.status_code == 503
+    assert "身份未确认" in result.json()["detail"] and "10008" in result.json()["detail"]
+    assert "登录失效" not in result.json()["detail"]
+    get_settings.cache_clear()
+
+
+def test_missing_metadata_never_uses_even_a_new_namespace_cache(settings, monkeypatch):
+    from app.modules.category_lookup.cache import CategoryCache
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    central = FakeCentral([shop_id])
+    central.versions[shop_id] = None
+    cache = CategoryCache(settings.category_cache_file)
+    cache.put("tree", merchant_cache_scope(shop_id, 1), "0", [{"id": "100", "name": "old"}])
+    attempted = []
+
+    def unavailable(shop_id, expected_platform, *, purpose="generic"):
+        attempted.append(shop_id)
+        raise CentralConnectionError("merchant_verification_unavailable")
+
+    central.read_session = unavailable
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: FakeLookup(settings)
+    with TestClient(app) as client:
+        result = client.post("/api/v1/category-lookup/tree", json={"shopId": str(shop_id)},
+                             headers={"Authorization": "Bearer " + PRODUCT_KEY})
+    assert result.status_code == 503 and attempted == [shop_id]
+    assert cache.get("tree", merchant_cache_scope(shop_id, 1), "0")[0]["name"] == "old"
+    get_settings.cache_clear()
+
+
+def test_missing_version_can_still_fetch_with_fresh_merchant_verification(settings, monkeypatch):
+    from app.modules.category_lookup.cache import CategoryCache
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    central, calls = FakeCentral([shop_id]), []
+    central.versions[shop_id] = None
+
+    def verified_read(requested, expected_platform, *, purpose="generic"):
+        assert requested == shop_id and expected_platform == "douyin" and purpose == "merchant"
+        return make_session(shop_id)
+
+    central.read_session = verified_read
+
+    class Lookup(FakeLookup):
+        def category_options(self, session, parent_id):
+            calls.append(session.session_version)
+            return [{"id": "100", "name": "fresh", "isLeaf": True, "enabled": True}]
+
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: Lookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client:
+        path, body = "/api/v1/category-lookup/tree", {"shopId": str(shop_id)}
+        assert client.post(path, json=body, headers=auth).json()["fromCache"] is False
+        assert client.post(path, json=body, headers=auth).json()["fromCache"] is False
+    # A missing protocol marker never authorizes a cache hit, even when this
+    # process previously fetched the same version through a verified Session.
+    assert calls == [1, 1]
+    assert CategoryCache(settings.category_cache_file).get(
+        "tree", merchant_cache_scope(shop_id, 1), "0")[0]["name"] == "fresh"
+    get_settings.cache_clear()
+
+
+def test_concurrent_unverified_checks_are_suppressed_only_for_same_version(settings, monkeypatch):
+    from app.modules.category_lookup import api
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    monkeypatch.setattr(api, "_next", 0)
+    now = [1000.0]
+    monkeypatch.setattr(api, "monotonic", lambda: now[0])
+    get_settings.cache_clear()
+    shop_id = uuid4()
+    central, reads = FakeCentral([shop_id]), []
+    original_read = central.read_session
+    mode = {"value": "merchant_unverified"}
+
+    def read(shop_id, expected_platform, *, purpose="generic"):
+        reads.append(central.versions[shop_id])
+        sleep(0.02)
+        if mode["value"]:
+            raise CentralConnectionError(mode["value"])
+        return original_read(shop_id, expected_platform, purpose=purpose)
+
+    central.read_session = read
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: central
+    app.dependency_overrides[get_lookup] = lambda: FakeLookup(settings)
+    auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=15) as pool:
+        responses = list(pool.map(lambda _: client.post(
+            "/api/v1/category-lookup/search", json={"keyword": "勺子"}, headers=auth), range(15)))
+        assert all(result.status_code == 409 for result in responses)
+        assert reads == [1]
+        now[0] += 31
+        assert client.post("/api/v1/category-lookup/search", json={"keyword": "勺子"}, headers=auth).status_code == 409
+        assert reads == [1, 1]
+        central.versions[shop_id] = 2
+        mode["value"] = None
+        assert client.post("/api/v1/category-lookup/search", json={"keyword": "勺子"}, headers=auth).status_code == 200
+        assert reads == [1, 1, 2]
+        central.versions[shop_id] = 3
+        mode["value"] = "upstream_unavailable"
+        for _ in range(2):
+            assert client.post("/api/v1/category-lookup/search", json={"keyword": "勺子"}, headers=auth).status_code == 503
+        assert reads[-2:] == [3, 3]  # Network errors are never suppressed.
+    get_settings.cache_clear()
 
 
 def test_legacy_schema_cache_is_one_time_miss_and_v3_keeps_controls(settings):
@@ -631,7 +992,7 @@ def test_search_stops_after_each_shop_once_and_does_not_retry_other_failures(set
         auth = {"Authorization": "Bearer " + PRODUCT_KEY}
         response = client.post('/api/v1/category-lookup/search', json={"keyword": "勺子"}, headers=auth)
         assert response.status_code == 502
-        assert "商品页会话未通过抖店验证" in response.json()['detail']
+        assert "抖店暂未接受已授权店铺的类目请求" in response.json()['detail']
         assert attempted == ids
         attempted.clear()
         failure.reason, failure.code = "signer_unavailable", None

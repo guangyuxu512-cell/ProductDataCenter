@@ -9,7 +9,7 @@ from threading import Lock
 from fastapi import HTTPException
 
 from app.modules.central.client import CentralApplicationClient
-from .cache import CacheUnavailable, CategoryCache
+from .cache import CacheUnavailable, CategoryCache, merchant_cache_scope
 from .client import DouyinCategoryClient, LookupError
 
 
@@ -73,11 +73,15 @@ class CategoryResolver:
         self.central = central or CentralApplicationClient(settings)
         self.lookup = lookup or DouyinCategoryClient(settings)
 
-    def cached(self, ids: list[str]) -> list[dict] | None:
+    def cached(self, ids: list[str], shops) -> list[dict] | None:
         try:
-            branches = self.cache.tree_branches(["0", *ids[:-1]])
-            for shop in sorted(branches):
-                if levels := _walk(branches[shop], ids):
+            for shop in shops:
+                if shop.session_version is None:
+                    continue
+                scope = merchant_cache_scope(shop.shop_id, shop.session_version)
+                branches = {parent: self.cache.get("tree", scope, parent)
+                            for parent in ["0", *ids[:-1]]}
+                if levels := _walk(branches, ids):
                     return levels
             return None
         except CacheUnavailable:
@@ -86,60 +90,73 @@ class CategoryResolver:
     def resolve(self, ids: list[str]) -> list[dict]:
         if not ids or len(ids) > 4 or any(not re.fullmatch(r"[0-9]{1,20}", item) or not item.strip("0") for item in ids):
             raise CategoryResolutionError()
-        if levels := self.cached(ids):
-            return levels
-        with _path_locks[hash(tuple(ids)) % len(_path_locks)]:
-            if levels := self.cached(ids):
-                return levels
-            return self._fetch(ids)
-
-    def _fetch(self, ids: list[str]) -> list[dict]:
-        # Imported lazily to avoid coupling the product service to API startup.
-        from .api import _available, _limit, _session
-
+        from .api import _available
         try:
             shops = _available(self.central, self.lookup)
         except HTTPException:
             raise CategoryResolutionError() from None
-        for shop in shops:
-            shop_id = str(shop.shop_id)
-            session = None
-            parent = "0"
-            levels = []
+        if levels := self.cached(ids, shops):
+            return levels
+        with _path_locks[hash(tuple(ids)) % len(_path_locks)]:
+            # Waiting for another resolution may span a Session update or
+            # authorization change; read current metadata again before use.
             try:
-                for identity in ids:
-                    items = self.cache.get("tree", shop_id, parent)
-                    item = _match(items, identity)
-                    if item is None:
-                        with _branch_locks[hash((shop_id, parent)) % len(_branch_locks)]:
-                            items = self.cache.get("tree", shop_id, parent)
-                            item = _match(items, identity)
-                            if item is None:
-                                version = self.cache.tree_version()
-                                probe = self.cache.get("tree_probe", shop_id, parent)
-                                recent = (isinstance(probe, dict) and probe.get("treeVersion") == version
-                                          and isinstance(probe.get("checkedAt"), (int, float))
-                                          and 0 <= time.time() - probe["checkedAt"] < _PROBE_TTL_SECONDS)
-                                if recent:
-                                    break
-                                if session is None:
-                                    session = _session(self.central, shop.shop_id)
-                                with _limit(shop.shop_id):
-                                    items = self.lookup.category_options(session, parent)
-                                self.cache.put("tree", shop_id, parent, items, tree_version=version)
-                                self.cache.put("tree_probe", shop_id, parent,
-                                               {"treeVersion": version, "checkedAt": time.time()})
-                                if self.cache.tree_version() != version:
-                                    raise CategoryResolutionError()
+                shops = _available(self.central, self.lookup)
+            except HTTPException:
+                raise CategoryResolutionError() from None
+            if levels := self.cached(ids, shops):
+                return levels
+            return self._fetch(ids, shops)
+
+    def _fetch(self, ids: list[str], shops) -> list[dict]:
+        # Imported lazily to avoid coupling the product service to API startup.
+        from .api import MerchantIdentityUnverified, _limit, _session
+        for shop in shops:
+            try:
+                with _limit(shop.shop_id):
+                    session = _session(self.central, shop.shop_id, skip_unverified=True,
+                                       version_hint=shop.session_version)
+                    scope = merchant_cache_scope(session.shop_id, session.session_version)
+                    allow_cache = shop.session_version == session.session_version
+                    parent = "0"
+                    levels = []
+                    for identity in ids:
+                        items = self.cache.get("tree", scope, parent) if allow_cache else None
+                        item = _match(items, identity)
+                        if item is None:
+                            with _branch_locks[hash((scope, parent)) % len(_branch_locks)]:
+                                items = self.cache.get("tree", scope, parent) if allow_cache else None
                                 item = _match(items, identity)
-                    if item is None:
-                        break
-                    levels.append(item)
-                    parent = identity
-                if len(levels) == len(ids):
-                    return levels
-            except (CacheUnavailable, HTTPException, LookupError):
+                                if item is None:
+                                    version = self.cache.tree_version(scope)
+                                    probe = self.cache.get("tree_probe", scope, parent) if allow_cache else None
+                                    recent = (isinstance(probe, dict) and probe.get("treeVersion") == version
+                                              and isinstance(probe.get("checkedAt"), (int, float))
+                                              and 0 <= time.time() - probe["checkedAt"] < _PROBE_TTL_SECONDS)
+                                    if recent:
+                                        break
+                                    items = self.lookup.category_options(session, parent)
+                                    self.cache.put("tree", scope, parent, items, tree_version=version)
+                                    self.cache.put("tree_probe", scope, parent,
+                                                   {"treeVersion": version, "checkedAt": time.time()},
+                                                   tree_version=version)
+                                    if self.cache.tree_version(scope) != version:
+                                        raise CategoryResolutionError()
+                                    item = _match(items, identity)
+                        if item is None:
+                            break
+                        levels.append(item)
+                        parent = identity
+                    if len(levels) == len(ids):
+                        return levels
+            except MerchantIdentityUnverified:
                 continue
+            except LookupError as error:
+                if error.reason == "platform_rejected" and error.platform_code == 10008:
+                    continue
+                raise CategoryResolutionError() from None
+            except (CacheUnavailable, HTTPException):
+                raise CategoryResolutionError() from None
         raise CategoryResolutionError()
 
 

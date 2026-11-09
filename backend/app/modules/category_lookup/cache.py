@@ -5,6 +5,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import UUID
 
 
 class CacheUnavailable(Exception):
@@ -12,6 +13,14 @@ class CacheUnavailable(Exception):
 
 
 SCHEMA_FORMAT_VERSION = 3
+
+
+def merchant_cache_scope(shop_id: UUID, session_version: int) -> str:
+    """A versioned namespace never collides with unverified historical rows."""
+    if (not isinstance(shop_id, UUID) or isinstance(session_version, bool)
+            or not isinstance(session_version, int) or session_version <= 0):
+        raise CacheUnavailable()
+    return f"merchant-v1:{shop_id}:{session_version}"
 
 
 class CategoryCache:
@@ -66,42 +75,21 @@ class CategoryCache:
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
 
-    def tree_version(self) -> int:
+    def tree_version(self, shop_id: str) -> int:
         try:
             with self._transaction() as db:
-                return int(db.execute("SELECT version FROM category_cache_meta WHERE name='tree'").fetchone()[0])
+                name = "tree:" + shop_id
+                db.execute("INSERT OR IGNORE INTO category_cache_meta(name, version) VALUES (?, 0)", (name,))
+                return int(db.execute("SELECT version FROM category_cache_meta WHERE name=?", (name,)).fetchone()[0])
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
 
-    def tree_branches(self, parents: list[str]) -> dict[str, dict[str, list]]:
-        """Read cached tree branches grouped by shop, without a platform request."""
-        if not parents:
-            return {}
-        try:
-            placeholders = ",".join("?" for _ in parents)
-            with self._transaction() as db:
-                rows = db.execute(
-                    f"SELECT shop_id, cache_key, payload FROM category_cache "
-                    f"WHERE kind='tree' AND cache_key IN ({placeholders}) ORDER BY shop_id",
-                    tuple(parents),
-                ).fetchall()
-            shops: dict[str, dict[str, list]] = {}
-            for shop, parent, raw in rows:
-                try:
-                    value = json.loads(raw)
-                except (ValueError, TypeError):
-                    continue
-                if isinstance(value, list):
-                    shops.setdefault(shop, {})[parent] = value
-            return shops
-        except (sqlite3.Error, OSError, ValueError, TypeError):
-            raise CacheUnavailable() from None
-
-    def schema_version(self, key: str) -> int:
+    def schema_version(self, shop_id: str, key: str) -> int:
         try:
             with self._transaction() as db:
-                db.execute("INSERT OR IGNORE INTO category_cache_meta(name, version) VALUES (?, 0)", ("schema:" + key,))
-                return int(db.execute("SELECT version FROM category_cache_meta WHERE name=?", ("schema:" + key,)).fetchone()[0])
+                name = "schema:" + shop_id + ":" + key
+                db.execute("INSERT OR IGNORE INTO category_cache_meta(name, version) VALUES (?, 0)", (name,))
+                return int(db.execute("SELECT version FROM category_cache_meta WHERE name=?", (name,)).fetchone()[0])
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
 
@@ -114,19 +102,31 @@ class CategoryCache:
             payload = json.dumps(stored, ensure_ascii=False, separators=(",", ":"))
             with self._transaction() as db:
                 db.execute("BEGIN IMMEDIATE")
+                tree_name = "tree:" + shop_id
+                schema_name = "schema:" + shop_id + ":" + key
                 if refresh_tree:
-                    db.execute("UPDATE category_cache_meta SET version=version+1 WHERE name='tree'")
-                    db.execute("DELETE FROM category_cache WHERE kind IN ('tree', 'tree_probe')")
-                elif kind == 'tree' and tree_version is not None:
-                    current = int(db.execute("SELECT version FROM category_cache_meta WHERE name='tree'").fetchone()[0])
+                    db.execute("INSERT OR IGNORE INTO category_cache_meta(name, version) VALUES (?, 0)", (tree_name,))
+                    current = int(db.execute("SELECT version FROM category_cache_meta WHERE name=?", (tree_name,)).fetchone()[0])
+                    if tree_version is not None and current != tree_version:
+                        return
+                    db.execute("UPDATE category_cache_meta SET version=version+1 WHERE name=?", (tree_name,))
+                    db.execute("DELETE FROM category_cache WHERE shop_id=? AND kind IN ('tree', 'tree_probe')", (shop_id,))
+                elif kind in {'tree', 'tree_probe'} and tree_version is not None:
+                    row = db.execute("SELECT version FROM category_cache_meta WHERE name=?", (tree_name,)).fetchone()
+                    if row is None:
+                        return
+                    current = int(row[0])
                     if current != tree_version:
                         return
                 if refresh_schema:
-                    db.execute("INSERT OR IGNORE INTO category_cache_meta(name, version) VALUES (?, 0)", ("schema:" + key,))
-                    db.execute("UPDATE category_cache_meta SET version=version+1 WHERE name=?", ("schema:" + key,))
-                    db.execute("DELETE FROM category_cache WHERE kind='schema' AND cache_key=?", (key,))
+                    db.execute("INSERT OR IGNORE INTO category_cache_meta(name, version) VALUES (?, 0)", (schema_name,))
+                    current = int(db.execute("SELECT version FROM category_cache_meta WHERE name=?", (schema_name,)).fetchone()[0])
+                    if schema_version is not None and current != schema_version:
+                        return
+                    db.execute("UPDATE category_cache_meta SET version=version+1 WHERE name=?", (schema_name,))
+                    db.execute("DELETE FROM category_cache WHERE kind='schema' AND shop_id=? AND cache_key=?", (shop_id, key))
                 elif kind == 'schema' and schema_version is not None:
-                    row = db.execute("SELECT version FROM category_cache_meta WHERE name=?", ("schema:" + key,)).fetchone()
+                    row = db.execute("SELECT version FROM category_cache_meta WHERE name=?", (schema_name,)).fetchone()
                     if row is None or int(row[0]) != schema_version:
                         return
                 db.execute("""INSERT INTO category_cache(kind,shop_id,cache_key,payload) VALUES (?,?,?,?)

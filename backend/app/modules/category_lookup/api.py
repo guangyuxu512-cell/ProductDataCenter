@@ -1,8 +1,10 @@
 """Read-only category candidates and attribute definitions for the editor."""
 import hashlib
 import json
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from threading import BoundedSemaphore, Lock
+from time import monotonic
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -17,7 +19,7 @@ from app.modules.products.api import get_service
 from app.modules.products.queries import EXACT_PRODUCT_ID_PATTERN
 from app.modules.products.schemas import ProductIds
 from app.modules.products.service import ProductService
-from .cache import CacheUnavailable, CategoryCache
+from .cache import CacheUnavailable, CategoryCache, merchant_cache_scope
 from .client import DouyinCategoryClient, LookupError
 
 router = APIRouter(prefix="/api/v1/category-lookup", tags=["category-lookup"],
@@ -25,6 +27,11 @@ router = APIRouter(prefix="/api/v1/category-lookup", tags=["category-lookup"],
 _lock = Lock()
 _next = 0
 _shop_limits: dict[UUID, BoundedSemaphore] = {}
+_merchant_flight_locks = [Lock() for _ in range(64)]
+_merchant_failures_lock = Lock()
+_merchant_failures: OrderedDict[tuple[UUID, int], float] = OrderedDict()
+_MERCHANT_FAILURE_TTL_SECONDS = 30.0
+_MERCHANT_FAILURE_LIMIT = 512
 
 
 class SearchBody(BaseModel):
@@ -200,16 +207,54 @@ def get_lookup(settings: Annotated[Settings, Depends(get_settings)]) -> DouyinCa
 
 def _shops(central: CentralApplicationClient):
     try:
-        return sorted(eligible_douyin_shops(central.list_shops()), key=lambda shop: str(shop.shop_id))
+        return sorted(eligible_douyin_shops(central.list_shops(purpose="merchant")),
+                      key=lambda shop: str(shop.shop_id))
     except CentralConnectionError:
         raise HTTPException(503, "中控店铺连接不可用") from None
 
 
-def _session(central, shop_id):
-    try:
-        return central.read_session(shop_id, expected_platform="douyin")
-    except CentralConnectionError:
-        raise HTTPException(503, "店铺登录状态不可用") from None
+class MerchantIdentityUnverified(Exception):
+    pass
+
+
+def _unverified(skip_unverified):
+    if skip_unverified:
+        raise MerchantIdentityUnverified() from None
+    raise HTTPException(409, "该店铺的商家身份尚未确认") from None
+
+
+def _session(central, shop_id, *, skip_unverified=False, version_hint=None):
+    key = ((shop_id, version_hint) if isinstance(shop_id, UUID)
+           and isinstance(version_hint, int) and not isinstance(version_hint, bool)
+           and version_hint > 0 else None)
+
+    def read():
+        try:
+            return central.read_session(shop_id, expected_platform="douyin", purpose="merchant")
+        except CentralConnectionError as error:
+            if error.reason == "merchant_unverified":
+                if key is not None:
+                    with _merchant_failures_lock:
+                        _merchant_failures[key] = monotonic() + _MERCHANT_FAILURE_TTL_SECONDS
+                        _merchant_failures.move_to_end(key)
+                        while len(_merchant_failures) > _MERCHANT_FAILURE_LIMIT:
+                            _merchant_failures.popitem(last=False)
+                _unverified(skip_unverified)
+            raise HTTPException(503, "店铺商家身份验证暂不可用") from None
+
+    if key is None:
+        return read()
+    # Single flight only for the same authorized shop/version. The bounded map
+    # contains a short-lived negative result, never credentials or raw errors.
+    with _merchant_flight_locks[hash(key) % len(_merchant_flight_locks)]:
+        with _merchant_failures_lock:
+            until = _merchant_failures.get(key)
+            if until is not None and until <= monotonic():
+                del _merchant_failures[key]
+                until = None
+        if until is not None:
+            _unverified(skip_unverified)
+        return read()
 
 
 def _limit(shop_id: UUID):
@@ -221,7 +266,7 @@ def _fail(error: LookupError):
     messages = {"not_configured": "类目查询尚未启用", "invalid_configuration": "类目查询配置不可用",
                 "session_unavailable": "店铺登录状态不可用", "signer_unavailable": "签名服务不可用",
                 "platform_unavailable": "抖店接口暂不可用", "platform_rejected": "抖店未接受类目请求",
-                "product_session_unavailable": "已授权店铺的商品页会话未通过抖店验证，请检查中控店铺登录状态",
+                "product_session_unavailable": "抖店暂未接受已授权店铺的类目请求",
                 "invalid_schema": "抖店属性返回格式不支持", "invalid_tree": "抖店类目树返回格式不支持",
                 "invalid_response": "抖店类目返回格式不支持"}
     suffix = f"（代码 {error.platform_code}）" if error.platform_code is not None else ""
@@ -245,25 +290,36 @@ def _available(central, lookup):
     return shops
 
 
-def _auto_shop(central: CentralApplicationClient, lookup: DouyinCategoryClient, operation):
-    shops = _available(central, lookup)
+def _auto_shop(central: CentralApplicationClient, lookup: DouyinCategoryClient, operation, *, shops=None):
+    shops = _available(central, lookup) if shops is None else shops
     global _next
     with _lock:
         start = _next % len(shops)
         _next += 1
-    # A shop can be valid for Compass but not yet have a usable product-page
-    # session. Try each authorized shop at most once on the observed login
-    # rejection; do not retry signing, network, or other platform failures.
+    # Only an explicit identity-unverified response or the existing observed
+    # platform 10008 condition may advance to another authorized shop.
+    unverified = False
+    platform_rejected = False
     for shop in shops[start:] + shops[:start]:
         with _limit(shop.shop_id):
-            session = _session(central, shop.shop_id)
+            try:
+                session = _session(central, shop.shop_id, skip_unverified=True,
+                                   version_hint=shop.session_version)
+            except MerchantIdentityUnverified:
+                unverified = True
+                continue
             try:
                 result = operation(session)
             except LookupError as error:
                 if error.reason == "platform_rejected" and error.platform_code == 10008:
+                    platform_rejected = True
                     continue
                 _fail(error)
         return shop.shop_id, result
+    if unverified and platform_rejected:
+        raise HTTPException(503, "已授权店铺中存在商家身份未确认，或抖店暂未接受类目请求（代码 10008）")
+    if unverified:
+        raise HTTPException(409, "已授权店铺的商家身份尚未确认")
     _fail(LookupError("product_session_unavailable", 10008))
 
 
@@ -281,25 +337,39 @@ def category_tree(body: TreeBody, response: Response,
         raise HTTPException(422, "请从根类目更新类目缓存")
     cache = CategoryCache(lookup.settings.category_cache_file)
     candidates = [shop for shop in shops if body.shopId is None or shop.shop_id == body.shopId]
+    versions = {shop.shop_id: shop.session_version for shop in candidates}
     if not body.refresh:
         for shop in candidates:
-            items = _cache_call(cache.get, "tree", str(shop.shop_id), body.parentId)
+            if shop.session_version is None:
+                continue
+            scope = _cache_call(merchant_cache_scope, shop.shop_id, shop.session_version)
+            items = _cache_call(cache.get, "tree", scope, body.parentId)
             if items is not None:
                 return TreeResponse(shopId=shop.shop_id, parentId=body.parentId, items=items, fromCache=True)
-    version = _cache_call(cache.tree_version)
+
+    def fetch(session):
+        scope = _cache_call(merchant_cache_scope, session.shop_id, session.session_version)
+        if not body.refresh and versions.get(session.shop_id) == session.session_version:
+            items = _cache_call(cache.get, "tree", scope, body.parentId)
+            if items is not None:
+                return items, True
+        version = _cache_call(cache.tree_version, scope)
+        items = lookup.category_options(session, body.parentId)
+        _cache_call(cache.put, "tree", scope, body.parentId, items,
+                    tree_version=version, refresh_tree=body.refresh)
+        return items, False
+
     if body.shopId:
         with _limit(body.shopId):
-            session = _session(central, body.shopId)
+            session = _session(central, body.shopId, version_hint=candidates[0].session_version)
             try:
-                items = lookup.category_options(session, body.parentId)
+                items, from_cache = fetch(session)
             except LookupError as error:
                 _fail(error)
         shop_id = body.shopId
     else:
-        shop_id, items = _auto_shop(central, lookup, lambda session: lookup.category_options(session, body.parentId))
-    _cache_call(cache.put, "tree", str(shop_id), body.parentId, items,
-                tree_version=version, refresh_tree=body.refresh)
-    return TreeResponse(shopId=shop_id, parentId=body.parentId, items=items, fromCache=False)
+        shop_id, (items, from_cache) = _auto_shop(central, lookup, fetch, shops=shops)
+    return TreeResponse(shopId=shop_id, parentId=body.parentId, items=items, fromCache=from_cache)
 
 
 @router.post("/resolve-products")
@@ -409,17 +479,29 @@ def schema_auto(body: AutoSchemaBody, response: Response,
     response.headers["Cache-Control"] = "no-store"
     shops = _available(central, lookup)
     cache = CategoryCache(lookup.settings.category_cache_file)
+    versions = {shop.shop_id: shop.session_version for shop in shops}
     if not body.refresh:
         for shop in shops:
-            attributes = _cache_call(cache.get, "schema", str(shop.shop_id), body.categoryId)
+            if shop.session_version is None:
+                continue
+            scope = _cache_call(merchant_cache_scope, shop.shop_id, shop.session_version)
+            attributes = _cache_call(cache.get, "schema", scope, body.categoryId)
             if attributes is not None:
                 return AutoSchemaResponse(shopId=shop.shop_id, categoryId=body.categoryId, attributes=attributes)
-    version = _cache_call(cache.schema_version, body.categoryId)
-    shop_id, attributes = _auto_shop(
-        central, lookup, lambda session: lookup.schema(session, body.categoryId, body.title),
-    )
-    _cache_call(cache.put, "schema", str(shop_id), body.categoryId, attributes,
-                refresh_schema=body.refresh, schema_version=version)
+
+    def fetch(session):
+        scope = _cache_call(merchant_cache_scope, session.shop_id, session.session_version)
+        if not body.refresh and versions.get(session.shop_id) == session.session_version:
+            attributes = _cache_call(cache.get, "schema", scope, body.categoryId)
+            if attributes is not None:
+                return attributes
+        version = _cache_call(cache.schema_version, scope, body.categoryId)
+        attributes = lookup.schema(session, body.categoryId, body.title)
+        _cache_call(cache.put, "schema", scope, body.categoryId, attributes,
+                    refresh_schema=body.refresh, schema_version=version)
+        return attributes
+
+    shop_id, attributes = _auto_shop(central, lookup, fetch, shops=shops)
     return AutoSchemaResponse(shopId=shop_id, categoryId=body.categoryId, attributes=attributes)
 
 
@@ -430,20 +512,27 @@ def schema(body: SchemaBody, response: Response,
     response.headers["Cache-Control"] = "no-store"
     if not lookup.settings.douyin_category_lookup_enabled:
         _fail(LookupError("not_configured"))
-    if not any(shop.shop_id == body.shopId for shop in _shops(central)):
+    shop = next((shop for shop in _shops(central) if shop.shop_id == body.shopId), None)
+    if shop is None:
         raise HTTPException(403, "店铺未授权或登录状态不可用")
     cache = CategoryCache(lookup.settings.category_cache_file)
-    if not body.refresh:
-        attributes = _cache_call(cache.get, "schema", str(body.shopId), body.categoryId)
+    if not body.refresh and shop.session_version is not None:
+        scope = _cache_call(merchant_cache_scope, shop.shop_id, shop.session_version)
+        attributes = _cache_call(cache.get, "schema", scope, body.categoryId)
         if attributes is not None:
             return SchemaResponse(categoryId=body.categoryId, attributes=attributes)
-    version = _cache_call(cache.schema_version, body.categoryId)
     with _limit(body.shopId):
-        session = _session(central, body.shopId)
+        session = _session(central, body.shopId, version_hint=shop.session_version)
+        scope = _cache_call(merchant_cache_scope, session.shop_id, session.session_version)
+        if not body.refresh and shop.session_version == session.session_version:
+            attributes = _cache_call(cache.get, "schema", scope, body.categoryId)
+            if attributes is not None:
+                return SchemaResponse(categoryId=body.categoryId, attributes=attributes)
+        version = _cache_call(cache.schema_version, scope, body.categoryId)
         try:
             attributes = lookup.schema(session, body.categoryId, body.title)
         except LookupError as error:
             _fail(error)
-    _cache_call(cache.put, "schema", str(body.shopId), body.categoryId, attributes,
+    _cache_call(cache.put, "schema", scope, body.categoryId, attributes,
                 refresh_schema=body.refresh, schema_version=version)
     return SchemaResponse(categoryId=body.categoryId, attributes=attributes)

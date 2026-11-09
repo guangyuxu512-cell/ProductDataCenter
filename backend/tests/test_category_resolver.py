@@ -8,7 +8,7 @@ import pytest
 
 from app.core.config import Settings
 from app.modules.category_lookup import api
-from app.modules.category_lookup.cache import CategoryCache
+from app.modules.category_lookup.cache import CategoryCache, merchant_cache_scope
 from app.modules.category_lookup.resolver import (
     CategoryResolutionError, CategoryResolver, category_ids, enrich_uu,
 )
@@ -24,9 +24,10 @@ BRANCHES = {parent: [{"id": identity, "name": name, "isLeaf": index == 2, "enabl
 def setup(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, category_cache_file=tmp_path / "tree.sqlite3",
                         douyin_category_lookup_enabled=True)
-    shop = SimpleNamespace(shop_id=uuid4())
+    shop = SimpleNamespace(shop_id=uuid4(), session_version=1)
     monkeypatch.setattr(api, "_available", lambda central, lookup: [shop])
-    monkeypatch.setattr(api, "_session", lambda central, shop_id: object())
+    monkeypatch.setattr(api, "_session", lambda central, shop_id, **kwargs:
+                        SimpleNamespace(shop_id=shop_id, session_version=shop.session_version))
     monkeypatch.setattr(api, "_limit", lambda shop_id: nullcontext())
     calls = []
 
@@ -47,7 +48,8 @@ def test_cache_miss_fetches_exact_parents_then_reuses_persistent_cache(setup):
     calls.clear()
     assert resolver.resolve(IDS) == expected
     assert calls == []
-    assert CategoryCache(resolver.settings.category_cache_file).get("tree", str(shop.shop_id), IDS[1]) == BRANCHES[IDS[1]]
+    assert CategoryCache(resolver.settings.category_cache_file).get(
+        "tree", merchant_cache_scope(shop.shop_id, 1), IDS[1]) == BRANCHES[IDS[1]]
 
 
 def test_concurrent_requests_share_one_platform_lookup(setup):
@@ -61,17 +63,17 @@ def test_concurrent_requests_share_one_platform_lookup(setup):
 def test_cached_branches_must_belong_to_same_shop(setup):
     resolver, shop, calls = setup
     cache = resolver.cache
-    cache.put("tree", str(shop.shop_id), "0", BRANCHES["0"])
+    cache.put("tree", merchant_cache_scope(shop.shop_id, 1), "0", BRANCHES["0"])
     for parent in IDS[:2]:
-        cache.put("tree", str(uuid4()), parent, BRANCHES[parent])
-    assert resolver.cached(IDS) is None
+        cache.put("tree", merchant_cache_scope(uuid4(), 1), parent, BRANCHES[parent])
+    assert resolver.cached(IDS, [shop]) is None
     assert resolver.resolve(IDS)[-1]["name"] == NAMES[-1]
     assert calls == IDS[:2]
 
 
 def test_missing_id_refreshes_old_branch_once_and_does_not_guess(setup):
     resolver, shop, calls = setup
-    resolver.cache.put("tree", str(shop.shop_id), "0", [])
+    resolver.cache.put("tree", merchant_cache_scope(shop.shop_id, 1), "0", [])
     assert resolver.resolve(IDS)[-1]["name"] == NAMES[-1]
     assert calls == ["0", IDS[0], IDS[1]]
     missing = [IDS[0], IDS[1], "9999999999"]
@@ -88,10 +90,40 @@ def test_missing_id_refreshes_old_branch_once_and_does_not_guess(setup):
 def test_manual_tree_refresh_clears_negative_probe(setup):
     resolver, shop, _ = setup
     resolver.resolve(IDS)
-    cache, shop_id = resolver.cache, str(shop.shop_id)
+    cache, shop_id = resolver.cache, merchant_cache_scope(shop.shop_id, 1)
     assert cache.get("tree_probe", shop_id, "0") is not None
     cache.put("tree", shop_id, "0", BRANCHES["0"], refresh_tree=True)
     assert cache.get("tree_probe", shop_id, "0") is None
+
+
+def test_session_version_change_requires_one_new_verified_resolution(setup):
+    resolver, shop, calls = setup
+    assert resolver.resolve(IDS)[-1]["name"] == NAMES[-1]
+    assert calls == ["0", IDS[0], IDS[1]]
+    calls.clear()
+    assert resolver.resolve(IDS)[-1]["name"] == NAMES[-1]
+    assert calls == []
+    shop.session_version = 2
+    assert resolver.resolve(IDS)[-1]["name"] == NAMES[-1]
+    assert calls == ["0", IDS[0], IDS[1]]
+    assert resolver.cache.get("tree", merchant_cache_scope(shop.shop_id, 1), "0") == BRANCHES["0"]
+    assert resolver.cache.get("tree", merchant_cache_scope(shop.shop_id, 2), "0") == BRANCHES["0"]
+
+
+def test_legacy_and_other_shop_cache_cannot_bypass_unavailable_verification(setup, monkeypatch):
+    from fastapi import HTTPException
+
+    resolver, shop, calls = setup
+    other = uuid4()
+    for parent in ["0", *IDS[:-1]]:
+        resolver.cache.put("tree", str(shop.shop_id), parent, BRANCHES[parent])
+        resolver.cache.put("tree", merchant_cache_scope(other, 1), parent, BRANCHES[parent])
+    monkeypatch.setattr(api, "_session", lambda *args, **kwargs: (_ for _ in ()).throw(
+        HTTPException(503, "身份验证暂不可用")))
+    with pytest.raises(CategoryResolutionError):
+        resolver.resolve(IDS)
+    assert calls == []
+    assert resolver.cache.get("tree", str(shop.shop_id), "0") == BRANCHES["0"]
 
 
 @pytest.mark.parametrize("values", [

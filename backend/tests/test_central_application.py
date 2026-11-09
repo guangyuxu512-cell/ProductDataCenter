@@ -68,6 +68,68 @@ def test_contract_reads_shop_list_and_one_session_without_worker_or_secret_repr(
     assert len(seen) == 2 and all("/internal/applications/v1/shops" in url for url in seen)
 
 
+def test_merchant_session_requires_explicit_purpose_and_verified_response(configured):
+    shop_id = uuid4()
+
+    def handler(request):
+        assert request.headers["X-Session-Purpose"] == "merchant"
+        return httpx.Response(200, json=session(shop_id), headers={
+            "Cache-Control": "no-store", "X-Merchant-Identity-Verified": "1",
+        })
+
+    result = mock_client(configured, handler).read_session(shop_id, "douyin", purpose="merchant")
+    assert result.shop_id == shop_id and result.session_version == 2
+    assert COOKIE_VALUE not in repr(result)
+
+
+@pytest.mark.parametrize("status,body,headers,reason", [
+    (200, {}, {"Cache-Control": "no-store"}, "merchant_verification_unavailable"),
+    (200, {}, {"Cache-Control": "no-store", "X-Merchant-Identity-Verified": "true"},
+     "merchant_verification_unavailable"),
+    (409, {"code": "APPLICATION_MERCHANT_IDENTITY_UNVERIFIED"}, {}, "merchant_unverified"),
+    (409, {"code": "OTHER_CONFLICT"}, {}, "upstream_unavailable"),
+    (503, {"code": "APPLICATION_MERCHANT_IDENTITY_UNVERIFIED"}, {}, "upstream_unavailable"),
+    (401, {"code": "APPLICATION_MERCHANT_IDENTITY_UNVERIFIED"}, {}, "authentication_failed"),
+])
+def test_merchant_failure_only_accepts_exact_unverified_contract(configured, status, body, headers, reason):
+    shop_id = uuid4()
+    payload = session(shop_id) if status == 200 else body
+    client = mock_client(configured, lambda request: httpx.Response(status, json=payload, headers=headers))
+    with pytest.raises(CentralConnectionError) as error:
+        client.read_session(shop_id, "douyin", purpose="merchant")
+    assert error.value.reason == reason
+    assert COOKIE_VALUE not in str(error.value) and APPLICATION_TOKEN not in str(error.value)
+
+
+def test_merchant_shop_versions_require_metadata_protocol_marker(configured):
+    shop_id = uuid4()
+    marker = {"Cache-Control": "no-store", "X-Session-Metadata-Version": "1"}
+
+    def client_for(headers):
+        def handler(request):
+            assert request.headers["X-Session-Purpose"] == "merchant"
+            return httpx.Response(200, json=[{**shop(shop_id), "session_version": 7}], headers=headers)
+        return mock_client(configured, handler)
+
+    assert client_for(marker).list_shops(purpose="merchant")[0].session_version == 7
+    assert client_for({"Cache-Control": "no-store"}).list_shops(purpose="merchant")[0].session_version is None
+    assert client_for({"Cache-Control": "no-store", "X-Session-Metadata-Version": "2"}).list_shops(
+        purpose="merchant")[0].session_version is None
+    with pytest.raises(CentralConnectionError, match="invalid_response"):
+        client_for({"X-Session-Metadata-Version": "1"}).list_shops(purpose="merchant")
+
+
+@pytest.mark.parametrize("version", [0, -1, True, "1"])
+def test_merchant_shop_version_is_strictly_positive_integer(configured, version):
+    shop_id = uuid4()
+    client = mock_client(configured, lambda request: httpx.Response(
+        200, json=[{**shop(shop_id), "session_version": version}],
+        headers={"Cache-Control": "no-store", "X-Session-Metadata-Version": "1"},
+    ))
+    with pytest.raises(CentralConnectionError, match="invalid_response"):
+        client.list_shops(purpose="merchant")
+
+
 def test_session_identity_platform_and_cache_policy_are_checked(configured):
     shop_id = uuid4()
     for payload, headers in [
