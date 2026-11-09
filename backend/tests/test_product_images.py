@@ -29,8 +29,9 @@ def test_upload_url_is_public_and_is_preserved_in_the_package(tmp_path, monkeypa
         assert url.startswith('https://images.example.test/rpa/v1/product-images/')
         # A remote browser, the platform, or an RPA image downloader can read
         # the exact URL without receiving the administrative token.
-        image = client.get(urlsplit(url).path)
+        image = client.get(urlsplit(url).path, headers={'Origin': 'http://product-library.example.test'})
         assert image.status_code == 200 and image.content == PNG and image.headers['content-type'] == 'image/png'
+        assert image.headers['access-control-allow-origin'] == '*'
         package, _ = manual_package('手动商品')
         spec_id = package['spec_detail_value']['value'][0]['spec_values'][0]['id']
         edit = ProductEdit(expectedVersion='a' * 64, mainImages=[url], detailImages=[url],

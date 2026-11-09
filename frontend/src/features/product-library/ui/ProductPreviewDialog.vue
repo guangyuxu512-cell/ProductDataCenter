@@ -8,6 +8,7 @@ import { PlatformDisplay } from '@/entities/platform'
 import { ErrorState, LoadingState } from '@/shared/components'
 import { AppButton, AppDialog, AppInput, AppSelect, AppTable, AppTabs } from '@/shared/ui'
 import { copyText } from '@/shared/utils/copy-text'
+import { useImagePreviewToolbar } from '@/shared/utils/image-preview-toolbar'
 import { fetchCategoryAttributes, fetchOriginalCategoryAttributes, predictManualCategory, predictProductCategory,
   type CategoryAttribute, type CategoryTreeItem, type PredictedCategory } from '../api/category-lookup'
 import { createManualProduct, fetchEditSnapshot, saveProduct, uploadProductImage, type EditSnapshot, type ProductPatch, type SpecGroup } from '../api/products'
@@ -100,6 +101,7 @@ const selectedParts = ref<CategoryTreeItem[] | null>(null)
 const attributeInputs = ref<Record<string, ProductAttributeValue[]>>({})
 const touchedAttributes = ref<string[]>([])
 const imagePreviewSource = ref('')
+const renderPreviewToolbar = useImagePreviewToolbar(() => imagePreviewSource.value)
 const specInputMode = ref<'group' | 'value' | null>(null)
 const specInputIndex = ref(-1)
 const specInputName = ref('')
@@ -1179,7 +1181,8 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
       </NFormItem>
     </div>
   </AppDialog>
-  <NImagePreview :show="!!imagePreviewSource" :src="imagePreviewSource" @update:show="closeImagePreview" />
+  <NImagePreview :show="!!imagePreviewSource" :src="imagePreviewSource" :render-toolbar="renderPreviewToolbar"
+    @update:show="closeImagePreview" />
 </template>
 
 <style scoped>

@@ -3,6 +3,7 @@ import { NConfigProvider, NImage, NText } from 'naive-ui'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { AppButton, createListDensityTheme } from '@/shared/ui'
 import type { ListDensity } from '@/shared/ui'
+import { useImagePreviewToolbar } from '@/shared/utils/image-preview-toolbar'
 import { thumbnailImageUrl } from '../model/thumbnail-image-url'
 
 // Shared source: b364a89a9955ffe4aae1c3fb6dbfcabfd0dedf8f.
@@ -24,6 +25,7 @@ const displaySrc = computed(() => {
   if (!props.src || useOriginal.value || props.size !== 'thumbnail') return props.src
   return thumbnailImageUrl(props.src)
 })
+const renderPreviewToolbar = useImagePreviewToolbar(() => props.src)
 // Use the actual internal scroll area so the 120px margin can prefetch its
 // next rows. When observers are unavailable, use native lazy loading instead.
 const observerOptions = computed<IntersectionObserverInit | undefined>(() =>
@@ -97,6 +99,7 @@ function onImageError(event: Event) {
         :key="`${displaySrc}:${revision}`"
         :src="displaySrc ?? undefined"
         :preview-src="src ?? undefined"
+        :render-toolbar="renderPreviewToolbar"
         :alt="title"
         object-fit="contain"
         lazy
