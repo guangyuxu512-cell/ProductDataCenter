@@ -25,7 +25,9 @@ export function useImagePreviewToolbar(source: () => string | null | undefined) 
     if (!url || downloading) return
     downloading = true
     try {
-      const response = await fetch(url, { credentials: 'same-origin', referrerPolicy: 'no-referrer' })
+      // Existing uploaded images can be cached without the new CORS header.
+      // Refresh the response when the user explicitly downloads the image.
+      const response = await fetch(url, { credentials: 'same-origin', referrerPolicy: 'no-referrer', cache: 'reload' })
       if (!response.ok) throw new Error('image request failed')
       const image = await response.blob()
       const type = image.type.toLowerCase().split(';', 1)[0].trim()
