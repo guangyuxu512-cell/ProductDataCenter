@@ -39,6 +39,29 @@ def main():
         data_mount = next(item for item in api["volumes"] if item["target"] == "/data")
         assert data_mount["read_only"] and not data_mount.get("bind", {}).get("create_host_path", False)
         assert api["read_only"] and api["environment"]["BACKEND_ENABLE_PRODUCT_WRITES"] == "false"
+
+        # Render the real migration + central overlays without starting services.
+        # An inherited host switch must not affect the default-off assertion.
+        env.update({"CENTRAL_APPLICATION_BASE_URL": "https://control-center.invalid",
+                    "CENTRAL_APPLICATION_TOKEN_FILE": str(fake)})
+        env.pop("BACKEND_WORKER_PRECHECK_ENABLED", None)
+        def central_environment():
+            rendered = subprocess.run(
+                ["docker", "compose", "-f", str(root / "deploy/compose.server-preparation.yaml"),
+                 "-f", str(root / "deploy/compose.central.yaml"), "config", "--format", "json"],
+                env=env, check=True, capture_output=True, text=True,
+            )
+            return json.loads(rendered.stdout)["services"]["product-api"]["environment"]
+        default = central_environment()
+        assert default["BACKEND_CENTRAL_APPLICATION_ENABLED"] == "true"
+        assert default["BACKEND_WORKER_PRECHECK_ENABLED"] == "false"
+        env["BACKEND_WORKER_PRECHECK_ENABLED"] = "true"
+        enabled = central_environment()
+        assert enabled["BACKEND_WORKER_PRECHECK_ENABLED"] == "true"
+        assert {k: v for k, v in default.items() if k != "BACKEND_WORKER_PRECHECK_ENABLED"} == {
+            k: v for k, v in enabled.items() if k != "BACKEND_WORKER_PRECHECK_ENABLED"}
+        env.pop("BACKEND_WORKER_PRECHECK_ENABLED")
+
         # `compose config` escapes dollar signs so its output can be reused as
         # Compose input; a container receives their single-dollar form.
         command = db["command"][0].replace("$$", "$")
