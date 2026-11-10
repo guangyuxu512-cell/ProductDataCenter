@@ -9,6 +9,7 @@ from app.core.database.session import get_database_engine
 from app.core.security.access import require_api_access, require_group_writes, require_product_writes
 from .repository import ProductRepository
 from .service import ProductService
+from .errors import ProductNotFound
 from .schemas import (AssignGroup, AssignGroupResponse, Capabilities, DeleteGroupResponse,
                       GroupName, GroupResponse, GroupsRead, ManualProductCreate, ProductDetail, ProductEdit, ProductIds, ProductPage)
 
@@ -97,6 +98,16 @@ def save_product(product_id: str, body: ProductEdit, service: Service):
 
 
 @router.get("/products/{product_id}/images/{kind}/{position}")
-def image(product_id: str, kind: Literal["main", "detail", "sku"], position: int, service: Service):
-    return FileResponse(service.image_file(product_id, kind, position),
-                        headers={"Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff"})
+async def image(product_id: str, kind: Literal["main", "detail", "sku"], position: int, service: Service):
+    try:
+        path = service.image_file(product_id, kind, position)
+    except ProductNotFound:
+        settings = service.settings
+        if not (settings.image_remote_upload_origin and settings.image_remote_upload_token_file):
+            raise
+        row = service.repository.image(product_id, kind, position)
+        if not row or not row.get("rel_path"):
+            raise
+        from app.modules.product_images.remote_upload import read_source_image_from_nas
+        return await read_source_image_from_nas(settings, row["rel_path"])
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff"})
