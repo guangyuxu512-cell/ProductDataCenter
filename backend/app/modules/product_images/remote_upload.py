@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 _PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "100.64.0.0/10",
@@ -52,6 +53,48 @@ def _client() -> httpx.AsyncClient:
     # Do not allow proxy environment variables or redirects to expose the
     # storage-only credential to a third party.
     return httpx.AsyncClient(timeout=httpx.Timeout(120, connect=5), follow_redirects=False, trust_env=False)
+
+
+async def read_source_image_from_nas(settings, relative_path: str):
+    """Read an existing collection image without mounting NAS files on the server."""
+    origin = _origin(settings.image_remote_upload_origin)
+    token = _credential(settings.image_remote_upload_token_file)
+    if any(value and compare_digest(token.encode(), value.encode())
+           for value in (settings.configured_token(), settings.configured_rpa_token())):
+        raise HTTPException(503, "NAS 图片存储凭据必须独立")
+    client = _client()
+    response = None
+    try:
+        request = client.build_request("POST", origin + "/internal/source-image",
+                                       headers={"Authorization": "Bearer " + token}, json={"path": relative_path})
+        response = await client.send(request, stream=True)
+        if response.status_code == 404:
+            raise HTTPException(404, "本地图片不存在")
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+        if response.status_code != 200 or content_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
+            raise HTTPException(503, "NAS 图片读取失败")
+
+        async def body():
+            try:
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+            finally:
+                await response.aclose()
+                await client.aclose()
+
+        return StreamingResponse(body(), media_type=content_type, headers={
+            "Cache-Control": "private, max-age=60", "X-Content-Type-Options": "nosniff",
+        })
+    except HTTPException:
+        if response is not None:
+            await response.aclose()
+        await client.aclose()
+        raise
+    except (OSError, httpx.HTTPError):
+        if response is not None:
+            await response.aclose()
+        await client.aclose()
+        raise HTTPException(503, "NAS 图片读取失败") from None
 
 
 async def upload_to_nas(request: Request, settings, public_base: str, media_type: str, image_format):

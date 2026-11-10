@@ -8,6 +8,8 @@ from app.core.config import get_settings
 from app.image_storage import create_image_storage_application
 from app.main import create_application
 from app.modules.product_images import remote_upload
+from app.modules.products.api import get_service
+from app.modules.products.errors import ProductNotFound
 
 
 ADMIN = "isolated-test-admin-value"
@@ -40,6 +42,75 @@ def use_transport(monkeypatch, handler):
     monkeypatch.setattr(remote_upload, "_client", lambda: httpx.AsyncClient(
         transport=transport, follow_redirects=False, trust_env=False,
     ))
+
+
+def test_nas_source_image_read_is_authenticated_and_confined(tmp_path, monkeypatch):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "photo.png").write_bytes(PNG)
+    (root / "not-image.txt").write_bytes(PNG)
+    (tmp_path / "outside.png").write_bytes(PNG)
+    monkeypatch.setenv("BACKEND_API_TOKEN", STORAGE)
+    monkeypatch.setenv("BACKEND_DATA_ROOT", str(root))
+    headers = {"Authorization": "Bearer " + STORAGE}
+    with TestClient(create_image_storage_application()) as client:
+        assert client.post("/internal/source-image", json={"path": "photo.png"}).status_code == 401
+        result = client.post("/internal/source-image", json={"path": "photo.png"}, headers=headers)
+        assert result.status_code == 200 and result.content == PNG
+        assert client.post("/internal/source-image", json={"path": "../outside.png"}, headers=headers).status_code == 404
+        assert client.post("/internal/source-image", json={"path": "not-image.txt"}, headers=headers).status_code == 404
+
+
+def test_missing_local_image_streams_from_private_nas(tmp_path, monkeypatch):
+    configure(monkeypatch, tmp_path)
+    calls = []
+
+    def handler(request):
+        calls.append((request.url.path, request.headers.get("authorization"), request.content))
+        return httpx.Response(200, content=PNG, headers={"Content-Type": "image/png"})
+
+    use_transport(monkeypatch, handler)
+
+    class Repository:
+        def image(self, product_id, kind, position):
+            return {"rel_path": "source/photo.png"}
+
+    class Service:
+        settings = get_settings()
+        repository = Repository()
+
+        def image_file(self, product_id, kind, position):
+            raise ProductNotFound()
+
+    app = create_application()
+    app.dependency_overrides[get_service] = lambda: Service()
+    with TestClient(app) as client:
+        response = client.get("/api/v1/products/123/images/main/0", headers={"Authorization": "Bearer " + ADMIN})
+    assert response.status_code == 200 and response.content == PNG
+    assert calls == [("/internal/source-image", "Bearer " + STORAGE, b'{"path":"source/photo.png"}')]
+
+
+@pytest.mark.parametrize("upstream,expected", [(404, 404), (401, 503), (302, 503), (500, 503)])
+def test_remote_source_failure_is_not_reported_as_an_image(tmp_path, monkeypatch, upstream, expected):
+    configure(monkeypatch, tmp_path)
+    use_transport(monkeypatch, lambda request: httpx.Response(upstream))
+
+    class Repository:
+        def image(self, product_id, kind, position):
+            return {"rel_path": "source/photo.png"}
+
+    class Service:
+        settings = get_settings()
+        repository = Repository()
+
+        def image_file(self, product_id, kind, position):
+            raise ProductNotFound()
+
+    app = create_application()
+    app.dependency_overrides[get_service] = lambda: Service()
+    with TestClient(app) as client:
+        result = client.get("/api/v1/products/123/images/main/0", headers={"Authorization": "Bearer " + ADMIN})
+    assert result.status_code == expected
 
 
 def test_upload_is_authenticated_forwarded_and_returns_nas_public_url(tmp_path, monkeypatch):
