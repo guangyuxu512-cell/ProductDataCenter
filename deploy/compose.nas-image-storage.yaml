@@ -1,0 +1,29 @@
+# Run the image-only application on NAS. Bind only to NAS loopback; the
+# existing Tailnet path is verified separately before production cutover.
+services:
+  product-image-storage:
+    image: ${PRODUCT_IMAGE_STORAGE_IMAGE:?existing image with image_storage app required}
+    pull_policy: never
+    restart: unless-stopped
+    user: '1026:100'
+    read_only: true
+    command: ["uvicorn", "app.image_storage:app", "--host", "0.0.0.0", "--port", "8180"]
+    environment:
+      BACKEND_API_TOKEN_FILE: /run/secrets/image_storage_token
+      BACKEND_ENABLE_PRODUCT_WRITES: 'true'
+      BACKEND_IMAGE_STORAGE_DIR: /product-images
+      BACKEND_IMAGE_PUBLIC_BASE_URL: ${PRODUCT_IMAGE_PUBLIC_BASE_URL:?existing public image origin required}
+    volumes:
+      - ${PRODUCT_IMAGE_STORAGE_DIR:?existing dedicated NAS image directory required}:/product-images:rw
+    secrets: [image_storage_token]
+    ports:
+      - '127.0.0.1:${PRODUCT_IMAGE_STORAGE_PORT:?dedicated port required}:8180'
+    healthcheck:
+      test: ['CMD', 'python', '-c', 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8180/health", timeout=3)']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+secrets:
+  image_storage_token:
+    file: ${PRODUCT_IMAGE_STORAGE_TOKEN_FILE:?dedicated image-only credential file required}

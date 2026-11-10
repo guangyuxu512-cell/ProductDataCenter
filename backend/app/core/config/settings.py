@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # URL is configured explicitly; the incoming Host header is never trusted.
     image_storage_dir: Path | None = None
     image_public_base_url: str | None = None
+    # Optional private image-only service on NAS. If either setting is present,
+    # uploads must use the remote service and never fall back to local storage.
+    image_remote_upload_origin: str | None = Field(default=None, repr=False)
+    image_remote_upload_token_file: Path | None = Field(default=None, repr=False)
     # Comma-separated former origins for this service's UUID image route.
     # They are rewritten on reads/exports without touching source-platform URLs.
     image_legacy_base_urls: str = ""
