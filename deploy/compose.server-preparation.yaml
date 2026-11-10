@@ -1,0 +1,126 @@
+# Reviewable migration candidate; do not start until backup, grants, NAS mounts,
+# private network, credentials, public ingress and rollback have been verified.
+services:
+  product-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      POSTGRES_DB: douyin_collector
+      POSTGRES_USER: ${PDC_PG_BOOTSTRAP_USER:?isolated database bootstrap user required}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_bootstrap_password
+      POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256 --auth-local=scram-sha-256'
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      PGDATA: /var/lib/postgresql/data
+      PDC_SERVER_TAILNET_IP: ${PDC_SERVER_TAILNET_IP:?server Tailnet IPv4 required}
+      PDC_PG_PORT: ${PDC_PG_PORT:?private PostgreSQL port required}
+    secrets: [postgres_bootstrap_password]
+    volumes:
+      - type: bind
+        source: ${PDC_PG_DATA_DIR:?dedicated existing data directory required}
+        target: /var/lib/postgresql/data
+        bind: {create_host_path: false}
+    # Reject wildcard/public bind addresses before PostgreSQL starts. The
+    # operator must also verify this Tailnet address belongs to this server.
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        case "$${PDC_PG_PORT}" in ''|*[!0-9]*) exit 1;; esac
+        [ "$${PDC_PG_PORT}" -ge 1 ] && [ "$${PDC_PG_PORT}" -le 65535 ] || exit 1
+        case "$${PDC_SERVER_TAILNET_IP}" in ''|*[!0-9.]*|.*|*.|*..*) exit 1;; esac
+        set -f
+        old_ifs="$$IFS"; IFS=.; set -- $${PDC_SERVER_TAILNET_IP}; IFS="$$old_ifs"
+        [ "$$#" -eq 4 ] || exit 1
+        for octet in "$$@"; do
+          case "$$octet" in 0|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) exit 1;; esac
+          [ "$$octet" -le 255 ] || exit 1
+        done
+        [ "$$1" -eq 100 ] && [ "$$2" -ge 64 ] && [ "$$2" -le 127 ] || exit 1
+        exec /usr/local/bin/docker-entrypoint.sh postgres -p "$${PDC_PG_PORT}" -c "listen_addresses=127.0.0.1,$${PDC_SERVER_TAILNET_IP}"
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p "$${PDC_PG_PORT}" -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  product-api:
+    image: ${PDC_API_IMAGE:?reviewed API image required}
+    pull_policy: never
+    restart: unless-stopped
+    user: '1026:100'
+    network_mode: host
+    read_only: true
+    command: ['uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '${PDC_API_PORT:?loopback API port required}']
+    environment:
+      PDC_API_PORT: ${PDC_API_PORT:?loopback API port required}
+      BACKEND_DATABASE_URL_FILE: /run/secrets/product_database_url
+      BACKEND_API_TOKEN_FILE: /run/secrets/product_api_token
+      BACKEND_RPA_API_TOKEN_FILE: /run/secrets/rpa_api_token
+      BACKEND_ENABLE_GROUP_WRITES: ${BACKEND_ENABLE_GROUP_WRITES:-false}
+      BACKEND_ENABLE_PRODUCT_WRITES: ${BACKEND_ENABLE_PRODUCT_WRITES:-false}
+      BACKEND_AUTO_PRECHECK_ENABLED: ${BACKEND_AUTO_PRECHECK_ENABLED:-false}
+      BACKEND_DOUYIN_CATEGORY_LOOKUP_ENABLED: ${BACKEND_DOUYIN_CATEGORY_LOOKUP_ENABLED:-false}
+      BACKEND_DATA_ROOT: /data
+      BACKEND_CATEGORY_CACHE_FILE: /category-cache/category-cache.sqlite
+      BACKEND_IMAGE_PUBLIC_BASE_URL: ${PRODUCT_IMAGE_PUBLIC_BASE_URL:?existing public image origin required}
+      BACKEND_IMAGE_LEGACY_BASE_URLS: ${PDC_IMAGE_LEGACY_BASE_URLS:-}
+      BACKEND_IMAGE_REMOTE_UPLOAD_ORIGIN: ${PRODUCT_IMAGE_REMOTE_UPLOAD_ORIGIN:?private NAS image service origin required}
+      BACKEND_IMAGE_REMOTE_UPLOAD_TOKEN_FILE: /run/secrets/image_storage_token
+    secrets: [product_database_url, product_api_token, rpa_api_token, image_storage_token]
+    volumes:
+      - type: bind
+        source: ${PDC_NAS_DATA_MOUNT:?verified read-only NAS data mount required}
+        target: /data
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${PDC_CATEGORY_CACHE_DIR:?existing cache directory required}
+        target: /category-cache
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+    depends_on:
+      product-postgres: {condition: service_healthy}
+    healthcheck:
+      test: ['CMD-SHELL', 'python -c "import os,urllib.request; urllib.request.urlopen(\"http://127.0.0.1:\"+os.environ[\"PDC_API_PORT\"]+\"/health\",timeout=3)"']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  product-web:
+    image: ${PDC_WEB_IMAGE:?reviewed Web image required}
+    pull_policy: never
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      WEB_ACCESS_MODE: basic
+      PDC_WEB_PORT: ${PDC_WEB_PORT:?loopback Web port required}
+      PDC_API_PORT: ${PDC_API_PORT:?loopback API port required}
+    secrets: [product_api_token, web_htpasswd]
+    depends_on:
+      product-api: {condition: service_healthy}
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        for port in "$${PDC_WEB_PORT}" "$${PDC_API_PORT}"; do
+          case "$$port" in ''|*[!0-9]*) exit 1;; esac
+          [ "$$port" -ge 1 ] && [ "$$port" -le 65535 ] || exit 1
+        done
+        /docker-entrypoint.d/40-product-workbench.sh
+        sed -i -e "s#listen 80;#listen 127.0.0.1:$${PDC_WEB_PORT};#g" -e "s#http://product-api:8180#http://127.0.0.1:$${PDC_API_PORT}#g" /etc/nginx/conf.d/default.conf
+        grep -Fq "listen 127.0.0.1:$${PDC_WEB_PORT};" /etc/nginx/conf.d/default.conf
+        exec nginx -g 'daemon off;'
+
+secrets:
+  postgres_bootstrap_password:
+    file: ${PDC_PG_BOOTSTRAP_PASSWORD_FILE:?dedicated bootstrap password file required}
+  product_database_url:
+    file: ${PDC_DATABASE_URL_FILE:?restricted product database URL file required}
+  product_api_token:
+    file: ${PDC_API_TOKEN_FILE:?product management credential file required}
+  rpa_api_token:
+    file: ${PDC_RPA_TOKEN_FILE:?existing separate RPA credential file required}
+  image_storage_token:
+    file: ${PRODUCT_IMAGE_STORAGE_TOKEN_FILE:?dedicated NAS image credential file required}
+  web_htpasswd:
+    file: ${PDC_WEB_HTPASSWD_FILE:?web Basic authentication file required}
