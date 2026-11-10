@@ -5,6 +5,7 @@ from sqlalchemy import Engine, text
 
 
 _WAITING_WORKER_RESULT = "worker_result_pending"
+SESSION_READ_INCOMPLETE_MESSAGE = "读取本机店铺会话未完成"
 
 
 def present_result(result):
@@ -24,6 +25,9 @@ def present_result(result):
         if isinstance(filtered_details, list):
             value["issueDetails"] = filtered_details
         value["status"] = "failed"
+    if value.get("status") == "failed" and isinstance(value.get("issues"), list):
+        value["issues"] = [SESSION_READ_INCOMPLETE_MESSAGE if issue == "本机店铺登录状态不可用" else issue
+                           for issue in value["issues"]]
     return value
 
 

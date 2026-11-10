@@ -12,7 +12,7 @@ from app.modules.central.client import CentralApplicationClient, CentralConnecti
 from app.modules.products.repository import ProductRepository
 from app.modules.products.brand_defaults import no_brand_selection
 from app.modules.products.service import ProductService
-from .queue import PrecheckQueue
+from .queue import PrecheckQueue, SESSION_READ_INCOMPLETE_MESSAGE
 from .service import check_product
 from .worker_schema import WorkerSchemaResultError, read_worker_schema
 
@@ -143,7 +143,7 @@ def _worker_failure(claim, message: str) -> dict:
 def _worker_failure_message(state) -> str:
     result = state.result if isinstance(state.result, dict) else {}
     stage = result.get("error_stage")
-    message = {"session": "本机店铺登录状态不可用", "signer": "签名未完成",
+    message = {"session": SESSION_READ_INCOMPLETE_MESSAGE, "signer": "签名未完成",
                "platform": "平台预检失败", "result": "平台预检结果不可用"}.get(stage, "设备预检未完成")
     code = result.get("platform_code")
     if ((type(code) is int and 0 <= code <= 10**20)

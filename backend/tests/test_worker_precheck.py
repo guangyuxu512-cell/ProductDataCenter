@@ -91,7 +91,15 @@ def test_pending_then_running_then_success_reuses_task_and_product_rules(setting
 
 @pytest.mark.parametrize(("status", "result", "expected"), [
     ("failed", {"error_stage": "platform", "platform_code": "10008"}, "平台预检失败（代码 10008）"),
-    ("failed", {"error_stage": "session", "platform_code": None}, "本机店铺登录状态不可用"),
+    ("failed", {"error_stage": "session", "safe_error_code": "RPA_BRIDGE_UNAVAILABLE", "platform_code": None},
+     "读取本机店铺会话未完成"),
+    ("failed", {"error_stage": "session", "safe_error_code": "RPA_SESSION_UNAVAILABLE", "platform_code": None},
+     "读取本机店铺会话未完成"),
+    ("failed", {"error_stage": "session", "safe_error_code": "RPA_SHOP_IDENTITY_UNCONFIRMED", "platform_code": None},
+     "读取本机店铺会话未完成"),
+    ("failed", {"error_stage": "session", "safe_error_code": "UNRECOGNIZED_CODE", "platform_code": None},
+     "读取本机店铺会话未完成"),
+    ("failed", {"error_stage": "session", "platform_code": None}, "读取本机店铺会话未完成"),
     ("failed", {"error_stage": "platform", "platform_code": "<private>"}, "平台预检失败"),
 ])
 def test_terminal_failure_is_visible_without_redispatch(settings, status, result, expected):
