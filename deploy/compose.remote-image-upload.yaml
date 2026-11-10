@@ -1,0 +1,14 @@
+# Cloud product API overlay: the only persistent image copy remains on NAS.
+services:
+  product-api:
+    environment:
+      BACKEND_IMAGE_PUBLIC_BASE_URL: ${PRODUCT_IMAGE_PUBLIC_BASE_URL:?existing public image origin required}
+      BACKEND_IMAGE_REMOTE_UPLOAD_ORIGIN: ${PRODUCT_IMAGE_REMOTE_UPLOAD_ORIGIN:?private NAS image service origin required}
+      BACKEND_IMAGE_REMOTE_UPLOAD_TOKEN_FILE: /run/secrets/image_storage_token
+    secrets: [image_storage_token]
+    tmpfs:
+      - /tmp:noexec,nosuid,size=64m
+
+secrets:
+  image_storage_token:
+    file: ${PRODUCT_IMAGE_STORAGE_TOKEN_FILE:?dedicated image-only credential file required}
