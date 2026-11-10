@@ -1,0 +1,53 @@
+# Preparation template: include in an nginx http context only after validating
+# the dedicated port, TLS files, Basic credentials and both loopback upstreams.
+# Replace only the PDC_* placeholders; nginx's own $variables must be preserved.
+map $http_authorization $pdc_server_bearer {
+    default 0;
+    ~*^Bearer[[:space:]] 1;
+}
+map $pdc_server_bearer $pdc_server_api_realm {
+    0 "ProductDataCenter";
+    1 off;
+}
+map $pdc_server_bearer $pdc_server_api_upstream {
+    0 http://127.0.0.1:${PDC_WEB_PORT};
+    1 http://127.0.0.1:${PDC_API_PORT};
+}
+
+server {
+    listen ${PDC_BIND_IP}:${PDC_PUBLIC_PORT} ssl;
+    server_name _;
+    ssl_certificate ${PDC_TLS_CERTIFICATE};
+    ssl_certificate_key ${PDC_TLS_PRIVATE_KEY};
+    client_max_body_size 15m;
+
+    # Browser Basic authentication reaches the existing web proxy. A Bearer
+    # credential goes directly to the existing backend, which authenticates it.
+    location ^~ /api/v1/ {
+        auth_basic $pdc_server_api_realm;
+        auth_basic_user_file ${PDC_BASIC_AUTH_FILE};
+        proxy_pass $pdc_server_api_upstream$request_uri;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
+
+    # RPA authentication and public image reads remain controlled by their
+    # existing routes; never inject the management credential here.
+    location ^~ /rpa/v1/ {
+        auth_basic off;
+        proxy_pass http://127.0.0.1:${PDC_WEB_PORT};
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
+
+    location / {
+        auth_basic "ProductDataCenter";
+        auth_basic_user_file ${PDC_BASIC_AUTH_FILE};
+        proxy_pass http://127.0.0.1:${PDC_WEB_PORT};
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
+}
