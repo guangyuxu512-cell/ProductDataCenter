@@ -53,7 +53,6 @@ def _storage_dir() -> Path:
 async def upload_image(request: Request):
     settings = get_settings()
     base = _public_base(settings.image_public_base_url)
-    root = _storage_dir()
     media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media_type not in {"image/jpeg", "image/png", "image/gif", "image/webp", "application/octet-stream"}:
         raise HTTPException(415, "请选择 JPG、PNG、GIF 或 WebP 图片")
@@ -64,6 +63,10 @@ async def upload_image(request: Request):
                 raise HTTPException(413, "图片大小不能超过 15 MB")
         except ValueError:
             raise HTTPException(400, "图片大小无效") from None
+    if settings.image_remote_upload_origin or settings.image_remote_upload_token_file:
+        from .remote_upload import upload_to_nas
+        return await upload_to_nas(request, settings, base, media_type, _image_format)
+    root = _storage_dir()
     temporary = None
     try:
         size = 0

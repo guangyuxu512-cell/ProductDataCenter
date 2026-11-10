@@ -239,6 +239,7 @@ function precheckView(id: string) {
   if (requestError) return { label: '预检失败', tone: 'failed', issues: [requestError], retry: true }
   const record = autoResults.value[id]
   if (!record) return { label: '未预检', tone: 'idle', issues: [] as string[], retry: false }
+  if (record.waitingForWorker) return { label: '等待设备结果', tone: 'idle', issues: [] as string[], retry: false }
   if (record.error) return { label: '预检失败', tone: 'failed', issues: [record.error], retry: true }
   if (record.state === 'pending') return { label: '排队中', tone: 'idle', issues: [] as string[], retry: false }
   if (record.state === 'running') return { label: '预检中', tone: 'running', issues: [] as string[], retry: false }

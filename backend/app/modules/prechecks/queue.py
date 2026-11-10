@@ -4,6 +4,10 @@ import json
 from sqlalchemy import Engine, text
 
 
+_WAITING_WORKER_RESULT = "worker_result_pending"
+SESSION_READ_INCOMPLETE_MESSAGE = "读取本机店铺会话未完成"
+
+
 def present_result(result):
     """Hide obsolete app-generated rule hints without claiming validation passed."""
     if not isinstance(result, dict):
@@ -21,6 +25,9 @@ def present_result(result):
         if isinstance(filtered_details, list):
             value["issueDetails"] = filtered_details
         value["status"] = "failed"
+    if value.get("status") == "failed" and isinstance(value.get("issues"), list):
+        value["issues"] = [SESSION_READ_INCOMPLETE_MESSAGE if issue == "本机店铺登录状态不可用" else issue
+                           for issue in value["issues"]]
     return value
 
 
@@ -71,6 +78,21 @@ class PrecheckQueue:
                 {**claim, "result": json.dumps(result, ensure_ascii=False)}).rowcount
         return bool(done)
 
+    def defer_worker(self, claim: dict, *, running: bool = False, waiting_result: bool = False) -> bool:
+        """Release a claim while awaiting its idempotently keyed central task."""
+        if waiting_result and not running:
+            raise ValueError("A pending Worker result must remain running")
+        with self.engine.begin() as conn:
+            updated = conn.execute(text("""UPDATE product_prechecks SET
+                state=CASE WHEN :running THEN 'running' ELSE 'pending' END,
+                available_at=now()+(:delay * interval '1 second'),
+                lease_until=CASE WHEN :running THEN now()+(:delay * interval '1 second') ELSE NULL END, result=NULL,
+                last_error=:waiting, updated_at=now()
+                WHERE product_id=:product_id AND revision=:revision AND attempts=:attempts
+                  AND state='running'"""), {**claim, "running": running, "delay": 30 if waiting_result else 5,
+                                             "waiting": _WAITING_WORKER_RESULT if waiting_result else None}).rowcount
+        return bool(updated)
+
     def retry(self, claim: dict) -> None:
         # Keep platform/session errors out of logs and persisted data. Attempts are
         # retried with backoff so a temporarily unavailable shop does not lose a package.
@@ -89,6 +111,13 @@ class PrecheckQueue:
             rows = conn.execute(text("""SELECT product_id, revision, state, result, last_error, updated_at
                 FROM product_prechecks WHERE product_id=ANY(CAST(:ids AS text[]))"""),
                 {"ids": product_ids}).mappings().all()
-        return [{"productId": row["product_id"], "revision": row["revision"],
-                 "state": row["state"], "result": present_result(row["result"]),
-                 "error": row["last_error"], "updatedAt": row["updated_at"]} for row in rows]
+        records = []
+        for row in rows:
+            waiting = row["state"] == "running" and row["last_error"] == _WAITING_WORKER_RESULT
+            record = {"productId": row["product_id"], "revision": row["revision"],
+                      "state": row["state"], "result": present_result(row["result"]),
+                      "error": None if waiting else row["last_error"], "updatedAt": row["updated_at"]}
+            if waiting:
+                record["waitingForWorker"] = True
+            records.append(record)
+        return records

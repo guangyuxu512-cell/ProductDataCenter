@@ -271,3 +271,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # The same CI job validates the reviewed server + central Compose overlay.
+    from test_server_compose import main as validate_server_compose
+    validate_server_compose()

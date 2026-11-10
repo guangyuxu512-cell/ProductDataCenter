@@ -400,6 +400,44 @@ def test_manual_enqueue_invalidates_an_inflight_precheck(engine):
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
 
 
+def test_worker_precheck_wait_states_and_revision_fence(engine):
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    repo, queue = ProductRepository(engine), PrecheckQueue(engine)
+    product_id = repo.create_manual("Worker 等待隔离商品")
+    try:
+        first = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert queue.defer_worker(first, running=True) is True
+        assert queue.results([product_id])[0]["state"] == "running"
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE product_prechecks SET lease_until=now()-interval '1 second' WHERE product_id=:id"),
+                         {"id": product_id})
+        second = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert second["attempts"] == first["attempts"] + 1
+        assert queue.defer_worker(first) is False
+        assert queue.defer_worker(second) is True
+        assert queue.results([product_id])[0]["state"] == "pending"
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE product_prechecks SET available_at=now()-interval '1 second' WHERE product_id=:id"),
+                         {"id": product_id})
+        third = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert queue.defer_worker(third, running=True, waiting_result=True) is True
+        waiting = queue.results([product_id])[0]
+        assert waiting["state"] == "running" and waiting["waitingForWorker"] is True and waiting["error"] is None
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE product_prechecks SET lease_until=now()-interval '1 second' WHERE product_id=:id"),
+                         {"id": product_id})
+        fourth = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert queue.complete(third, {"status": "ready", "issues": []}) is False
+        assert queue.complete(fourth, {"status": "ready", "issues": []}) is True
+        queue.enqueue([product_id])
+        assert queue.defer_worker(fourth) is False
+        assert queue.complete(fourth, {"status": "ready", "issues": []}) is False
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
 def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engine, tmp_path):
     from uuid import uuid4
     from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession
@@ -1025,5 +1063,90 @@ def test_no_brand_batch_updates_only_brand_and_preserves_later_manual_choice(eng
             assert conn.execute(text("""SELECT uu_json #>> '{category_properties_value,value,1687,0,value_name}'
                 FROM products WHERE product_id=:id"""), {"id": product_id}).scalar_one() == "HP/惠普"
     finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
+def test_worker_brand_write_is_fenced_by_precheck_claim(engine):
+    from uuid import uuid4
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    product_id = str(uuid4().int)[:19]
+    package = {"goodsInfo": {"goodsName": "隔离品牌测试", "catId4": "1000008074"},
+               "category_properties_value": {"value": {}}}
+    selection = {"fieldId": "1687", "fieldName": "品牌", "valueId": "596120136", "valueName": "无品牌"}
+    repo, queue = ProductRepository(engine), PrecheckQueue(engine)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""INSERT INTO products(product_id,source_platform,title,title_status,uu_json)
+                VALUES (:id,'douyin','隔离品牌测试','采集完成',CAST(:package AS jsonb))"""),
+                {"id": product_id, "package": json.dumps(package, ensure_ascii=False)})
+        old = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        queue.enqueue([product_id])
+        current = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert repo.set_default_brand(product_id, selection, expected_precheck_claim=old) == "stale"
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == package
+        assert repo.set_default_brand(product_id, selection, expected_precheck_claim=current) == "updated"
+        result = queue.results([product_id])[0]
+        assert result["revision"] == current["revision"] + 1 and result["state"] == "pending"
+        assert queue.complete(current, {"status": "ready", "issues": []}) is False
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
+def test_worker_brand_waits_for_concurrent_edit_then_rejects_stale_claim(engine):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from uuid import uuid4
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    product_id = str(uuid4().int)[:19]
+    package = {"goodsInfo": {"goodsName": "隔离编辑测试", "catId4": "1000008074"},
+               "category_properties_value": {"value": {}}}
+    edited = {"goodsInfo": package["goodsInfo"], "category_properties_value": {"value": {
+        "1687": [{"k": "品牌", "value_id": "manual", "value_name": "手动品牌"}]}}}
+    selection = {"fieldId": "1687", "fieldName": "品牌", "valueId": "596120136", "valueName": "无品牌"}
+    repo, queue = ProductRepository(engine), PrecheckQueue(engine)
+    locked, release, started = Event(), Event(), Event()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""INSERT INTO products(product_id,source_platform,title,title_status,uu_json)
+                VALUES (:id,'douyin','隔离编辑测试','采集完成',CAST(:package AS jsonb))"""),
+                {"id": product_id, "package": json.dumps(package, ensure_ascii=False)})
+        claim = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+
+        def edit():
+            with engine.begin() as conn:
+                conn.execute(text("SELECT product_id FROM products WHERE product_id=:id FOR UPDATE"), {"id": product_id})
+                locked.set()
+                assert release.wait(10)
+                conn.execute(text("""UPDATE products SET uu_json=CAST(:package AS jsonb),
+                    title_status='商品库已修改' WHERE product_id=:id"""),
+                    {"id": product_id, "package": json.dumps(edited, ensure_ascii=False)})
+
+        def brand():
+            started.set()
+            return repo.set_default_brand(product_id, selection, expected_precheck_claim=claim)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            editing = pool.submit(edit)
+            assert locked.wait(10)
+            applying = pool.submit(brand)
+            try:
+                assert started.wait(10)
+                assert not applying.done()
+            finally:
+                release.set()
+            editing.result(timeout=15)
+            assert applying.result(timeout=15) == "stale"
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == edited
+        assert queue.complete(claim, {"status": "ready", "issues": []}) is False
+    finally:
+        release.set()
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})

@@ -100,6 +100,17 @@ def test_old_queued_rule_hint_is_removed_without_falsely_passing():
         "status": "needs_completion", "issues": ["品牌未填写"]}
 
 
+def test_old_session_failure_is_presented_without_assuming_login_expired():
+    from app.modules.prechecks.queue import present_result
+
+    original = {"status": "failed", "issues": ["本机店铺登录状态不可用"], "issueDetails": []}
+    assert present_result(original) == {
+        "status": "failed", "issues": ["读取本机店铺会话未完成"], "issueDetails": []}
+    assert original["issues"] == ["本机店铺登录状态不可用"]
+    assert present_result({"status": "failed", "issues": ["平台预检失败（代码 10008）"]}) == {
+        "status": "failed", "issues": ["平台预检失败（代码 10008）"]}
+
+
 def test_new_douyin_precheck_writes_real_no_brand_then_leaves_stale_claim_unfinished():
     from app.modules.prechecks.runner import PrecheckRunner
 

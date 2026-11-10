@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # URL is configured explicitly; the incoming Host header is never trusted.
     image_storage_dir: Path | None = None
     image_public_base_url: str | None = None
+    # Optional private image-only service on NAS. If either setting is present,
+    # uploads must use the remote service and never fall back to local storage.
+    image_remote_upload_origin: str | None = Field(default=None, repr=False)
+    image_remote_upload_token_file: Path | None = Field(default=None, repr=False)
     # Comma-separated former origins for this service's UUID image route.
     # They are rewritten on reads/exports without touching source-platform URLs.
     image_legacy_base_urls: str = ""
@@ -36,6 +40,8 @@ class Settings(BaseSettings):
     douyin_category_lookup_enabled: bool = False
     # Enable only after collector migration 0009 and the queue grants are installed.
     auto_precheck_enabled: bool = False
+    # Isolated rollout: only automatic Douyin schema prechecks use a device.
+    worker_precheck_enabled: bool = False
     # The existing service can still be selected explicitly for rollback.
     douyin_signer_mode: str = "pure"
     douyin_signer_url: str = "http://product-cloud-signer-v1-product-signer-1:8787"

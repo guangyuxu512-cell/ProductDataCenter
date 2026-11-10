@@ -849,6 +849,7 @@ const precheckSummary = computed(() => {
     : { text: '当前草稿未发现可直接判断的缺项，保存后将自动预检', tone: 'default' as const }
   const record = props.autoResult
   if (!record) return null
+  if (record.waitingForWorker) return { text: '自动预检：等待设备结果', tone: 'warning' as const }
   if (record.error) return { text: `自动预检失败：${record.error}`, tone: 'error' as const }
   if (record.state !== 'done') return { text: `自动预检：${record.state === 'running' ? '预检中' : '排队中'}`, tone: 'default' as const }
   if (record.result?.status === 'failed' || !record.result) return { text: '自动预检失败', tone: 'error' as const }

@@ -6,7 +6,7 @@ from threading import Lock
 from fastapi import Response
 
 from app.modules.category_lookup.api import (
-    AutoSchemaBody, PredictBody, PredictManualBody, predict, predict_manual, schema_auto,
+    AutoSchemaBody, PredictBody, PredictManualBody, SchemaResponse, predict, predict_manual, schema_auto,
 )
 from app.modules.category_lookup.client import DouyinCategoryClient
 from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, normalize_multi_values
@@ -100,7 +100,7 @@ def _main_image(detail: dict) -> str:
 
 
 def check_product(product_id: str, service: ProductService, central: CentralApplicationClient,
-                  lookup: DouyinCategoryClient) -> dict:
+                  lookup: DouyinCategoryClient, *, schema_override: SchemaResponse | None = None) -> dict:
     detail = service.repository.detail(product_id)
     if not detail:
         raise ValueError("商品不存在")
@@ -151,7 +151,12 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
     # Coalesce simultaneous first requests for the same category; subsequent
     # checks use the existing category cache until the user refreshes it.
     with _schema_locks[hash(category_id) % len(_schema_locks)]:
-        schema = schema_auto(AutoSchemaBody(categoryId=category_id, title=title), Response(), central, lookup)
+        if schema_override is not None:
+            if schema_override.categoryId != category_id:
+                raise ValueError("预检类目已变化")
+            schema = schema_override
+        else:
+            schema = schema_auto(AutoSchemaBody(categoryId=category_id, title=title), Response(), central, lookup)
     problems = _attribute_problems(schema.attributes, detail["sourceAttributes"],
                                    detail["targetAttributes"], platform)
     unverified = any(problem == UNVERIFIED for _, problem in problems)

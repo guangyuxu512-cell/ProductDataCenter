@@ -7,6 +7,7 @@ application token exist only in the backend process during the request.
 import json
 import re
 from pathlib import Path
+from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -18,6 +19,8 @@ from app.core.config import Settings
 
 _PREFIX = "/internal/applications/v1"
 _MAX_RESPONSE_BYTES = 1024 * 1024
+_MAX_WORKER_RESPONSE_BYTES = 4 * 1024 * 1024 + 16 * 1024
+_WORKER_PRECHECKS = f"{_PREFIX}/worker-prechecks"
 
 
 class CentralConnectionError(Exception):
@@ -59,6 +62,19 @@ class CentralShopSession(BaseModel):
     cookies: tuple[CentralCookie, ...] = Field(min_length=1, repr=False)
 
 
+class CentralWorkerPrecheckTicket(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: UUID
+    status: Literal["pending", "running", "success", "failed", "lost"]
+
+
+class CentralWorkerPrecheckState(CentralWorkerPrecheckTicket):
+    result: dict[str, Any] | None = Field(default=None, repr=False)
+    error_code: str | None = None
+    error_message: str | None = Field(default=None, repr=False)
+
+
 class CentralApplicationClient:
     def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None):
         self._settings = settings
@@ -80,6 +96,28 @@ class CentralApplicationClient:
         if session.shop_id != shop_id or session.platform != expected_platform:
             raise CentralConnectionError("invalid_response")
         return session
+
+    def submit_worker_precheck(self, claim: dict, category_id: str, title: str) -> CentralWorkerPrecheckTicket:
+        body = {"kind": "douyin.category_schema",
+                "context": {"product_id": claim["product_id"], "revision": claim["revision"],
+                            "attempt": claim["attempts"]},
+                "input": {"category_id": category_id, "title": title}}
+        payload = self._request("POST", _WORKER_PRECHECKS, body=body, success_status=202)
+        try:
+            return CentralWorkerPrecheckTicket.model_validate(payload)
+        except ValidationError:
+            raise CentralConnectionError("invalid_response") from None
+
+    def read_worker_precheck(self, task_id: UUID) -> CentralWorkerPrecheckState:
+        payload = self._request("GET", f"{_WORKER_PRECHECKS}/{task_id}",
+                                max_response_bytes=_MAX_WORKER_RESPONSE_BYTES, timeout=30.0)
+        try:
+            state = CentralWorkerPrecheckState.model_validate(payload)
+        except ValidationError:
+            raise CentralConnectionError("invalid_response") from None
+        if state.task_id != task_id:
+            raise CentralConnectionError("invalid_response")
+        return state
 
     def _connection(self) -> tuple[str, str, str]:
         settings = self._settings
@@ -128,27 +166,35 @@ class CentralApplicationClient:
         return value
 
     def _get(self, path: str, *, require_no_store: bool = False):
+        return self._request("GET", path, require_no_store=require_no_store)
+
+    def _request(self, method: str, path: str, *, body: dict | None = None,
+                 require_no_store: bool = False, success_status: int = 200,
+                 max_response_bytes: int = _MAX_RESPONSE_BYTES, timeout: float = 8.0):
         base_url, client_id, token = self._connection()
         try:
             with httpx.Client(
-                base_url=base_url, timeout=8.0, verify=True,
+                base_url=base_url, timeout=timeout, verify=True,
                 follow_redirects=False, trust_env=False, transport=self._transport,
             ) as client:
-                with client.stream(
-                    "GET", path,
-                    headers={"X-Application-ID": client_id, "Authorization": f"Bearer {token}",
-                             "Cache-Control": "no-store"},
-                ) as response:
+                options: dict[str, Any] = {"headers": {
+                    "X-Application-ID": client_id, "Authorization": f"Bearer {token}",
+                    "Cache-Control": "no-store"}}
+                if body is not None:
+                    options["json"] = body
+                with client.stream(method, path, **options) as response:
                     if response.status_code in (401, 403):
                         raise CentralConnectionError("authentication_failed")
-                    if response.status_code != 200:
+                    if response.status_code == 409 and path.startswith(_WORKER_PRECHECKS):
+                        raise CentralConnectionError("idempotency_conflict")
+                    if response.status_code != success_status:
                         raise CentralConnectionError("upstream_unavailable")
                     if require_no_store and "no-store" not in response.headers.get("cache-control", "").lower():
                         raise CentralConnectionError("invalid_response")
                     body = bytearray()
                     for chunk in response.iter_bytes():
                         body.extend(chunk)
-                        if len(body) > _MAX_RESPONSE_BYTES:
+                        if len(body) > max_response_bytes:
                             raise CentralConnectionError("invalid_response")
             try:
                 return json.loads(body)
