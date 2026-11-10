@@ -32,6 +32,7 @@ export interface AutoPrecheck {
   state: 'pending' | 'running' | 'done'
   result: PrecheckResult | null
   error: string | null
+  waitingForWorker?: boolean
   updatedAt: string
 }
 

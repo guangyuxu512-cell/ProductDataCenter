@@ -491,13 +491,24 @@ class ProductRepository:
             return {"version": saved_version}
 
     def set_default_brand(self, product_id: str, selection: dict, *, force: bool = False,
-                          mark_modified: bool = False) -> str:
+                          mark_modified: bool = False, expected_precheck_claim: dict | None = None) -> str:
         """Write only the real platform brand field and let the queue trigger recheck it."""
         with self.engine.begin() as conn:
             row = conn.execute(text("""SELECT source_platform, title_status, uu_json AS package
                 FROM products WHERE product_id=:id FOR UPDATE"""), {"id": product_id}).mappings().first()
             if row is None or not isinstance(row["package"], dict):
                 return "missing"
+            if expected_precheck_claim is not None:
+                if expected_precheck_claim.get("product_id") != product_id:
+                    return "stale"
+                # Match product UPDATE -> precheck-trigger lock order.  Hold both
+                # rows until the brand update and trigger have committed.
+                queue = conn.execute(text("""SELECT revision, attempts, state FROM product_prechecks
+                    WHERE product_id=:id FOR UPDATE"""), {"id": product_id}).mappings().first()
+                if (queue is None or queue["state"] != "running"
+                        or queue["revision"] != expected_precheck_claim.get("revision")
+                        or queue["attempts"] != expected_precheck_claim.get("attempts")):
+                    return "stale"
             status = str(row["title_status"] or "")
             if not force and status.endswith("商品库已修改"):
                 return "manual"

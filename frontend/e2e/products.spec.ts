@@ -1517,6 +1517,31 @@ test('自动预检的结果在列表和商品中显示具体待完善项', async
   await expect(page.getByRole('dialog').getByText('自动预检待处理：品牌未填写')).toBeVisible()
 })
 
+test('设备结果暂未确认时保留等待状态，补传后显示实际预检结果', async ({ page }) => {
+  await fixtures(page)
+  let received = false
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: false, autoPrecheck: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '规格', specImages: [], specGroups: [], skus: [],
+  } }))
+  await page.route('**/api/v1/prechecks/query', (route) => route.fulfill({ json: { items: [{
+    productId: firstId, revision: 1, state: received ? 'done' : 'running', error: null,
+    waitingForWorker: !received, updatedAt: received ? '2026-11-10T00:00:02Z' : '2026-11-10T00:00:01Z',
+    result: received ? { productId: firstId, title: '测试商品', status: 'ready', issues: [], issueDetails: [] } : null,
+  }] } }))
+  await page.goto('/#/products')
+  const row = page.locator('.n-data-table-tbody tr').first()
+  await expect(row.getByText('等待设备结果', { exact: true })).toBeVisible()
+  await row.getByRole('button', { name: '编辑' }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('自动预检：等待设备结果')).toBeVisible()
+  received = true
+  await expect(dialog.getByText('自动预检：已通过')).toBeVisible({ timeout: 7_000 })
+  await expect(row.getByText('预检通过', { exact: true })).toBeVisible()
+})
+
 test('拼多多无推荐时可以手动选择类目并保存', async ({ page }) => {
   await fixtures(page)
   const shop = '00000000-0000-4000-8000-000000000111'
