@@ -1,0 +1,3182 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "商品库现有管理接口（生产版本 e118b13）",
+    "version": "0.1.0",
+    "description": "使用现有管理 Bearer Token；该凭据具备已开启的商品及分组写入权限。图片上传写入 NAS。RPA 只读接口不包含在此文档中。"
+  },
+  "paths": {
+    "/api/v1/central/status": {
+      "get": {
+        "tags": [
+          "central-connection"
+        ],
+        "summary": "Central Status",
+        "operationId": "central_status_api_v1_central_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CentralConnectionStatus"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/category-lookup/tree": {
+      "post": {
+        "tags": [
+          "category-lookup"
+        ],
+        "summary": "Category Tree",
+        "operationId": "category_tree_api_v1_category_lookup_tree_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TreeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TreeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/category-lookup/search": {
+      "post": {
+        "tags": [
+          "category-lookup"
+        ],
+        "summary": "Search",
+        "operationId": "search_api_v1_category_lookup_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/category-lookup/predict/manual": {
+      "post": {
+        "tags": [
+          "category-lookup"
+        ],
+        "summary": "Predict Manual",
+        "operationId": "predict_manual_api_v1_category_lookup_predict_manual_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PredictManualBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/category-lookup/predict": {
+      "post": {
+        "tags": [
+          "category-lookup"
+        ],
+        "summary": "Predict",
+        "operationId": "predict_api_v1_category_lookup_predict_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PredictBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PredictResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/category-lookup/schema/auto": {
+      "post": {
+        "tags": [
+          "category-lookup"
+        ],
+        "summary": "Schema Auto",
+        "operationId": "schema_auto_api_v1_category_lookup_schema_auto_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoSchemaBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoSchemaResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/category-lookup/schema": {
+      "post": {
+        "tags": [
+          "category-lookup"
+        ],
+        "summary": "Schema",
+        "operationId": "schema_api_v1_category_lookup_schema_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchemaBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Capabilities",
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/products": {
+      "get": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Products",
+        "operationId": "products_api_v1_products_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductPage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "productId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "platform",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "douyin",
+                "pinduoduo"
+              ]
+            }
+          },
+          {
+            "name": "groupId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "分组 UUID，或 ungrouped"
+            }
+          },
+          {
+            "name": "capturedFrom",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "capturedTo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "capturedFromTime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "本地时间 YYYY-MM-DDTHH:MM[:SS]"
+            }
+          },
+          {
+            "name": "capturedToTime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "本地时间 YYYY-MM-DDTHH:MM[:SS]"
+            }
+          },
+          {
+            "name": "includeTotal",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Create Manual Product",
+        "operationId": "create_manual_product_api_v1_products_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualProductCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/product-groups": {
+      "get": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Groups",
+        "operationId": "groups_api_v1_product_groups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupsRead"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Create Group",
+        "operationId": "create_group_api_v1_product_groups_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/product-groups/{group_id}": {
+      "patch": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Rename Group",
+        "operationId": "rename_group_api_v1_product_groups__group_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupName"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Delete Group",
+        "operationId": "delete_group_api_v1_product_groups__group_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Group Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteGroupResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/group": {
+      "patch": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Move Group",
+        "operationId": "move_group_api_v1_products_group_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignGroupResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/products/export-uu": {
+      "post": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Export Uu",
+        "operationId": "export_uu_api_v1_products_export_uu_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "包含商品 UU 和清单的 ZIP 数据包",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/products/delete": {
+      "post": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Delete Products",
+        "operationId": "delete_products_api_v1_products_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/products/{product_id}": {
+      "get": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Detail",
+        "operationId": "detail_api_v1_products__product_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Product Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Save Product",
+        "operationId": "save_product_api_v1_products__product_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Product Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{product_id}/edit": {
+      "get": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Edit Snapshot",
+        "operationId": "edit_snapshot_api_v1_products__product_id__edit_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Product Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/products/{product_id}/images/{kind}/{position}": {
+      "get": {
+        "tags": [
+          "product-library"
+        ],
+        "summary": "Image",
+        "operationId": "image_api_v1_products__product_id__images__kind___position__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "product_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Product Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "main",
+                "detail",
+                "sku"
+              ],
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "position",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Position"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/product-images": {
+      "post": {
+        "tags": [
+          "product-images"
+        ],
+        "summary": "Upload Image",
+        "operationId": "upload_image_api_v1_product_images_post",
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "description": "直接发送图片二进制请求体，设置正确的 Content-Type；成功返回可公网读取的 NAS 图片 URL。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/gif": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prechecks/query": {
+      "post": {
+        "tags": [
+          "product-prechecks"
+        ],
+        "summary": "Query Results",
+        "operationId": "query_results_api_v1_prechecks_query_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/prechecks/run": {
+      "post": {
+        "tags": [
+          "product-prechecks"
+        ],
+        "summary": "Run Prechecks",
+        "description": "Put manual single/batch requests onto the automatic check queue.",
+        "operationId": "run_prechecks_api_v1_prechecks_run_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AssignGroup": {
+        "properties": {
+          "productIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Productids"
+          },
+          "groupId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groupid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "productIds"
+        ],
+        "title": "AssignGroup"
+      },
+      "AssignGroupResponse": {
+        "properties": {
+          "updated": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Updated"
+          },
+          "groupId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groupid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "updated",
+          "groupId"
+        ],
+        "title": "AssignGroupResponse"
+      },
+      "Attribute": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/Option"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "control": {
+            "type": "string",
+            "enum": [
+              "single",
+              "multi",
+              "text",
+              "number",
+              "measure",
+              "unknown"
+            ],
+            "title": "Control",
+            "default": "unknown"
+          },
+          "allowCustom": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowcustom"
+          },
+          "ruleStatus": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "unknown"
+            ],
+            "title": "Rulestatus",
+            "default": "unknown"
+          },
+          "maxValues": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxvalues"
+          },
+          "measureTemplates": {
+            "items": {
+              "$ref": "#/components/schemas/MeasureTemplate"
+            },
+            "type": "array",
+            "title": "Measuretemplates"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "required",
+          "options"
+        ],
+        "title": "Attribute"
+      },
+      "AttributeEdit": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/AttributeValueEdit"
+            },
+            "type": "array",
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "values"
+        ],
+        "title": "AttributeEdit"
+      },
+      "AttributeValueEdit": {
+        "properties": {
+          "valueId": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Valueid",
+            "default": "0"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AttributeValueEdit"
+      },
+      "AttributeValueRead": {
+        "properties": {
+          "valueId": {
+            "type": "string",
+            "title": "Valueid",
+            "default": "0"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AttributeValueRead"
+      },
+      "AutoSchemaBody": {
+        "properties": {
+          "categoryId": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$",
+            "title": "Categoryid"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 10000,
+            "title": "Title",
+            "default": "商品"
+          },
+          "refresh": {
+            "type": "boolean",
+            "title": "Refresh",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "categoryId"
+        ],
+        "title": "AutoSchemaBody"
+      },
+      "AutoSchemaResponse": {
+        "properties": {
+          "categoryId": {
+            "type": "string",
+            "title": "Categoryid"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/Attribute"
+            },
+            "type": "array",
+            "title": "Attributes"
+          },
+          "shopId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Shopid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "categoryId",
+          "attributes",
+          "shopId"
+        ],
+        "title": "AutoSchemaResponse"
+      },
+      "Candidate": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "path"
+        ],
+        "title": "Candidate"
+      },
+      "Capabilities": {
+        "properties": {
+          "groupWrites": {
+            "type": "boolean",
+            "title": "Groupwrites"
+          },
+          "export": {
+            "type": "boolean",
+            "title": "Export",
+            "default": true
+          },
+          "productEdit": {
+            "type": "boolean",
+            "title": "Productedit",
+            "default": false
+          },
+          "importProducts": {
+            "type": "boolean",
+            "title": "Importproducts",
+            "default": false
+          },
+          "categoryLookup": {
+            "type": "boolean",
+            "title": "Categorylookup",
+            "default": false
+          },
+          "autoPrecheck": {
+            "type": "boolean",
+            "title": "Autoprecheck",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "groupWrites"
+        ],
+        "title": "Capabilities"
+      },
+      "CategoryLevel": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "CategoryLevel"
+      },
+      "CategoryPart": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "CategoryPart"
+      },
+      "CentralConnectionStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_configured",
+              "connected",
+              "unavailable"
+            ],
+            "title": "State"
+          },
+          "authorized_shop_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorized Shop Count"
+          },
+          "eligible_douyin_shop_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eligible Douyin Shop Count"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "CentralConnectionStatus"
+      },
+      "DeleteGroupResponse": {
+        "properties": {
+          "deleted": {
+            "$ref": "#/components/schemas/GroupDeleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "title": "DeleteGroupResponse"
+      },
+      "GroupDeleted": {
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Groupid"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "productCount": {
+            "type": "integer",
+            "title": "Productcount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "groupId",
+          "name",
+          "productCount"
+        ],
+        "title": "GroupDeleted"
+      },
+      "GroupName": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "GroupName"
+      },
+      "GroupRead": {
+        "properties": {
+          "groupId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Groupid"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "productCount": {
+            "type": "integer",
+            "title": "Productcount"
+          },
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Createdat"
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updatedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "groupId",
+          "name",
+          "productCount"
+        ],
+        "title": "GroupRead"
+      },
+      "GroupResponse": {
+        "properties": {
+          "group": {
+            "$ref": "#/components/schemas/GroupRead"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group"
+        ],
+        "title": "GroupResponse"
+      },
+      "GroupsRead": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupRead"
+            },
+            "type": "array",
+            "title": "Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "groups"
+        ],
+        "title": "GroupsRead"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse"
+      },
+      "ImageRead": {
+        "properties": {
+          "image_type": {
+            "type": "string",
+            "enum": [
+              "main",
+              "detail",
+              "sku"
+            ],
+            "title": "Image Type"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "rel_path": {
+            "type": "string",
+            "title": "Rel Path"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_type",
+          "sort_order",
+          "rel_path",
+          "source_url"
+        ],
+        "title": "ImageRead"
+      },
+      "ManualProductCreate": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "draftSeed": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{32}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draftseed"
+          },
+          "edit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProductEdit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "ManualProductCreate"
+      },
+      "MeasureModule": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "prefix": {
+            "type": "string",
+            "title": "Prefix",
+            "default": ""
+          },
+          "suffix": {
+            "type": "string",
+            "title": "Suffix",
+            "default": ""
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          },
+          "requiredTips": {
+            "type": "string",
+            "title": "Requiredtips",
+            "default": ""
+          },
+          "placeholder": {
+            "type": "string",
+            "title": "Placeholder",
+            "default": ""
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/Option"
+            },
+            "type": "array",
+            "title": "Units"
+          },
+          "dataType": {
+            "type": "string",
+            "enum": [
+              "float",
+              "int"
+            ],
+            "title": "Datatype"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "dataType"
+        ],
+        "title": "MeasureModule"
+      },
+      "MeasureTemplate": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "modules": {
+            "items": {
+              "$ref": "#/components/schemas/MeasureModule"
+            },
+            "type": "array",
+            "title": "Modules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "modules"
+        ],
+        "title": "MeasureTemplate"
+      },
+      "Option": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "Option"
+      },
+      "PredictBody": {
+        "properties": {
+          "productId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Productid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "productId"
+        ],
+        "title": "PredictBody"
+      },
+      "PredictManualBody": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 10000,
+            "title": "Title",
+            "default": ""
+          },
+          "imageUrl": {
+            "type": "string",
+            "maxLength": 10000,
+            "title": "Imageurl",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "PredictManualBody"
+      },
+      "PredictResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "sourceVersion": {
+            "type": "string",
+            "title": "Sourceversion"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing"
+          },
+          "shopId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shopid"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/PredictedCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "recommendedId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommendedid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "sourceVersion",
+          "missing",
+          "shopId",
+          "candidates",
+          "recommendedId"
+        ],
+        "title": "PredictResponse"
+      },
+      "PredictedCandidate": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/CategoryLevel"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "selectable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selectable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "path",
+          "levels",
+          "selectable"
+        ],
+        "title": "PredictedCandidate"
+      },
+      "ProductDetail": {
+        "properties": {
+          "product": {
+            "$ref": "#/components/schemas/ProductRead"
+          },
+          "skus": {
+            "items": {
+              "$ref": "#/components/schemas/SkuRead"
+            },
+            "type": "array",
+            "title": "Skus"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ImageRead"
+            },
+            "type": "array",
+            "title": "Images"
+          },
+          "sourceCategoryId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcecategoryid"
+          },
+          "sourceAttributes": {
+            "items": {
+              "$ref": "#/components/schemas/SourceAttribute"
+            },
+            "type": "array",
+            "title": "Sourceattributes"
+          },
+          "targetCategory": {
+            "items": {
+              "$ref": "#/components/schemas/TargetCategoryPart"
+            },
+            "type": "array",
+            "title": "Targetcategory"
+          },
+          "targetAttributes": {
+            "items": {
+              "$ref": "#/components/schemas/SourceAttribute"
+            },
+            "type": "array",
+            "title": "Targetattributes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "product",
+          "skus",
+          "images"
+        ],
+        "title": "ProductDetail"
+      },
+      "ProductEdit": {
+        "properties": {
+          "expectedVersion": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expectedversion"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CategoryPart"
+                },
+                "type": "array",
+                "maxItems": 4,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "attributes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AttributeEdit"
+                },
+                "type": "array",
+                "maxItems": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "mainImages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mainimages"
+          },
+          "detailImages": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detailimages"
+          },
+          "specImages": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SpecImageEdit"
+                },
+                "type": "array",
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specimages"
+          },
+          "specImageGroupIndex": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specimagegroupindex"
+          },
+          "skus": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SkuEdit"
+                },
+                "type": "array",
+                "maxItems": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skus"
+          },
+          "specStructure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpecStructureEdit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "expectedVersion"
+        ],
+        "title": "ProductEdit"
+      },
+      "ProductIds": {
+        "properties": {
+          "productIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Productids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "productIds"
+        ],
+        "title": "ProductIds"
+      },
+      "ProductPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProductRead"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "totalIncluded": {
+            "type": "boolean",
+            "title": "Totalincluded"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "totalIncluded",
+          "limit",
+          "offset"
+        ],
+        "title": "ProductPage"
+      },
+      "ProductRead": {
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "title": "Product Id"
+          },
+          "source_platform": {
+            "type": "string",
+            "title": "Source Platform"
+          },
+          "source_product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Product Id"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "group_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Name"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "title_status": {
+            "type": "string",
+            "title": "Title Status",
+            "default": ""
+          },
+          "shop_name": {
+            "type": "string",
+            "title": "Shop Name",
+            "default": ""
+          },
+          "category_level_4": {
+            "type": "string",
+            "title": "Category Level 4",
+            "default": ""
+          },
+          "category_path": {
+            "type": "string",
+            "title": "Category Path",
+            "default": ""
+          },
+          "current_price_min": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price Min"
+          },
+          "current_price_max": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price Max"
+          },
+          "sku_count": {
+            "type": "integer",
+            "title": "Sku Count",
+            "default": 0
+          },
+          "main_image_count": {
+            "type": "integer",
+            "title": "Main Image Count",
+            "default": 0
+          },
+          "detail_image_count": {
+            "type": "integer",
+            "title": "Detail Image Count",
+            "default": 0
+          },
+          "sku_image_count": {
+            "type": "integer",
+            "title": "Sku Image Count",
+            "default": 0
+          },
+          "main_image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Main Image Url"
+          },
+          "asset_rel_path": {
+            "type": "string",
+            "title": "Asset Rel Path",
+            "default": ""
+          },
+          "workbook_rel_path": {
+            "type": "string",
+            "title": "Workbook Rel Path",
+            "default": ""
+          },
+          "raw_rel_path": {
+            "type": "string",
+            "title": "Raw Rel Path",
+            "default": ""
+          },
+          "captured_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_id",
+          "source_platform",
+          "title"
+        ],
+        "title": "ProductRead"
+      },
+      "RpaPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RpaProduct"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "RpaPage"
+      },
+      "RpaProduct": {
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "title": "Product Id"
+          },
+          "source_platform": {
+            "type": "string",
+            "title": "Source Platform"
+          },
+          "source_product_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Product Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "main_image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Main Image Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_id",
+          "source_platform",
+          "title"
+        ],
+        "title": "RpaProduct"
+      },
+      "SchemaBody": {
+        "properties": {
+          "shopId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Shopid"
+          },
+          "categoryId": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$",
+            "title": "Categoryid"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 10000,
+            "title": "Title",
+            "default": "商品"
+          },
+          "refresh": {
+            "type": "boolean",
+            "title": "Refresh",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "shopId",
+          "categoryId"
+        ],
+        "title": "SchemaBody"
+      },
+      "SchemaResponse": {
+        "properties": {
+          "categoryId": {
+            "type": "string",
+            "title": "Categoryid"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/Attribute"
+            },
+            "type": "array",
+            "title": "Attributes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "categoryId",
+          "attributes"
+        ],
+        "title": "SchemaResponse"
+      },
+      "SearchBody": {
+        "properties": {
+          "keyword": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Keyword"
+          }
+        },
+        "type": "object",
+        "required": [
+          "keyword"
+        ],
+        "title": "SearchBody"
+      },
+      "SearchResponse": {
+        "properties": {
+          "shopId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Shopid"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Candidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          }
+        },
+        "type": "object",
+        "required": [
+          "shopId",
+          "candidates"
+        ],
+        "title": "SearchResponse"
+      },
+      "SkuEdit": {
+        "properties": {
+          "specIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Specids"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 9999999999.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "stock": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2147483647.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock"
+          },
+          "merchantCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merchantcode"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "delete": {
+            "type": "boolean",
+            "title": "Delete",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "specIds"
+        ],
+        "title": "SkuEdit"
+      },
+      "SkuRead": {
+        "properties": {
+          "sku_id": {
+            "type": "string",
+            "title": "Sku Id"
+          },
+          "sku_name": {
+            "type": "string",
+            "title": "Sku Name"
+          },
+          "current_price": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price"
+          },
+          "image_rel_path": {
+            "type": "string",
+            "title": "Image Rel Path",
+            "default": ""
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sku_id",
+          "sku_name",
+          "sort_order"
+        ],
+        "title": "SkuRead"
+      },
+      "SourceAttribute": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Values"
+          },
+          "valueItems": {
+            "items": {
+              "$ref": "#/components/schemas/AttributeValueRead"
+            },
+            "type": "array",
+            "title": "Valueitems"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "values"
+        ],
+        "title": "SourceAttribute"
+      },
+      "SpecImageEdit": {
+        "properties": {
+          "specId": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Specid"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 10000,
+            "title": "Url",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "specId"
+        ],
+        "title": "SpecImageEdit"
+      },
+      "SpecStructureEdit": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/StructureGroup"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Groups"
+          },
+          "skus": {
+            "items": {
+              "$ref": "#/components/schemas/StructureSku"
+            },
+            "type": "array",
+            "maxItems": 2000,
+            "minItems": 1,
+            "title": "Skus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "groups",
+          "skus"
+        ],
+        "title": "SpecStructureEdit"
+      },
+      "StructureGroup": {
+        "properties": {
+          "sourceIndex": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourceindex"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/StructureValue"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Values"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "values"
+        ],
+        "title": "StructureGroup"
+      },
+      "StructureSku": {
+        "properties": {
+          "sourceSpecIds": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 3,
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sourcespecids"
+          },
+          "specIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Specids"
+          },
+          "price": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Price",
+            "default": ""
+          },
+          "stock": {
+            "type": "string",
+            "maxLength": 20,
+            "title": "Stock",
+            "default": ""
+          },
+          "merchantCode": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Merchantcode",
+            "default": ""
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "specIds"
+        ],
+        "title": "StructureSku"
+      },
+      "StructureValue": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 10000,
+            "title": "Url",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "StructureValue"
+      },
+      "TargetCategoryPart": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "TargetCategoryPart"
+      },
+      "TreeBody": {
+        "properties": {
+          "parentId": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$",
+            "title": "Parentid",
+            "default": "0"
+          },
+          "shopId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shopid"
+          },
+          "refresh": {
+            "type": "boolean",
+            "title": "Refresh",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "TreeBody"
+      },
+      "TreeItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "isLeaf": {
+            "type": "boolean",
+            "title": "Isleaf"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "isLeaf",
+          "enabled"
+        ],
+        "title": "TreeItem"
+      },
+      "TreeResponse": {
+        "properties": {
+          "shopId": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Shopid"
+          },
+          "parentId": {
+            "type": "string",
+            "title": "Parentid"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TreeItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "fromCache": {
+            "type": "boolean",
+            "title": "Fromcache"
+          }
+        },
+        "type": "object",
+        "required": [
+          "shopId",
+          "parentId",
+          "items",
+          "fromCache"
+        ],
+        "title": "TreeResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://119.29.188.118:19001"
+    }
+  ]
+}
