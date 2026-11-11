@@ -27,6 +27,8 @@
 
 桌面客户端和免网页登录的局域网部署方式见 [桌面客户端说明](docs/product-desktop-lan-v1.md)；SKU 表格及桌面输入修复见 [SKU 表格整理](docs/sku-table-order-20261108.md)；抖音商品中文类目和 RPA 读取方式见 [类目映射说明](docs/douyin-category-mapping-20261109.md)。RPA 专用只读凭据保持独立。
 
+AI 的独立 Token 管理页面与权限接口见 [Token 管理说明](docs/scoped-api-tokens.md)。
+
 ## 本地运行
 
 需要 Python 3.12+、Node 22 和 pnpm 11.25.0。
