@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector)
-const state = { token: '', catalog: [], groups: [], grantGroups: null, grantExpiry: null, records: [], editing: null, epoch: 0 }
+const state = { token: '', catalog: [], groups: [], grantGroups: null, grantExpiry: null, records: [], editing: null, epoch: 0, listRevision: 0 }
 const titles = {
   'product.read': '查看商品', 'product.create': '新建商品', 'product.update': '编辑商品',
   'product.delete': '删除商品', 'product.export': '导出商品', 'group.read': '查看分组',
@@ -73,6 +73,18 @@ function tokenStatus(item) {
   return '使用中'
 }
 
+function withoutRevoked(records) {
+  const byId = new Map(records.map((item) => [item.id, item]))
+  return records.filter((item) => {
+    const seen = new Set()
+    for (let current = item; current && !seen.has(current.id); current = byId.get(current.parentId)) {
+      if (current.revokedAt != null) return false
+      seen.add(current.id)
+    }
+    return true
+  })
+}
+
 function renderList() {
   const list = $('#token-list')
   list.replaceChildren()
@@ -112,9 +124,10 @@ function renderList() {
 async function refreshList() {
   if (!has('token.read')) { state.records = []; renderList(); return }
   const epoch = state.epoch
+  const revision = ++state.listRevision
   const data = await request('/api/v1/tokens')
-  if (epoch !== state.epoch) return
-  state.records = Array.isArray(data.items) ? data.items : []
+  if (epoch !== state.epoch || revision !== state.listRevision) return
+  state.records = Array.isArray(data.items) ? withoutRevoked(data.items) : []
   renderList()
 }
 
@@ -315,6 +328,9 @@ async function revokeToken(item, button) {
   try {
     await request(`/api/v1/tokens/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
     if (epoch !== state.epoch) return
+    state.listRevision++
+    state.records = withoutRevoked(state.records.map((record) => record.id === item.id ? { ...record, revokedAt: Date.now() } : record))
+    renderList()
     notice('Token 已撤销。')
     try { await refreshList() } catch { notice('Token 已撤销，但列表刷新失败，请手动刷新。') }
   } catch (error) {
