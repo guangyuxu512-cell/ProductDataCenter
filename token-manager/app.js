@@ -73,6 +73,18 @@ function tokenStatus(item) {
   return '使用中'
 }
 
+function withoutRevoked(records) {
+  const byId = new Map(records.map((item) => [item.id, item]))
+  return records.filter((item) => {
+    const seen = new Set()
+    for (let current = item; current && !seen.has(current.id); current = byId.get(current.parentId)) {
+      if (current.revokedAt != null) return false
+      seen.add(current.id)
+    }
+    return true
+  })
+}
+
 function renderList() {
   const list = $('#token-list')
   list.replaceChildren()
@@ -115,7 +127,7 @@ async function refreshList() {
   const revision = ++state.listRevision
   const data = await request('/api/v1/tokens')
   if (epoch !== state.epoch || revision !== state.listRevision) return
-  state.records = Array.isArray(data.items) ? data.items.filter((item) => item.revokedAt == null) : []
+  state.records = Array.isArray(data.items) ? withoutRevoked(data.items) : []
   renderList()
 }
 
@@ -317,7 +329,7 @@ async function revokeToken(item, button) {
     await request(`/api/v1/tokens/${encodeURIComponent(item.id)}`, { method: 'DELETE' })
     if (epoch !== state.epoch) return
     state.listRevision++
-    state.records = state.records.filter((record) => record.id !== item.id)
+    state.records = withoutRevoked(state.records.map((record) => record.id === item.id ? { ...record, revokedAt: Date.now() } : record))
     renderList()
     notice('Token 已撤销。')
     try { await refreshList() } catch { notice('Token 已撤销，但列表刷新失败，请手动刷新。') }

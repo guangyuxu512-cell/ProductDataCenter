@@ -11,10 +11,10 @@ const ids = ['product.read', 'product.update', 'product.delete', 'group.read', '
 
 type TokenRecord = {
   id: string; name: string; permissions: string[]; groupIds: string[] | null
-  expiresAt: number | null; revokedAt: number | null; createdAt: number; updatedAt: number; parentId: null
+  expiresAt: number | null; revokedAt: number | null; createdAt: number; updatedAt: number; parentId: string | null
 }
 
-async function fixtures(page: Page, options: { restricted?: boolean; injectedName?: boolean; revokedHistory?: boolean; holdRefresh?: boolean } = {}) {
+async function fixtures(page: Page, options: { restricted?: boolean; injectedName?: boolean; revokedHistory?: boolean; holdRefresh?: boolean; activeChild?: boolean } = {}) {
   const tokenDir = resolve(process.cwd(), '..', 'token-manager')
   await page.route('**/token-manager/**', async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -37,8 +37,16 @@ async function fixtures(page: Page, options: { restricted?: boolean; injectedNam
         groupIds: null, expiresAt: null, revokedAt: null, createdAt: now, updatedAt: now, parentId: null },
       { id: '33333333333333333333333333333333', name: '过期凭据', permissions: ['product.read'],
         groupIds: null, expiresAt: now - 60, revokedAt: null, createdAt: now, updatedAt: now, parentId: null },
+      { id: '44444444444444444444444444444444', name: '被撤销的下级凭据', permissions: ['product.read'],
+        groupIds: null, expiresAt: null, revokedAt: null, createdAt: now, updatedAt: now, parentId: '11111111111111111111111111111111' },
+      { id: '55555555555555555555555555555555', name: '被撤销的下下级凭据', permissions: ['product.read'],
+        groupIds: null, expiresAt: null, revokedAt: null, createdAt: now, updatedAt: now, parentId: '44444444444444444444444444444444' },
     ]
   }
+  if (options.activeChild) records.push({
+    id: '66666666666666666666666666666666', name: '有效下级凭据', permissions: ['product.read'],
+    groupIds: null, expiresAt: null, revokedAt: null, createdAt: now, updatedAt: now, parentId: '22222222222222222222222222222222',
+  })
   const calls: { method: string; path: string; body: Record<string, unknown> | null }[] = []
   let listReads = 0
   let announceStale = () => {}
@@ -141,6 +149,8 @@ test('历史中已撤销的凭据不显示，过期但未撤销的凭据仍可�
   await fixtures(page, { revokedHistory: true })
   await login(page)
   await expect(page.getByText('已撤销旧凭据')).toHaveCount(0)
+  await expect(page.getByText('被撤销的下级凭据')).toHaveCount(0)
+  await expect(page.getByText('被撤销的下下级凭据')).toHaveCount(0)
   await expect(page.getByText('有效凭据')).toBeVisible()
   await expect(page.getByText('过期凭据')).toBeVisible()
   await expect(page.locator('#list-caption')).toContainText('共 2 个')
@@ -148,8 +158,8 @@ test('历史中已撤销的凭据不显示，过期但未撤销的凭据仍可�
   await expect(page.getByText('已撤销旧凭据')).toHaveCount(0)
 })
 
-test('较早发出的刷新结果不能让刚撤销的凭据重新出现', async ({ page }) => {
-  const { staleStarted, releaseStale } = await fixtures(page, { revokedHistory: true, holdRefresh: true })
+test('撤销上级后同时隐藏下级，较早刷新结果不能让它们重新出现', async ({ page }) => {
+  const { staleStarted, releaseStale } = await fixtures(page, { revokedHistory: true, holdRefresh: true, activeChild: true })
   await login(page)
   const card = page.locator('.token-card').filter({ hasText: '有效凭据' })
   await page.getByRole('button', { name: '刷新' }).click()
@@ -157,10 +167,12 @@ test('较早发出的刷新结果不能让刚撤销的凭据重新出现', async
   page.once('dialog', (prompt) => prompt.accept())
   await card.getByRole('button', { name: '撤销' }).click()
   await expect(card).toHaveCount(0)
+  await expect(page.getByText('有效下级凭据')).toHaveCount(0)
   const oldResponse = page.waitForResponse((response) => response.headers()['x-stale-fixture'] === '1')
   releaseStale()
   await oldResponse
   await expect(card).toHaveCount(0)
+  await expect(page.getByText('有效下级凭据')).toHaveCount(0)
   await expect(page.locator('#list-caption')).toContainText('共 1 个')
 })
 
