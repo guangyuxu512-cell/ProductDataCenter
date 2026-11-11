@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>AI Token 管理</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="./" aria-label="Token 管理首页">
+      <span class="brand-icon" aria-hidden="true">◆</span>
+      <span><strong>Token 管理</strong><small>商品云库</small></span>
+    </a>
+    <div id="connected-bar" class="connected" hidden>
+      <span><i></i>已连接</span><button id="disconnect" class="button ghost" type="button">退出</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <section id="login-panel" class="login-panel">
+      <div class="eyebrow">独立管理页面</div>
+      <h1>给每个 AI 一把专属钥匙</h1>
+      <p class="lead">按需要分配商品库权限，随时修改或撤销。</p>
+      <form id="connect-form" class="panel login-card">
+        <h2>管理员登录</h2>
+        <p class="muted">输入有 Token 管理权限的凭据。本页面不会保存登录凭据。</p>
+        <label for="manager-token">管理 Token</label>
+        <input id="manager-token" type="password" autocomplete="off" spellcheck="false" required placeholder="粘贴管理 Token">
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button id="connect-button" class="button primary full" type="submit">进入管理</button>
+        <details class="login-help"><summary>还没有管理 Token？</summary><p>首次登录可使用原管理 Token，或请服务器管理员创建一个具有 Token 管理权限的凭据。请勿将凭据发在聊天中。</p></details>
+      </form>
+    </section>
+
+    <section id="dashboard" hidden>
+      <div class="page-heading">
+        <div><div class="eyebrow">访问权限</div><h1>AI Token 管理</h1><p class="muted">为不同 AI 创建独立凭据，按需管理权限。</p></div>
+        <button id="create-token" class="button primary" type="button">＋ 创建 Token</button>
+      </div>
+      <p id="notice" class="notice" role="status" hidden></p>
+      <div class="section-heading"><div><h2>已创建的 Token</h2><p id="list-caption" class="muted">仅显示你有权管理的 Token。</p></div><button id="refresh" class="button secondary" type="button">刷新</button></div>
+      <div id="token-list" class="token-list" aria-live="polite"></div>
+      <div id="empty-state" class="panel empty" hidden><div class="empty-icon">◇</div><strong>还没有 Token</strong><p class="muted">创建一个，给 AI 分配合适的权限。</p></div>
+    </section>
+  </main>
+
+  <dialog id="editor-dialog" class="dialog" aria-labelledby="editor-title">
+    <form id="editor-form" novalidate>
+      <div class="dialog-header"><div><h2 id="editor-title">创建 Token</h2><p class="muted">选择这个 AI 可以使用的功能。</p></div><button class="icon-button" type="button" data-close="editor-dialog" aria-label="关闭">×</button></div>
+      <div class="dialog-body">
+        <label for="token-name">名称</label>
+        <input id="token-name" maxlength="100" required placeholder="例如 Muse、图片助手">
+
+        <div class="field-heading"><div><label>权限</label><p class="muted small">可单独勾选；完整管理包含发放 Token 和删除商品。</p></div></div>
+        <div class="presets"><button id="preset-read" class="button secondary small-button" type="button">只读</button><button id="preset-product" class="button secondary small-button" type="button">商品管理</button><button id="preset-all" class="button secondary small-button" type="button">全部权限</button></div>
+        <div id="permissions" class="permission-grid"></div>
+
+        <fieldset class="field-group"><legend>可访问的商品分组</legend>
+          <label class="choice"><input type="radio" name="group-mode" value="all" checked> 全部分组</label>
+          <label class="choice"><input type="radio" name="group-mode" value="selected"> 指定分组</label>
+          <div id="group-options-wrap" class="group-options" hidden><div id="group-options"></div><label for="extra-groups" class="small">其他分组 ID（可选，多个用逗号或换行分隔）</label><textarea id="extra-groups" rows="2" placeholder="分组 UUID"></textarea></div>
+        </fieldset>
+
+        <label for="expires-at">有效期至</label>
+        <input id="expires-at" type="datetime-local">
+        <p class="muted small">留空表示长期有效；下级 Token 不能超过发放者的有效期。</p>
+        <p id="editor-error" class="error" role="alert" hidden></p>
+      </div>
+      <div class="dialog-footer"><button class="button secondary" type="button" data-close="editor-dialog">取消</button><button id="save-token" class="button primary" type="submit">创建并显示 Token</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="secret-dialog" class="dialog secret-dialog" aria-labelledby="secret-title">
+    <div class="dialog-header"><div><div class="success-mark">✓</div><h2 id="secret-title">Token 已创建</h2></div><button class="icon-button" type="button" data-close="secret-dialog" aria-label="关闭">×</button></div>
+    <div class="dialog-body"><p>完整 Token 只显示这一次。请复制到对应 AI 的安全凭据中。</p><label for="new-secret">新 Token</label><textarea id="new-secret" rows="3" readonly spellcheck="false"></textarea><p id="copy-status" class="muted small" role="status"></p></div>
+    <div class="dialog-footer"><button id="copy-secret" class="button primary" type="button">复制 Token</button><button class="button secondary" type="button" data-close="secret-dialog">已保存，关闭</button></div>
+  </dialog>
+</body>
+</html>

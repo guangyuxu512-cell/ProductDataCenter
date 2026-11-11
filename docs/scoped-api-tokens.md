@@ -1,6 +1,12 @@
-# 商品库 Token 管理（不依赖前端）
+# 商品库 Token 与独立管理页面
 
 商品库 API 可为 AI 或 RPA 分别签发 Token。管理接口使用原有 HTTPS 地址和 `Authorization: Bearer <Token>`；商品、分组、图片、预检和 RPA 的原有接口路径不变。旧管理 Token 和旧 RPA Token 保持兼容。旧管理 Token 仍拥有已开启功能的管理权限，应只保存在可信的安全凭据位置。
+
+## 独立管理页面
+
+独立页面位于同一 HTTPS 入口下的 `/token-manager/`，与商品库页面分开，支持手机使用。输入原管理 Token 或有相应 `token.*` 权限的独立 Token 后，可以创建、修改和撤销自己有权管理的凭据，并设置分组范围与有效期。创建后的完整 Token 只显示一次；关闭页面后不能再次取回。登录凭据仅在当前页面内存中使用，不写入浏览器存储、地址或日志。页面本身是静态文件，所有操作仍由原有 Bearer 接口授权；旧 RPA 接口和凭据不变。
+
+服务器侧使用 `deploy/nginx.token-manager.location.conf` 在现有 HTTPS 网关单独提供静态文件，`/var/lib/product-data-center/token-manager/current` 指向版本目录。上线时先在隔离端口验证 MIME 类型、响应安全头和接口转发，再检查 `nginx -t` 并平滑重载；保留上个目录及网关配置以便回退。页面静态资源公开不代表接口公开，未经授权的 Token 管理请求仍必须被拒绝。
 
 ## 怎样由本人创建
 
