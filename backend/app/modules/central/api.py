@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 
 from app.core.config import Settings, get_settings
-from app.core.security.access import require_api_access
+from app.core.security.access import require_api_access, require_permission
 from .client import CentralApplicationClient, CentralConnectionError, eligible_douyin_shops
 
 
@@ -23,7 +23,7 @@ def get_central_client(settings: Annotated[Settings, Depends(get_settings)]) -> 
     return CentralApplicationClient(settings)
 
 
-@router.get("/status", response_model=CentralConnectionStatus)
+@router.get("/status", response_model=CentralConnectionStatus, dependencies=[Depends(require_permission("central.read"))])
 def central_status(
     response: Response,
     client: Annotated[CentralApplicationClient, Depends(get_central_client)],

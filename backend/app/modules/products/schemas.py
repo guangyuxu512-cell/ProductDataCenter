@@ -147,6 +147,8 @@ class Capabilities(BaseModel):
     importProducts: bool = False
     categoryLookup: bool = False
     autoPrecheck: bool = False
+    permissions: list[str] = Field(default_factory=list)
+    groupIds: list[str] | None = None
 
 
 class CategoryPart(BaseModel):
@@ -318,6 +320,7 @@ class ManualProductCreate(BaseModel):
     title: str = Field(min_length=1, max_length=10000)
     draftSeed: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     edit: ProductEdit | None = None
+    groupId: UUID | None = None
 
     @field_validator("title")
     @classmethod

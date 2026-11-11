@@ -51,6 +51,97 @@ def engine():
     engine.dispose()
 
 
+def test_scoped_tokens_enforce_group_boundaries_across_real_database_operations(engine, tmp_path):
+    """The same group boundary applies to reads, writes, export, precheck and RPA."""
+    import io
+    import zipfile
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.main import create_application
+    from app.modules.prechecks.queue import PrecheckQueue
+    from app.modules.products.api import get_service
+
+    repo = ProductRepository(engine)
+    settings = Settings(_env_file=None, api_token="integration-admin", rpa_api_token="integration-rpa",
+                        scoped_token_store_file=tmp_path / "tokens.sqlite3", data_root=tmp_path,
+                        enable_group_writes=True, enable_product_writes=True)
+    service = ProductService(repo, settings)
+    group_a = service.save_group("Token 隔离 A")["group"]["groupId"]
+    group_b = service.save_group("Token 隔离 B")["group"]["groupId"]
+    a = repo.create_manual("Token A 商品", group_id=group_a)
+    b = repo.create_manual("Token B 商品", group_id=group_b)
+    created = [a, b]
+    app = create_application()
+    app.dependency_overrides[get_service] = lambda: service
+    admin = {"Authorization": "Bearer integration-admin"}
+    try:
+        (tmp_path / "scope-a.png").write_bytes(b"scope-a")
+        (tmp_path / "scope-b.png").write_bytes(b"scope-b")
+        with engine.begin() as conn:
+            for identity, path in [(a, "scope-a.png"), (b, "scope-b.png")]:
+                conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+                    VALUES (:id,'main',0,:path,'')"""), {"id": identity, "path": path})
+        with patch("app.core.security.access.get_settings", return_value=settings), \
+             patch("app.modules.access_tokens.api.get_settings", return_value=settings), \
+             patch("app.modules.products.api.get_settings", return_value=settings), \
+             patch("app.modules.prechecks.api._queue", return_value=PrecheckQueue(engine)), TestClient(app) as c:
+            issue = c.post("/api/v1/tokens", headers=admin, json={"name": "隔离测试",
+                "permissions": ["*"], "groupIds": [str(group_a)]})
+            assert issue.status_code == 201, issue.text
+            auth = {"Authorization": "Bearer " + issue.json()["token"]}
+            page = c.get("/api/v1/products", headers=auth).json()
+            assert [x["product_id"] for x in page["items"]] == [a] and page["total"] == 1
+            assert c.get("/api/v1/products", headers=auth, params={"groupId": str(group_b)}).json()["total"] == 0
+            assert c.get(f"/api/v1/products/{a}", headers=auth).status_code == 200
+            assert c.get(f"/api/v1/products/{b}", headers=auth).status_code == 404
+            assert c.get(f"/api/v1/products/{a}/images/main/0", headers=auth).content == b"scope-a"
+            assert c.get(f"/api/v1/products/{b}/images/main/0", headers=auth).status_code == 404
+            a_version = c.get(f"/api/v1/products/{a}/edit", headers=auth).json()["version"]
+            assert c.get(f"/api/v1/products/{b}/edit", headers=auth).status_code == 404
+            b_version = repo.edit_snapshot(b)["version"]
+            assert c.patch(f"/api/v1/products/{b}", headers=auth,
+                           json={"expectedVersion": b_version, "title": "不应修改"}).status_code == 404
+            assert c.patch(f"/api/v1/products/{a}", headers=auth,
+                           json={"expectedVersion": a_version, "title": "允许修改"}).status_code == 200
+            assert repo.detail(b)["product"]["title"] == "Token B 商品"
+            assert c.post("/api/v1/product-groups", headers=auth, json={"name": "越界新分组"}).status_code == 403
+            assert c.patch(f"/api/v1/product-groups/{group_b}", headers=auth, json={"name": "越界"}).status_code == 403
+            assert c.patch("/api/v1/products/group", headers=auth,
+                           json={"productIds": [a], "groupId": str(group_b)}).status_code == 403
+            assert c.patch("/api/v1/products/group", headers=auth,
+                           json={"productIds": [b], "groupId": str(group_a)}).json()["updated"] == []
+            assert str(repo.detail(b)["product"]["group_id"]) == str(group_b)
+            queue = c.post("/api/v1/prechecks/run", headers=auth, json={"productIds": [a, b]})
+            assert queue.status_code == 200 and [x["productId"] for x in queue.json()["items"]] == [a]
+            result = c.post("/api/v1/prechecks/query", headers=auth, json={"productIds": [a, b]})
+            assert result.status_code == 200 and [x["productId"] for x in result.json()["items"]] == [a]
+            exported = c.post("/api/v1/products/export-uu", headers=auth, json={"productIds": [a, b]})
+            assert exported.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(exported.content)) as archive:
+                manifest = json.loads(archive.read("manifest.json"))
+            assert [x["productId"] for x in manifest["products"]] == [a]
+            assert [x["groupId"] for x in c.get("/rpa/v1/product-groups", headers=auth).json()["groups"]] == [str(group_a)]
+            assert c.get(f"/rpa/v1/product-groups/{group_b}/products", headers=auth).status_code == 403
+            assert c.get(f"/rpa/v1/products/{a}/uu", headers=auth).status_code == 200
+            assert c.get(f"/rpa/v1/products/{b}/uu", headers=auth).status_code == 404
+            assert c.post("/api/v1/category-lookup/predict", headers=auth,
+                          json={"productId": b}).status_code == 404
+            assert [row["product_id"] for row in repo.category_paths([a, b], allowed_groups={str(group_a)})] == [a]
+            created_response = c.post("/api/v1/products", headers=auth,
+                                      json={"title": "限定分组新建", "groupId": str(group_a)})
+            assert created_response.status_code == 200, created_response.text
+            created.append(created_response.json()["productId"])
+            assert c.post("/api/v1/products", headers=auth,
+                          json={"title": "不允许新建", "groupId": str(group_b)}).status_code == 403
+            deleted = c.post("/api/v1/products/delete", headers=auth, json={"productIds": [a, b]})
+            assert deleted.status_code == 200 and deleted.json()["deleted"] == [a]
+            assert repo.detail(b) is not None
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=ANY(CAST(:ids AS text[]))"), {"ids": created})
+            conn.execute(text("DELETE FROM product_groups WHERE group_id IN (:a,:b)"), {"a": group_a, "b": group_b})
+
+
 def test_exact_id_and_second_precision(engine):
     repo = ProductRepository(engine)
     found = repo.list(parse_product_list_options({"productId": "3760269504500859111"}))

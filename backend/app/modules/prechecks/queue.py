@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 from sqlalchemy import Engine, text
+from app.modules.products.queries import group_scope_sql
 
 
 _WAITING_WORKER_RESULT = "worker_result_pending"
@@ -48,7 +49,7 @@ class PrecheckQueue:
                 RETURNING q.product_id, q.revision, q.attempts"""), {"limit": limit}).mappings().all()
         return [dict(row) for row in rows]
 
-    def enqueue(self, product_ids: list[str]) -> list[dict]:
+    def enqueue(self, product_ids: list[str], allowed_groups=None) -> list[dict]:
         """Queue saved packages through the collector-owned durable queue.
 
         Bumping the queue revision also invalidates an in-flight claim.  Its
@@ -58,14 +59,19 @@ class PrecheckQueue:
         if not product_ids:
             return []
         with self.engine.begin() as conn:
-            rows = conn.execute(text("""INSERT INTO product_prechecks (product_id)
-                SELECT product_id FROM products
-                WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL
+            scope, params = group_scope_sql(allowed_groups)
+            permitted = ("WITH permitted AS (SELECT product_id FROM products WHERE product_id=ANY(CAST(:ids AS text[])) "
+                         "AND uu_json IS NOT NULL" + scope + " FOR SHARE) "
+                         "INSERT INTO product_prechecks (product_id) SELECT product_id FROM permitted"
+                         if allowed_groups is not None else
+                         "INSERT INTO product_prechecks (product_id) SELECT product_id FROM products "
+                         "WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL")
+            rows = conn.execute(text(permitted + """
                 ON CONFLICT (product_id) DO UPDATE SET
                   revision=product_prechecks.revision+1, state='pending', attempts=0,
                   available_at=now(), lease_until=NULL, result=NULL, last_error=NULL, updated_at=now()
                 RETURNING product_id, revision, state, updated_at"""),
-                {"ids": product_ids}).mappings().all()
+                {"ids": product_ids, **params}).mappings().all()
         return [{"productId": row["product_id"], "revision": row["revision"],
                  "state": row["state"], "result": None, "error": None,
                  "updatedAt": row["updated_at"]} for row in rows]
@@ -104,13 +110,18 @@ class PrecheckQueue:
                 WHERE product_id=:product_id AND revision=:revision AND attempts=:attempts AND state='running'"""),
                 {**claim, "delay": delay})
 
-    def results(self, product_ids: list[str]) -> list[dict]:
+    def results(self, product_ids: list[str], allowed_groups=None) -> list[dict]:
         if not product_ids:
             return []
         with self.engine.connect() as conn:
-            rows = conn.execute(text("""SELECT product_id, revision, state, result, last_error, updated_at
-                FROM product_prechecks WHERE product_id=ANY(CAST(:ids AS text[]))"""),
-                {"ids": product_ids}).mappings().all()
+            scope, params = group_scope_sql(allowed_groups, "p")
+            statement = ("""SELECT q.product_id, q.revision, q.state, q.result, q.last_error, q.updated_at
+                FROM product_prechecks q JOIN products p ON p.product_id=q.product_id
+                WHERE q.product_id=ANY(CAST(:ids AS text[]))""" + scope if allowed_groups is not None else
+                """SELECT product_id, revision, state, result, last_error, updated_at FROM product_prechecks
+                   WHERE product_id=ANY(CAST(:ids AS text[]))""")
+            rows = conn.execute(text(statement),
+                {"ids": product_ids, **params}).mappings().all()
         records = []
         for row in rows:
             waiting = row["state"] == "running" and row["last_error"] == _WAITING_WORKER_RESULT

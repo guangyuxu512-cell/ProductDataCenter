@@ -1,7 +1,9 @@
+from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.config import get_settings
 from app.core.database.session import get_database_engine
-from app.core.security.access import require_api_access
+from app.core.security.access import require_api_access, require_permission
+from app.core.security.scoped_tokens import Principal
 from app.modules.products.schemas import ProductIds
 from .queue import PrecheckQueue
 
@@ -15,21 +17,23 @@ def _queue() -> PrecheckQueue:
     return PrecheckQueue(get_database_engine())
 
 
-@router.post("/query")
-def query_results(body: ProductIds):
+@router.post("/query", dependencies=[Depends(require_permission("precheck.read"))])
+def query_results(body: ProductIds, principal: Annotated[Principal, Depends(require_api_access)]):
     try:
-        return {"items": _queue().results(body.productIds)}
+        queue = _queue()
+        return {"items": queue.results(body.productIds) if principal.groups is None else queue.results(body.productIds, allowed_groups=principal.groups)}
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(503, "自动预检状态暂不可用") from None
 
 
-@router.post("/run")
-def run_prechecks(body: ProductIds):
+@router.post("/run", dependencies=[Depends(require_permission("precheck.run"))])
+def run_prechecks(body: ProductIds, principal: Annotated[Principal, Depends(require_api_access)]):
     """Put manual single/batch requests onto the automatic check queue."""
     try:
-        items = _queue().enqueue(body.productIds)
+        queue = _queue()
+        items = queue.enqueue(body.productIds) if principal.groups is None else queue.enqueue(body.productIds, allowed_groups=principal.groups)
     except HTTPException:
         raise
     except Exception:

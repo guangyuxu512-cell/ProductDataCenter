@@ -1,22 +1,48 @@
 from secrets import compare_digest
 from typing import Annotated
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import get_settings
+from app.core.security.scoped_tokens import (LEGACY_RPA, MASTER, Principal, TokenInvalid,
+                                             TokenStore, TokenStoreUnavailable)
 
 bearer = HTTPBearer(auto_error=False)
 
 
 def require_api_access(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-) -> None:
-    expected = get_settings().configured_token()
+) -> Principal:
+    settings = get_settings()
+    expected = settings.configured_token()
     if not expected:
         raise HTTPException(503, "商品服务访问凭据未配置")
-    if not credentials or not compare_digest(credentials.credentials.encode(), expected.encode()):
+    if not credentials:
         raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"})
+    if compare_digest(credentials.credentials.encode(), expected.encode()):
+        principal = MASTER
+    elif credentials.credentials.startswith("pdc_"):
+        try:
+            principal = TokenStore(settings.configured_scoped_token_store()).authenticate(credentials.credentials)
+        except TokenInvalid:
+            raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"}) from None
+        except TokenStoreUnavailable:
+            raise HTTPException(503, "Token 权限服务暂不可用") from None
+    else:
+        raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"})
+    # Reuse the shared request logger's caller identity without logging a secret.
+    request.state.request_log_user_id = "token:" + (principal.token_id or "legacy-admin")
+    return principal
+
+
+def require_permission(permission: str):
+    def check(principal: Annotated[Principal, Depends(require_api_access)]) -> Principal:
+        if not principal.has(permission):
+            raise HTTPException(403, "当前 Token 没有此操作的权限")
+        return principal
+    return check
 
 
 def require_group_writes() -> None:
@@ -30,12 +56,28 @@ def require_product_writes() -> None:
 
 
 def require_rpa_access(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-) -> None:
+) -> Principal:
     settings = get_settings()
     expected = settings.configured_rpa_token()
     admin = settings.configured_token()
     if not expected or (admin and compare_digest(expected.encode(), admin.encode())):
         raise HTTPException(503, "RPA 只读访问凭据未配置或与管理凭据重复")
-    if not credentials or not compare_digest(credentials.credentials.encode(), expected.encode()):
+    if not credentials:
         raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"})
+    if compare_digest(credentials.credentials.encode(), expected.encode()):
+        principal = LEGACY_RPA
+    elif credentials.credentials.startswith("pdc_"):
+        try:
+            principal = TokenStore(settings.configured_scoped_token_store()).authenticate(credentials.credentials)
+        except TokenInvalid:
+            raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"}) from None
+        except TokenStoreUnavailable:
+            raise HTTPException(503, "Token 权限服务暂不可用") from None
+        if not principal.has("rpa.read"):
+            raise HTTPException(403, "当前 Token 没有 RPA 读取权限")
+    else:
+        raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"})
+    request.state.request_log_user_id = "token:" + (principal.token_id or "legacy-rpa")
+    return principal

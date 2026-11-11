@@ -61,6 +61,19 @@ class ProductListOptions:
     captured_from_time: str = ""
     captured_to_time: str = ""
     include_total: bool = True
+    # None means unrestricted; an empty tuple deliberately matches no products.
+    allowed_groups: tuple[str, ...] | None = None
+
+
+def group_scope_sql(allowed_groups, alias: str = "") -> tuple[str, dict]:
+    """Return a parameterized PostgreSQL filter for a token's group boundary."""
+    if allowed_groups is None:
+        return "", {}
+    column = f"{alias}.group_id" if alias else "group_id"
+    ids = [value for value in allowed_groups if value != "ungrouped"]
+    return (f" AND ({column}::text = ANY(CAST(:scope_group_ids AS text[])) "
+            f"OR (:scope_ungrouped AND {column} IS NULL))",
+            {"scope_group_ids": ids, "scope_ungrouped": "ungrouped" in allowed_groups})
 
 
 def parse_product_list_options(params: Mapping[str, str]) -> ProductListOptions:
@@ -133,6 +146,14 @@ def build_product_list_queries(options: ProductListOptions) -> tuple[Query, Quer
         where.append("p.group_id IS NULL")
     elif options.group_id:
         where.append(f"p.group_id = {bind(options.group_id)}")
+    if options.allowed_groups is not None:
+        permitted = [value for value in options.allowed_groups if value != "ungrouped"]
+        clauses = []
+        if permitted:
+            clauses.append(f"p.group_id::text = ANY(CAST({bind(permitted)} AS text[]))")
+        if "ungrouped" in options.allowed_groups:
+            clauses.append("p.group_id IS NULL")
+        where.append("(" + " OR ".join(clauses) + ")" if clauses else "FALSE")
     if options.captured_from_time:
         where.append(f"p.captured_at >= ({bind(options.captured_from_time)}::timestamp AT TIME ZONE 'Asia/Shanghai')")
     elif options.captured_from:

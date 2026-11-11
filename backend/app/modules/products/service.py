@@ -24,8 +24,9 @@ class ProductService:
             item["main_image_url"] = self._image_url(item.get("main_image_url"))
         return page
 
-    def detail(self, product_id: str):
-        detail = self.repository.detail(product_id)
+    def detail(self, product_id: str, allowed_groups=None):
+        detail = (self.repository.detail(product_id) if allowed_groups is None else
+                  self.repository.detail(product_id, allowed_groups=allowed_groups))
         if detail is None:
             raise ProductNotFound()
         detail["product"]["main_image_url"] = self._image_url(detail["product"].get("main_image_url"))
@@ -37,17 +38,23 @@ class ProductService:
         return canonical_product_image_url(value, self.settings.image_public_base_url,
                                            self.settings.image_legacy_base_urls)
 
-    def edit_snapshot(self, product_id: str):
-        return self.repository.edit_snapshot(product_id)
+    def edit_snapshot(self, product_id: str, allowed_groups=None):
+        return (self.repository.edit_snapshot(product_id) if allowed_groups is None else
+                self.repository.edit_snapshot(product_id, allowed_groups=allowed_groups))
 
-    def create_manual(self, title: str, draft_seed=None, edit=None):
-        return {"productId": self.repository.create_manual(title, draft_seed, edit)}
+    def create_manual(self, title: str, draft_seed=None, edit=None, group_id=None):
+        if group_id is None:
+            return {"productId": self.repository.create_manual(title, draft_seed, edit)}
+        if not self.repository.group_exists(group_id):
+            raise GroupNotFound()
+        return {"productId": self.repository.create_manual(title, draft_seed, edit, group_id=group_id)}
 
-    def save_edit(self, product_id: str, edit):
-        return self.repository.save_edit(product_id, edit)
+    def save_edit(self, product_id: str, edit, allowed_groups=None):
+        return (self.repository.save_edit(product_id, edit) if allowed_groups is None else
+                self.repository.save_edit(product_id, edit, allowed_groups=allowed_groups))
 
-    def groups(self):
-        return {"groups": self.repository.groups()}
+    def groups(self, allowed_groups=None):
+        return {"groups": self.repository.groups() if allowed_groups is None else self.repository.groups(allowed_groups=allowed_groups)}
 
     def save_group(self, name: str, group_id=None):
         try:
@@ -69,25 +76,30 @@ class ProductService:
             count = self.repository.delete_group(conn, group_id)
             return {"deleted": {"groupId": group_id, "name": group["group_name"], "productCount": count}}
 
-    def assign_group(self, product_ids: list[str], group_id):
+    def assign_group(self, product_ids: list[str], group_id, allowed_groups=None):
         with self.repository.engine.begin() as conn:
             if group_id and self.repository.lock_group(conn, group_id) is None:
                 raise GroupNotFound()
-            updated = self.repository.assign_group(conn, product_ids, group_id)
+            updated = (self.repository.assign_group(conn, product_ids, group_id) if allowed_groups is None else
+                       self.repository.assign_group(conn, product_ids, group_id, allowed_groups=allowed_groups))
             return {"updated": updated, "groupId": group_id}
 
-    def delete_products(self, product_ids: list[str]):
-        deleted = self.repository.delete_products(product_ids)
+    def delete_products(self, product_ids: list[str], allowed_groups=None):
+        deleted = (self.repository.delete_products(product_ids) if allowed_groups is None else
+                   self.repository.delete_products(product_ids, allowed_groups=allowed_groups))
         removed = set(deleted)
         return {"deleted": deleted, "missing": [identity for identity in product_ids if identity not in removed]}
 
-    def export(self, product_ids: list[str]):
-        return export_archive(self.repository.export_rows(product_ids), product_ids,
+    def export(self, product_ids: list[str], allowed_groups=None):
+        rows = (self.repository.export_rows(product_ids) if allowed_groups is None else
+                self.repository.export_rows(product_ids, allowed_groups=allowed_groups))
+        return export_archive(rows, product_ids,
                               self.settings.export_max_bytes, self.settings.image_public_base_url,
                               self.settings.image_legacy_base_urls)
 
-    def image_file(self, product_id: str, kind: str, position: int):
-        row = self.repository.image(product_id, kind, position)
+    def image_file(self, product_id: str, kind: str, position: int, allowed_groups=None):
+        row = (self.repository.image(product_id, kind, position) if allowed_groups is None else
+               self.repository.image(product_id, kind, position, allowed_groups=allowed_groups))
         path = resolve_data_file(self.settings.data_root, row["rel_path"]) if row else None
         if path is None or path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
             raise ProductNotFound("本地图片不存在")

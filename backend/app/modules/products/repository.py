@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from sqlalchemy import Connection, Engine, text
 
-from .queries import ProductListOptions, build_product_list_queries
+from .queries import ProductListOptions, build_product_list_queries, group_scope_sql
 from .pdd_categories import source_category_path
 from .source_attributes import source_attributes
 from .manual import manual_package
@@ -59,15 +59,15 @@ class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def create_manual(self, title: str, draft_seed: str | None = None, edit=None) -> str:
+    def create_manual(self, title: str, draft_seed: str | None = None, edit=None, group_id=None) -> str:
         product_id = "manual:" + str(uuid4().int)
         package, sku_id = manual_package(title, draft_seed)
         with self.engine.begin() as conn:
             saved = conn.execute(text("""INSERT INTO products
-                (product_id, source_platform, source_product_id, title, title_status, sku_count, captured_at, uu_json)
-                VALUES (:id, 'douyin', NULL, :title, '手动创建', 1, now(), CAST(:package AS jsonb))
+                (product_id, source_platform, source_product_id, title, title_status, sku_count, captured_at, uu_json, group_id)
+                VALUES (:id, 'douyin', NULL, :title, '手动创建', 1, now(), CAST(:package AS jsonb), :group_id)
                 RETURNING uu_json::text"""),
-                {"id": product_id, "title": title, "package": json.dumps(package, ensure_ascii=False)}).scalar_one()
+                {"id": product_id, "title": title, "package": json.dumps(package, ensure_ascii=False), "group_id": group_id}).scalar_one()
             conn.execute(text("""INSERT INTO product_skus(product_id, sku_id, sku_name, sort_order)
                 VALUES (:id, :sku, '规格: 默认', 0)"""), {"id": product_id, "sku": sku_id})
             if edit is not None:
@@ -92,8 +92,9 @@ class ProductRepository:
         product["category_path"] = source_category_path(product["source_platform"], product["category_path"] or "")
         return product
 
-    def detail(self, product_id: str) -> dict | None:
-        listing, _ = build_product_list_queries(ProductListOptions(product_id=product_id, include_total=False))
+    def detail(self, product_id: str, allowed_groups=None) -> dict | None:
+        listing, _ = build_product_list_queries(ProductListOptions(product_id=product_id, include_total=False,
+                                                                     allowed_groups=tuple(allowed_groups) if allowed_groups is not None else None))
         # Exact internal key for details: source IDs are only an explicit list filter.
         sql = listing.sql.replace("(p.product_id = $1 OR p.source_product_id = $1)", "p.product_id = $1")
         from .queries import Query
@@ -154,12 +155,13 @@ class ProductRepository:
                     "sourceCategoryId": source_category_id, "sourceAttributes": attributes,
                     "targetCategory": target_category, "targetAttributes": target_attributes}
 
-    def groups(self) -> list[dict]:
+    def groups(self, allowed_groups=None) -> list[dict]:
         with self.engine.connect() as conn:
-            return [self._group(row) for row in conn.execute(text("""SELECT g.group_id, g.group_name,
+            groups = [self._group(row) for row in conn.execute(text("""SELECT g.group_id, g.group_name,
                 g.created_at, g.updated_at, count(p.product_id)::integer AS product_count
                 FROM product_groups g LEFT JOIN products p ON p.group_id=g.group_id
                 GROUP BY g.group_id ORDER BY lower(g.group_name), g.created_at""")).mappings()]
+            return groups if allowed_groups is None else [group for group in groups if str(group["groupId"]) in allowed_groups]
 
     def group_exists(self, group_id) -> bool:
         with self.engine.connect() as conn:
@@ -193,42 +195,47 @@ class ProductRepository:
         conn.execute(text("DELETE FROM product_groups WHERE group_id=:id"), {"id": group_id})
         return count
 
-    def assign_group(self, conn: Connection, product_ids: list[str], group_id) -> list[str]:
+    def assign_group(self, conn: Connection, product_ids: list[str], group_id, allowed_groups=None) -> list[str]:
+        scope, params = group_scope_sql(allowed_groups)
         return list(conn.execute(text("""UPDATE products SET group_id=:group_id
-            WHERE product_id=ANY(CAST(:ids AS text[])) RETURNING product_id"""),
-            {"ids": product_ids, "group_id": group_id}).scalars())
+            WHERE product_id=ANY(CAST(:ids AS text[]))""" + scope + " RETURNING product_id"),
+            {"ids": product_ids, "group_id": group_id, **params}).scalars())
 
-    def delete_products(self, product_ids: list[str]) -> list[str]:
+    def delete_products(self, product_ids: list[str], allowed_groups=None) -> list[str]:
         # Collector-owned foreign keys cascade SKU, image and precheck rows.
         # Image files are deliberately left alone: URLs may be shared.
         with self.engine.begin() as conn:
+            scope, params = group_scope_sql(allowed_groups)
             return list(conn.execute(text("""DELETE FROM products
-                WHERE product_id=ANY(CAST(:ids AS text[])) RETURNING product_id"""),
-                {"ids": product_ids}).scalars())
+                WHERE product_id=ANY(CAST(:ids AS text[]))""" + scope + " RETURNING product_id"),
+                {"ids": product_ids, **params}).scalars())
 
-    def export_rows(self, product_ids: list[str]) -> list[dict]:
+    def export_rows(self, product_ids: list[str], allowed_groups=None) -> list[dict]:
         with self.engine.connect() as conn:
+            scope, params = group_scope_sql(allowed_groups)
             return [dict(row) for row in conn.execute(text("""SELECT product_id, source_platform, source_product_id,
                 title, captured_at, uu_rel_path, uu_sha256, uu_json::text AS uu_text FROM products
-                WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL
-                ORDER BY array_position(CAST(:ids AS text[]),product_id)"""), {"ids": product_ids}).mappings()]
+                WHERE product_id=ANY(CAST(:ids AS text[])) AND uu_json IS NOT NULL""" + scope + """
+                ORDER BY array_position(CAST(:ids AS text[]),product_id)"""), {"ids": product_ids, **params}).mappings()]
 
-    def category_paths(self, product_ids: list[str]) -> list[dict]:
+    def category_paths(self, product_ids: list[str], allowed_groups=None) -> list[dict]:
         """Read only the category IDs needed for display; never load entire packages."""
         with self.engine.connect().execution_options(
             isolation_level="REPEATABLE READ", postgresql_readonly=True,
         ) as conn, conn.begin():
+            scope, params = group_scope_sql(allowed_groups)
             return [dict(row) for row in conn.execute(text("""SELECT product_id, source_platform,
                 uu_json #>> '{goodsInfo,catId1}' AS cat1, uu_json #>> '{goodsInfo,catId2}' AS cat2,
                 uu_json #>> '{goodsInfo,catId3}' AS cat3, uu_json #>> '{goodsInfo,catId4}' AS cat4
-                FROM products WHERE product_id=ANY(CAST(:ids AS text[]))
+                FROM products WHERE product_id=ANY(CAST(:ids AS text[]))""" + scope + """
                 ORDER BY array_position(CAST(:ids AS text[]),product_id)"""),
-                {"ids": product_ids}).mappings()]
+                {"ids": product_ids, **params}).mappings()]
 
-    def edit_snapshot(self, product_id: str) -> dict:
-        with self.engine.connect() as conn:
-            row = conn.execute(text("SELECT uu_json::text AS package, source_platform FROM products WHERE product_id=:id"),
-                               {"id": product_id}).mappings().first()
+    def edit_snapshot(self, product_id: str, allowed_groups=None) -> dict:
+        with self.engine.connect().execution_options(isolation_level="REPEATABLE READ", postgresql_readonly=True) as conn, conn.begin():
+            scope, params = group_scope_sql(allowed_groups)
+            row = conn.execute(text("SELECT uu_json::text AS package, source_platform FROM products WHERE product_id=:id" + scope),
+                               {"id": product_id, **params}).mappings().first()
             projection_ids = None
             if row is not None and row["source_platform"] in {"pinduoduo", "pdd"}:
                 projection_ids = set(conn.execute(text("SELECT sku_id FROM product_skus WHERE product_id=:id"),
@@ -298,10 +305,11 @@ class ProductRepository:
                 "specImageGroup": str(first.get("name") or ""), "specImages": spec_images,
                 "specGroups": spec_groups, "specImagesEditable": spec_images_editable, "skus": sku_rows}
 
-    def save_edit(self, product_id: str, edit, conn: Connection | None = None, mark_modified: bool = True) -> dict:
+    def save_edit(self, product_id: str, edit, conn: Connection | None = None, mark_modified: bool = True, allowed_groups=None) -> dict:
         with (nullcontext(conn) if conn is not None else self.engine.begin()) as conn:
+            scope, params = group_scope_sql(allowed_groups)
             row = conn.execute(text("""SELECT source_platform, uu_json::text AS package, title_status
-                FROM products WHERE product_id=:id FOR UPDATE"""), {"id": product_id}).mappings().first()
+                FROM products WHERE product_id=:id""" + scope + " FOR UPDATE"), {"id": product_id, **params}).mappings().first()
             if row is None:
                 raise ProductNotFound()
             if not row["package"]:
@@ -550,8 +558,10 @@ class ProductRepository:
             })
             return "updated"
 
-    def image(self, product_id: str, kind: str, position: int):
+    def image(self, product_id: str, kind: str, position: int, allowed_groups=None):
         with self.engine.connect() as conn:
-            return conn.execute(text("""SELECT rel_path, source_url FROM product_images
-                WHERE product_id=:id AND image_type=:kind AND sort_order=:position"""),
-                {"id": product_id, "kind": kind, "position": position}).mappings().first()
+            scope, params = group_scope_sql(allowed_groups, "p")
+            return conn.execute(text("""SELECT i.rel_path, i.source_url FROM product_images i
+                JOIN products p ON p.product_id=i.product_id
+                WHERE i.product_id=:id AND i.image_type=:kind AND i.sort_order=:position""" + scope),
+                {"id": product_id, "kind": kind, "position": position, **params}).mappings().first()

@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from app.core.exceptions.errors import AppError
 from app.core.security.access import require_rpa_access
-from .api import get_service
+from .api import get_service, require_group
+from app.core.security.scoped_tokens import Principal
 from .errors import GroupNotFound, ProductNotFound
 from .export import current_uu_bytes
 from .queries import EXACT_PRODUCT_ID_PATTERN, ProductListOptions
@@ -19,6 +20,7 @@ from .service import ProductService
 
 router = APIRouter(prefix="/rpa/v1", tags=["rpa-products"], dependencies=[Depends(require_rpa_access)])
 Service = Annotated[ProductService, Depends(get_service)]
+Actor = Annotated[Principal, Depends(require_rpa_access)]
 
 
 class RpaProduct(BaseModel):
@@ -49,13 +51,14 @@ class CategoryUnavailable(AppError):
 
 
 @router.get("/product-groups", response_model=GroupsRead)
-def groups(service: Service):
-    return service.groups()
+def groups(service: Service, principal: Actor):
+    return service.groups() if principal.groups is None else service.groups(allowed_groups=principal.groups)
 
 
 @router.get("/product-groups/{group_id}/products", response_model=RpaPage)
-def group_products(group_id: UUID, service: Service, limit: int = Query(50, ge=1, le=200),
+def group_products(group_id: UUID, service: Service, principal: Actor, limit: int = Query(50, ge=1, le=200),
                    offset: int = Query(0, ge=0, le=2_147_483_647), include_total: bool = True):
+    require_group(principal, group_id)
     if not service.repository.group_exists(group_id):
         raise GroupNotFound()
     return service.list_options(ProductListOptions(group_id=str(group_id), limit=limit, offset=offset,
@@ -63,7 +66,7 @@ def group_products(group_id: UUID, service: Service, limit: int = Query(50, ge=1
 
 
 @router.get("/products/{product_id}/uu")
-def product_uu(product_id: str, service: Service,
+def product_uu(product_id: str, service: Service, principal: Actor,
                expected_sha256: str | None = Query(None, min_length=64, max_length=64),
                category_names: Literal["required"] | None = Query(None)):
     if len(product_id) > 128 or not EXACT_PRODUCT_ID_PATTERN.fullmatch(product_id):
@@ -71,7 +74,8 @@ def product_uu(product_id: str, service: Service,
     if expected_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         from .errors import ProductRequestError
         raise ProductRequestError("UU 校验值无效")
-    rows = service.repository.export_rows([product_id])
+    rows = (service.repository.export_rows([product_id]) if principal.groups is None else
+            service.repository.export_rows([product_id], allowed_groups=principal.groups))
     if not rows:
         raise ProductNotFound("商品不存在或没有可用的 UU")
     content, _ = current_uu_bytes(rows[0], service.settings.export_max_bytes,

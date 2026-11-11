@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import Settings, get_settings
-from app.core.security.access import require_api_access
+from app.core.security.access import require_api_access, require_permission
+from app.core.security.scoped_tokens import Principal
 from app.modules.central.client import CentralApplicationClient, CentralConnectionError, eligible_douyin_shops
 from app.modules.products.api import get_service
 from app.modules.products.queries import EXACT_PRODUCT_ID_PATTERN
@@ -21,7 +22,7 @@ from .cache import CacheUnavailable, CategoryCache
 from .client import DouyinCategoryClient, LookupError
 
 router = APIRouter(prefix="/api/v1/category-lookup", tags=["category-lookup"],
-                   dependencies=[Depends(require_api_access)])
+                   dependencies=[Depends(require_api_access), Depends(require_permission("category.read"))])
 _lock = Lock()
 _next = 0
 _shop_limits: dict[UUID, BoundedSemaphore] = {}
@@ -306,12 +307,14 @@ def category_tree(body: TreeBody, response: Response,
 def resolve_products(body: ProductIds, response: Response,
                      central: Annotated[CentralApplicationClient, Depends(get_central)],
                      lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)],
-                     service: Annotated[ProductService, Depends(get_service)]):
+                     service: Annotated[ProductService, Depends(get_service)],
+                     principal: Annotated[Principal, Depends(require_api_access)] = None):
     """Resolve saved Douyin category paths without changing products or prechecks."""
     from .resolver import CategoryResolutionError, CategoryResolver, category_ids, category_metadata
 
     response.headers["Cache-Control"] = "no-store"
-    rows = service.repository.category_paths(body.productIds)
+    rows = (service.repository.category_paths(body.productIds) if principal is None or principal.groups is None else
+            service.repository.category_paths(body.productIds, allowed_groups=principal.groups))
     resolver = CategoryResolver(lookup.settings, central=central, lookup=lookup)
 
     def one(row):
@@ -361,9 +364,11 @@ def predict_manual(body: PredictManualBody, response: Response,
 def predict(body: PredictBody, response: Response,
             central: Annotated[CentralApplicationClient, Depends(get_central)],
             lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)],
-            service: Annotated[ProductService, Depends(get_service)]):
+            service: Annotated[ProductService, Depends(get_service)],
+            principal: Annotated[Principal, Depends(require_api_access)] = None):
     response.headers["Cache-Control"] = "no-store"
-    rows = service.repository.export_rows([body.productId])
+    rows = (service.repository.export_rows([body.productId]) if principal is None or principal.groups is None else
+            service.repository.export_rows([body.productId], allowed_groups=principal.groups))
     if not rows:
         raise HTTPException(404, "商品不存在或缺少数据包")
     row = rows[0]
