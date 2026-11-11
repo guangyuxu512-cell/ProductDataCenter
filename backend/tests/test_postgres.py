@@ -124,6 +124,8 @@ def test_scoped_tokens_enforce_group_boundaries_across_real_database_operations(
             assert c.get(f"/rpa/v1/product-groups/{group_b}/products", headers=auth).status_code == 403
             assert c.get(f"/rpa/v1/products/{a}/uu", headers=auth).status_code == 200
             assert c.get(f"/rpa/v1/products/{b}/uu", headers=auth).status_code == 404
+            assert c.post("/api/v1/category-lookup/predict", headers=auth,
+                          json={"productId": b}).status_code == 404
             assert [row["product_id"] for row in repo.category_paths([a, b], allowed_groups={str(group_a)})] == [a]
             created_response = c.post("/api/v1/products", headers=auth,
                                       json={"title": "限定分组新建", "groupId": str(group_a)})

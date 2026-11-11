@@ -362,12 +362,12 @@ def predict_manual(body: PredictManualBody, response: Response,
 
 @router.post("/predict", response_model=PredictResponse)
 def predict(body: PredictBody, response: Response,
-            principal: Annotated[Principal, Depends(require_api_access)],
             central: Annotated[CentralApplicationClient, Depends(get_central)],
             lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)],
-            service: Annotated[ProductService, Depends(get_service)]):
+            service: Annotated[ProductService, Depends(get_service)],
+            principal: Annotated[Principal, Depends(require_api_access)] = None):
     response.headers["Cache-Control"] = "no-store"
-    rows = (service.repository.export_rows([body.productId]) if principal.groups is None else
+    rows = (service.repository.export_rows([body.productId]) if principal is None or principal.groups is None else
             service.repository.export_rows([body.productId], allowed_groups=principal.groups))
     if not rows:
         raise HTTPException(404, "商品不存在或缺少数据包")
