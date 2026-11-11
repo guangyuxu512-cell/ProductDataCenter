@@ -1,5 +1,6 @@
 """Exercise the candidate TLS ingress with synthetic loopback-only services."""
 import base64
+import hashlib
 import http.client
 import os
 from pathlib import Path
@@ -30,6 +31,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        if (self.server.kind != "api" or self.path != "/api/v1/product-images"
+                or self.headers.get("Authorization") != "Bearer synthetic-admin"):
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        data = self.rfile.read(int(self.headers["Content-Length"]))
+        body = hashlib.sha256(data).hexdigest().encode()
+        self.send_response(201)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
 
 def main():
     nginx = shutil.which("nginx")
@@ -45,6 +60,14 @@ def main():
         root = Path(directory)
         root.chmod(0o755)
         (root / "logs").mkdir()
+        # A different nginx instance may own the compiled default directory.
+        # A large request must use the PDC-specific writable directory instead.
+        default_body = root / "client_body_temp"
+        default_body.mkdir(mode=0o500)
+        temp_root = root / "pdc-temp"
+        temp_root.mkdir(mode=0o755)
+        for name in ("nginx-client-body", "nginx-proxy", "nginx-fastcgi", "nginx-uwsgi", "nginx-scgi"):
+            (temp_root / name).mkdir(mode=0o700)
         cert, key, users = root / "cert.pem", root / "key.pem", root / "users"
         subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
                         "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1",
@@ -57,6 +80,7 @@ def main():
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         template = (Path(__file__).resolve().parents[1] / "deploy/nginx.server-ingress.conf.template").read_text(encoding="utf-8")
+        template = template.replace("/var/lib/product-data-center", str(temp_root))
         values = {"PDC_BIND_IP": "127.0.0.1", "PDC_PUBLIC_PORT": str(port),
                   "PDC_WEB_PORT": str(web.server_port), "PDC_API_PORT": str(api.server_port),
                   "PDC_TLS_CERTIFICATE": str(cert), "PDC_TLS_PRIVATE_KEY": str(key),
@@ -76,11 +100,11 @@ def main():
         process = subprocess.Popen([nginx, "-c", str(conf), "-p", str(root), "-g", "daemon off;"],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         context = ssl.create_default_context(cafile=str(cert))
-        def request(path, authorization=None):
+        def request(path, authorization=None, *, method="GET", body=None):
             headers = {} if authorization is None else {"Authorization": authorization}
             connection = http.client.HTTPSConnection("127.0.0.1", port, context=context, timeout=5)
             try:
-                connection.request("GET", path, headers=headers)
+                connection.request(method, path, body=body, headers=headers)
                 response = connection.getresponse()
                 return response.status, response.read().decode()
             finally:
@@ -106,10 +130,14 @@ def main():
             assert request("/api/v1/products?limit=1", basic) == (200, "web:/api/v1/products?limit=1")
             assert request("/api/v1/products", "Bearer wrong")[0] == 401
             assert request("/api/v1/products?limit=1", "Bearer synthetic-admin") == (200, "api:/api/v1/products?limit=1")
+            image_body = bytes(range(256)) * 512
+            assert request("/api/v1/product-images", "Bearer synthetic-admin", method="POST", body=image_body) == (
+                201, hashlib.sha256(image_body).hexdigest())
+            assert (default_body.stat().st_mode & 0o777) == 0o500
             assert request("/rpa/v1/products/example/uu")[0] == 401
             assert request("/rpa/v1/products/example/uu", "Bearer synthetic-rpa")[0] == 200
             assert request("/rpa/v1/product-images/example.png")[0] == 200
-            print("isolated_tls_ingress_auth_and_routing=passed")
+            print("isolated_tls_ingress_auth_routing_and_large_upload=passed")
         finally:
             process.terminate()
             try:
