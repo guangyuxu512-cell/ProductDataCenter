@@ -14,7 +14,7 @@ type TokenRecord = {
   expiresAt: number | null; revokedAt: number | null; createdAt: number; updatedAt: number; parentId: null
 }
 
-async function fixtures(page: Page, options: { restricted?: boolean; injectedName?: boolean } = {}) {
+async function fixtures(page: Page, options: { restricted?: boolean; injectedName?: boolean; revokedHistory?: boolean; holdRefresh?: boolean } = {}) {
   const tokenDir = resolve(process.cwd(), '..', 'token-manager')
   await page.route('**/token-manager/**', async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -29,7 +29,22 @@ async function fixtures(page: Page, options: { restricted?: boolean; injectedNam
     id: '11111111111111111111111111111111', name: '<img src=x onerror=alert(1)>', permissions: ['product.read'],
     groupIds: null, expiresAt: null, revokedAt: null, createdAt: now, updatedAt: now, parentId: null,
   }] : []
+  if (options.revokedHistory) {
+    records = [
+      { id: '11111111111111111111111111111111', name: '已撤销旧凭据', permissions: ['product.read'],
+        groupIds: null, expiresAt: null, revokedAt: now, createdAt: now, updatedAt: now, parentId: null },
+      { id: '22222222222222222222222222222222', name: '有效凭据', permissions: ['product.read'],
+        groupIds: null, expiresAt: null, revokedAt: null, createdAt: now, updatedAt: now, parentId: null },
+      { id: '33333333333333333333333333333333', name: '过期凭据', permissions: ['product.read'],
+        groupIds: null, expiresAt: now - 60, revokedAt: null, createdAt: now, updatedAt: now, parentId: null },
+    ]
+  }
   const calls: { method: string; path: string; body: Record<string, unknown> | null }[] = []
+  let listReads = 0
+  let announceStale = () => {}
+  let releaseStale = () => {}
+  const staleStarted = new Promise<void>((resolve) => { announceStale = resolve })
+  const staleReleased = new Promise<void>((resolve) => { releaseStale = resolve })
   await page.route('**/api/v1/**', async (route) => {
     const req = route.request()
     const path = new URL(req.url()).pathname
@@ -44,7 +59,16 @@ async function fixtures(page: Page, options: { restricted?: boolean; injectedNam
       { groupId: groupA, name: '第一分组', productCount: 2 },
       ...(options.restricted ? [] : [{ groupId: groupB, name: '第二分组', productCount: 3 }]),
     ] } })
-    if (path === '/api/v1/tokens' && req.method() === 'GET') return route.fulfill({ json: { items: records } })
+    if (path === '/api/v1/tokens' && req.method() === 'GET') {
+      listReads++
+      if (options.holdRefresh && listReads === 2) {
+        const oldRecords = records.map((record) => ({ ...record }))
+        announceStale()
+        await staleReleased
+        return route.fulfill({ json: { items: oldRecords }, headers: { 'x-stale-fixture': '1' } })
+      }
+      return route.fulfill({ json: { items: records } })
+    }
     if (path === '/api/v1/tokens' && req.method() === 'POST') {
       const record = { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', name: String(body!.name),
         permissions: body!.permissions as string[], groupIds: body!.groupIds as string[] | null,
@@ -62,7 +86,7 @@ async function fixtures(page: Page, options: { restricted?: boolean; injectedNam
     }
     return route.fulfill({ status: 404 })
   })
-  return calls
+  return { calls, staleStarted, releaseStale }
 }
 
 async function login(page: Page) {
@@ -73,7 +97,7 @@ async function login(page: Page) {
 }
 
 test('独立页面创建、修改、撤销，并且只显示一次凭据', async ({ page }) => {
-  const calls = await fixtures(page)
+  const { calls } = await fixtures(page)
   await login(page)
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0])
   expect(page.url()).not.toContain(manager)
@@ -103,11 +127,41 @@ test('独立页面创建、修改、撤销，并且只显示一次凭据', async
   expect(update.body).not.toHaveProperty('expiresAt')
   page.once('dialog', (prompt) => prompt.accept())
   await card.getByRole('button', { name: '撤销' }).click()
-  await expect(card.getByText('已撤销')).toBeVisible()
+  await expect(card).toHaveCount(0)
+  await expect(page.locator('#list-caption')).toContainText('共 0 个')
   expect(calls.some((call) => call.method === 'DELETE')).toBe(true)
+  await page.getByRole('button', { name: '刷新' }).click()
+  await expect(card).toHaveCount(0)
   await page.getByRole('button', { name: '退出' }).click()
   await expect(page.getByRole('heading', { name: '管理员登录' })).toBeVisible()
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0])
+})
+
+test('历史中已撤销的凭据不显示，过期但未撤销的凭据仍可管理', async ({ page }) => {
+  await fixtures(page, { revokedHistory: true })
+  await login(page)
+  await expect(page.getByText('已撤销旧凭据')).toHaveCount(0)
+  await expect(page.getByText('有效凭据')).toBeVisible()
+  await expect(page.getByText('过期凭据')).toBeVisible()
+  await expect(page.locator('#list-caption')).toContainText('共 2 个')
+  await page.getByRole('button', { name: '刷新' }).click()
+  await expect(page.getByText('已撤销旧凭据')).toHaveCount(0)
+})
+
+test('较早发出的刷新结果不能让刚撤销的凭据重新出现', async ({ page }) => {
+  const { staleStarted, releaseStale } = await fixtures(page, { revokedHistory: true, holdRefresh: true })
+  await login(page)
+  const card = page.locator('.token-card').filter({ hasText: '有效凭据' })
+  await page.getByRole('button', { name: '刷新' }).click()
+  await staleStarted
+  page.once('dialog', (prompt) => prompt.accept())
+  await card.getByRole('button', { name: '撤销' }).click()
+  await expect(card).toHaveCount(0)
+  const oldResponse = page.waitForResponse((response) => response.headers()['x-stale-fixture'] === '1')
+  releaseStale()
+  await oldResponse
+  await expect(card).toHaveCount(0)
+  await expect(page.locator('#list-caption')).toContainText('共 1 个')
 })
 
 test('手机界面保留受限发放范围，并安全显示商品名称', async ({ page }) => {
