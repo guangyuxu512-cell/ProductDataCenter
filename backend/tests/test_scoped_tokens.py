@@ -73,6 +73,19 @@ def bearer(secret):
     return {"Authorization": "Bearer " + secret}
 
 
+def test_request_log_records_public_token_id_but_never_secret(client, monkeypatch):
+    from app.core.logging.request import request_logger
+
+    c, _ = client
+    issued = issue(c)
+    messages = []
+    monkeypatch.setattr(request_logger, "info", messages.append)
+    assert c.get("/api/v1/products", headers=bearer(issued["token"])).status_code == 200
+    assert len(messages) == 1
+    assert json.loads(messages[0])["user_id"] == "token:" + issued["record"]["id"]
+    assert issued["token"] not in messages[0]
+
+
 def test_create_modify_and_revoke_applies_immediately_without_exposing_secret(client):
     c, path = client
     issued = issue(c, permissions=["product.read", "group.read"], groups=[GROUP_A])

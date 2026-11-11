@@ -32,7 +32,8 @@ def require_api_access(
             raise HTTPException(503, "Token 权限服务暂不可用") from None
     else:
         raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"})
-    request.state.request_log_token_id = principal.token_id or "legacy-admin"
+    # Reuse the shared request logger's caller identity without logging a secret.
+    request.state.request_log_user_id = "token:" + (principal.token_id or "legacy-admin")
     return principal
 
 
@@ -78,5 +79,5 @@ def require_rpa_access(
             raise HTTPException(403, "当前 Token 没有 RPA 读取权限")
     else:
         raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"})
-    request.state.request_log_token_id = principal.token_id or "legacy-rpa"
+    request.state.request_log_user_id = "token:" + (principal.token_id or "legacy-rpa")
     return principal
