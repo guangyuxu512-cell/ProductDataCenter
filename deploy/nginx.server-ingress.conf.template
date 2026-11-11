@@ -1,6 +1,14 @@
-# Preparation template: include in an nginx http context only after validating
-# the dedicated port, TLS files, Basic credentials and both loopback upstreams.
+# Use only in the http context of the dedicated ProductDataCenter nginx process,
+# after validating its port, TLS files, Basic credentials and both upstreams.
 # Replace only the PDC_* placeholders; nginx's own $variables must be preserved.
+# Pre-create these directories for the configured worker user; never share them
+# with another nginx instance, which can change their owner on reload.
+client_body_temp_path /var/lib/product-data-center/nginx-client-body 1 2;
+proxy_temp_path /var/lib/product-data-center/nginx-proxy 1 2;
+fastcgi_temp_path /var/lib/product-data-center/nginx-fastcgi 1 2;
+uwsgi_temp_path /var/lib/product-data-center/nginx-uwsgi 1 2;
+scgi_temp_path /var/lib/product-data-center/nginx-scgi 1 2;
+
 map $http_authorization $pdc_server_bearer {
     default 0;
     ~*^Bearer[[:space:]] 1;
