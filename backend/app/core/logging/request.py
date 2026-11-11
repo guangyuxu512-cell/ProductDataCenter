@@ -13,6 +13,7 @@ _REQUEST_ID_STATE_KEY = "request_id"
 _REQUEST_USER_ID_STATE_KEY = "request_log_user_id"
 _REQUEST_TEAM_ID_STATE_KEY = "request_log_team_id"
 _REQUEST_ERROR_CODE_STATE_KEY = "request_log_error_code"
+_REQUEST_TOKEN_ID_STATE_KEY = "request_log_token_id"
 
 request_logger = logging.getLogger("app.request")
 request_logger.setLevel(logging.INFO)
@@ -101,6 +102,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             ("user_id", _REQUEST_USER_ID_STATE_KEY),
             ("team_id", _REQUEST_TEAM_ID_STATE_KEY),
             ("error_code", _REQUEST_ERROR_CODE_STATE_KEY),
+            ("token_id", _REQUEST_TOKEN_ID_STATE_KEY),
         ):
             value = getattr(request.state, state_key, None)
             if isinstance(value, str):

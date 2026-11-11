@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     api_token_file: Path | None = None
     rpa_api_token: SecretStr | None = None
     rpa_api_token_file: Path | None = None
+    # Separate credential registry on the existing persistent private mount.
+    # No DDL is applied to the collector-owned PostgreSQL database.
+    scoped_token_store_file: Path | None = None
     data_root: Path = Path("/data")
     # User-uploaded product images live on a persistent NAS mount.  A public
     # URL is configured explicitly; the incoming Host header is never trusted.
@@ -86,6 +89,11 @@ class Settings(BaseSettings):
         if self.rpa_api_token_file:
             return self.rpa_api_token_file.read_text(encoding="utf-8").strip()
         return self.rpa_api_token.get_secret_value() if self.rpa_api_token else ""
+
+    def configured_scoped_token_store(self) -> Path | None:
+        if self.scoped_token_store_file:
+            return self.scoped_token_store_file
+        return self.category_cache_file.with_name("scoped-api-tokens.sqlite3") if self.category_cache_file else None
 
 
 @lru_cache

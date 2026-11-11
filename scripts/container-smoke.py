@@ -143,6 +143,9 @@ def main():
             wait_for(lambda: request("/health", auth=False)["status"] == "ok", "Web")
             request("/", auth=False, status=401)
             request("/api/v1/products", auth=False, status=401)
+            # The Basic-authenticated web proxy must not upgrade its credential
+            # into a token-issuer credential, even though ordinary UI routes do.
+            request("/api/v1/tokens", status=401)
             assert b"<html" in request("/")
             assert request("/api/v1/capabilities")["groupWrites"] is False
             request("/api/v1/product-groups", method="POST", body={"name": "必须拒绝"}, status=403)

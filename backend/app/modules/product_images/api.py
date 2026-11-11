@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 
 from app.core.config import get_settings
-from app.core.security.access import require_api_access, require_product_writes
+from app.core.security.access import require_api_access, require_product_writes, require_permission
 
 router = APIRouter(tags=["product-images"])
 _NAME = re.compile(r"^[0-9a-f]{32}\.(?:jpg|png|gif|webp)$")
@@ -49,7 +49,7 @@ def _storage_dir() -> Path:
 
 
 @router.post("/api/v1/product-images", status_code=status.HTTP_201_CREATED,
-             dependencies=[Depends(require_api_access), Depends(require_product_writes)])
+             dependencies=[Depends(require_api_access), Depends(require_permission("image.upload")), Depends(require_product_writes)])
 async def upload_image(request: Request):
     settings = get_settings()
     base = _public_base(settings.image_public_base_url)
