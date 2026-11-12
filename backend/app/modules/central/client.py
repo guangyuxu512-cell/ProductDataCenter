@@ -75,6 +75,19 @@ class CentralWorkerPrecheckState(CentralWorkerPrecheckTicket):
     error_message: str | None = Field(default=None, repr=False)
 
 
+class CentralWorkerDeliveryContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    task_id: UUID
+    client_id: str
+    product_id: str = Field(min_length=1, max_length=128)
+    revision: int = Field(gt=0)
+    device_id: UUID
+    category_id: str = Field(pattern=r"^[0-9]{1,32}$")
+    local_shop_id: str = Field(min_length=1, max_length=160)
+    platform_shop_id: str = Field(min_length=1, max_length=160)
+
+
 class CentralApplicationClient:
     def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None):
         self._settings = settings
@@ -97,11 +110,14 @@ class CentralApplicationClient:
             raise CentralConnectionError("invalid_response")
         return session
 
-    def submit_worker_precheck(self, claim: dict, category_id: str, title: str) -> CentralWorkerPrecheckTicket:
+    def submit_worker_precheck(self, claim: dict, category_id: str, title: str, *,
+                               delivery: Literal["central", "product"] = "central") -> CentralWorkerPrecheckTicket:
         body = {"kind": "douyin.category_schema",
                 "context": {"product_id": claim["product_id"], "revision": claim["revision"],
                             "attempt": claim["attempts"]},
                 "input": {"category_id": category_id, "title": title}}
+        if delivery == "product":
+            body["delivery"] = delivery
         payload = self._request("POST", _WORKER_PRECHECKS, body=body, success_status=202)
         try:
             return CentralWorkerPrecheckTicket.model_validate(payload)
@@ -118,6 +134,18 @@ class CentralApplicationClient:
         if state.task_id != task_id:
             raise CentralConnectionError("invalid_response")
         return state
+
+    def worker_delivery_context(self, task_id: UUID, device_id: UUID, worker_token: str) -> CentralWorkerDeliveryContext:
+        payload = self._request("GET", f"/api/v1/worker/tasks/{task_id}/precheck-delivery-context",
+                                require_no_store=True, worker_credentials=(device_id, worker_token))
+        try:
+            context = CentralWorkerDeliveryContext.model_validate(payload)
+        except ValidationError:
+            raise CentralConnectionError("invalid_response") from None
+        if (context.task_id != task_id or context.device_id != device_id
+                or context.client_id != self._settings.central_application_id):
+            raise CentralConnectionError("invalid_response")
+        return context
 
     def _connection(self) -> tuple[str, str, str]:
         settings = self._settings
@@ -170,7 +198,8 @@ class CentralApplicationClient:
 
     def _request(self, method: str, path: str, *, body: dict | None = None,
                  require_no_store: bool = False, success_status: int = 200,
-                 max_response_bytes: int = _MAX_RESPONSE_BYTES, timeout: float = 8.0):
+                 max_response_bytes: int = _MAX_RESPONSE_BYTES, timeout: float = 8.0,
+                 worker_credentials: tuple[UUID, str] | None = None):
         base_url, client_id, token = self._connection()
         try:
             with httpx.Client(
@@ -180,9 +209,16 @@ class CentralApplicationClient:
                 options: dict[str, Any] = {"headers": {
                     "X-Application-ID": client_id, "Authorization": f"Bearer {token}",
                     "Cache-Control": "no-store"}}
+                if worker_credentials is not None:
+                    device_id, worker_token = worker_credentials
+                    options["headers"] = {"X-Device-ID": str(device_id),
+                                          "Authorization": f"Bearer {worker_token}",
+                                          "Cache-Control": "no-store"}
                 if body is not None:
                     options["json"] = body
                 with client.stream(method, path, **options) as response:
+                    if worker_credentials is not None and response.status_code in (401, 403, 404):
+                        raise CentralConnectionError("worker_denied")
                     if response.status_code in (401, 403):
                         raise CentralConnectionError("authentication_failed")
                     if response.status_code == 409 and path.startswith(_WORKER_PRECHECKS):

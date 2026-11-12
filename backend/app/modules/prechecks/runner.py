@@ -3,6 +3,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Thread
+from types import SimpleNamespace
 
 from fastapi import Response
 
@@ -71,14 +72,13 @@ class PrecheckRunner:
                 log.warning("无法保存自动预检状态；稍后将重新领取")
 
     def _process_worker(self, claim, detail):
-        """Poll one idempotent task without holding a product queue lease."""
+        """Submit once; the assigned Worker returns the result to this service."""
         category_id = str(detail["sourceCategoryId"])
         title = detail["product"].get("title") or "商品"
         # Preserve the same validation as the existing synchronous schema API.
         schema_body = AutoSchemaBody(categoryId=category_id, title=title)
         try:
-            ticket = self.central.submit_worker_precheck(claim, schema_body.categoryId, schema_body.title)
-            state = self.central.read_worker_precheck(ticket.task_id)
+            self.central.submit_worker_precheck(claim, schema_body.categoryId, schema_body.title, delivery="product")
         except CentralConnectionError as error:
             if error.reason == "upstream_unavailable":
                 self.queue.defer_worker(claim)
@@ -90,19 +90,50 @@ class PrecheckRunner:
                            "invalid_response": "预检服务返回无效结果"}.get(error.reason, "预检服务连接不可用")
                 self.queue.complete(claim, _worker_failure(claim, message))
             return
-        if state.status in {"pending", "running"}:
-            self.queue.defer_worker(claim, running=state.status == "running")
+        self.queue.wait_for_worker(claim)
+
+    def accept_worker_delivery(self, context, terminal, digest: str) -> bool:
+        """Apply one authenticated Worker result to its matching product revision."""
+        result = terminal.result
+        expected = {"kind": "douyin.category_schema", "category_id": context.category_id,
+                    "device_id": str(context.device_id), "local_shop_id": context.local_shop_id,
+                    "platform_shop_id": context.platform_shop_id}
+        if result is not None and (not isinstance(result, dict) or any(result.get(k) != v for k, v in expected.items())):
+            raise ValueError("worker identity mismatch")
+        if terminal.status == "success" and result is None:
+            raise ValueError("worker result missing")
+        receipt = {"task_id": str(context.task_id), "sha256": digest}
+        state, claim = self.queue.claim_worker_result(context.product_id, context.revision, receipt)
+        if state == "stale":
+            return False
+        if state == "duplicate":
+            return True
+        if state != "claimed" or claim is None:
+            raise ValueError("worker result conflicts")
+        try:
+            self._complete_worker_delivery(context, terminal, claim, receipt)
+        except Exception:
+            self.queue.retry(claim)
+            raise
+        return True
+
+    def _complete_worker_delivery(self, context, terminal, claim: dict, receipt: dict) -> None:
+        def finish(value):
+            value["_worker_receipt"] = receipt
+            if not self.queue.complete(claim, value):
+                raise RuntimeError("precheck changed while saving")
+
+        detail = self.service.repository.detail(claim["product_id"])
+        if not detail or str(detail.get("sourceCategoryId") or "") != context.category_id:
+            finish(_worker_failure(claim, "商品类目已变化，请重新预检"))
             return
-        if state.status == "lost":
-            self.queue.defer_worker(claim, running=True, waiting_result=True)
-            return
-        if state.status == "failed":
-            self.queue.complete(claim, _worker_failure(claim, _worker_failure_message(state)))
+        if terminal.status == "failed":
+            finish(_worker_failure(claim, _worker_failure_message(SimpleNamespace(result=terminal.result))))
             return
         try:
-            schema = read_worker_schema(state.result, expected_category_id=category_id)
+            schema = read_worker_schema(terminal.result, expected_category_id=context.category_id)
         except WorkerSchemaResultError:
-            self.queue.complete(claim, _worker_failure(claim, "平台预检结果无效或超过允许大小"))
+            finish(_worker_failure(claim, "平台预检结果无效或超过允许大小"))
             return
         if not claim["product_id"].startswith("manual:"):
             status = str(detail["product"].get("title_status") or "")
@@ -112,12 +143,16 @@ class PrecheckRunner:
                     outcome = self.service.repository.set_default_brand(
                         claim["product_id"], selection, force=False, mark_modified=False,
                         expected_precheck_claim=claim)
-                    if outcome in {"updated", "stale"}:
-                        # A saved package advanced revision, or a newer claim won.
+                    if outcome == "updated":
+                        # The saved package advanced revision and queued a fresh check.
                         return
+                    if outcome == "stale":
+                        # A concurrent claimant may still be processing this revision.
+                        # Re-deliver so it is never acknowledged before persistence.
+                        raise RuntimeError("precheck changed while saving")
         result = check_product(claim["product_id"], self.service, self.central, self.lookup,
                                schema_override=schema)
-        self.queue.complete(claim, result)
+        finish(result)
 
     def run(self):
         with ThreadPoolExecutor(max_workers=15, thread_name_prefix="product-check") as pool:

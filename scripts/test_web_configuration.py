@@ -23,27 +23,28 @@ class WebConfigurationTests(unittest.TestCase):
             '/etc/product-workbench/nginx.conf.template': ROOT / 'deploy/nginx.conf.template',
             '/etc/nginx/conf.d/default.conf': self.output,
         }.items():
-            script = script.replace(original, str(replacement))
+            script = script.replace(original, replacement.as_posix())
         self.script = root / 'entrypoint.sh'
         self.script.write_text(script, encoding='utf8')
 
     def run_config(self, **kwargs):
         env = {**os.environ, **kwargs}
-        return subprocess.run(['sh', str(self.script)], env=env, capture_output=True, text=True)
+        return subprocess.run(['sh', str(self.script)], env=env, capture_output=True, text=True,
+                              encoding='utf8', errors='replace')
 
     def test_basic_is_default(self):
         result = self.run_config()
         self.assertEqual(result.returncode, 0, result.stderr)
-        config = self.output.read_text()
+        config = self.output.read_text(encoding='utf8')
         self.assertIn('auth_basic "ProductDataCenter"', config)
         self.assertIn('proxy_set_header Authorization $http_authorization', config)
 
     def test_lan_restricts_only_web_and_preserves_rpa(self):
         result = self.run_config(WEB_ACCESS_MODE='lan', WEB_TRUSTED_CIDR='192.168.0.0/24')
         self.assertEqual(result.returncode, 0, result.stderr)
-        config = self.output.read_text()
+        config = self.output.read_text(encoding='utf8')
         self.assertIn('auth_basic off;', config)
-        self.assertEqual(config.count('allow 192.168.0.0/24; deny all;'), 5)
+        self.assertEqual(config.count('allow 192.168.0.0/24; deny all;'), 6)
         token_admin = config.split('location ^~ /api/v1/tokens {', 1)[1].split('}', 1)[0]
         self.assertIn('proxy_set_header Authorization $http_authorization', token_admin)
         self.assertNotIn('$product_web_authorization', token_admin)
@@ -51,6 +52,11 @@ class WebConfigurationTests(unittest.TestCase):
         self.assertIn('allow 192.168.0.0/24; deny all;', upload)
         self.assertIn('proxy_set_header Authorization $product_web_authorization', upload)
         self.assertIn('client_max_body_size 15m;', upload)
+        delivery = config.split('location ^~ /api/v1/worker-precheck-results/ {', 1)[1].split('}', 1)[0]
+        self.assertIn('allow 192.168.0.0/24; deny all;', delivery)
+        self.assertIn('proxy_set_header Authorization $http_authorization', delivery)
+        self.assertNotIn('$product_web_authorization', delivery)
+        self.assertIn('client_max_body_size 5m;', delivery)
         rpa = config.split('location /rpa/v1/ {', 1)[1].split('}', 1)[0]
         self.assertNotIn('deny all', rpa)
         self.assertIn('proxy_set_header Authorization $http_authorization', rpa)

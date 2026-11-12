@@ -14,6 +14,7 @@ def present_result(result):
     if not isinstance(result, dict):
         return result
     value = deepcopy(result)
+    value.pop("_worker_receipt", None)
     issues = value.get("issues")
     details = value.get("issueDetails")
     def obsolete(message):
@@ -83,6 +84,34 @@ class PrecheckQueue:
                 WHERE product_id=:product_id AND revision=:revision AND attempts=:attempts AND state='running'"""),
                 {**claim, "result": json.dumps(result, ensure_ascii=False)}).rowcount
         return bool(done)
+
+    def wait_for_worker(self, claim: dict) -> bool:
+        """Wait for a pushed result; reclaim only if it has not arrived."""
+        with self.engine.begin() as conn:
+            changed = conn.execute(text("""UPDATE product_prechecks SET state='running',
+                lease_until=now()+interval '3 minutes', last_error=:waiting, updated_at=now()
+                WHERE product_id=:product_id AND revision=:revision AND attempts=:attempts AND state='running'"""),
+                {**claim, "waiting": _WAITING_WORKER_RESULT}).rowcount
+        return bool(changed)
+
+    def claim_worker_result(self, product_id: str, revision: int, receipt: dict) -> tuple[str, dict | None]:
+        """Fence stale or duplicate Worker deliveries using the existing queue row."""
+        with self.engine.begin() as conn:
+            row = conn.execute(text("""SELECT revision, state, result FROM product_prechecks
+                WHERE product_id=:product_id FOR UPDATE"""), {"product_id": product_id}).mappings().first()
+            if row is None or row["revision"] != revision:
+                return "stale", None
+            if row["state"] == "done":
+                current = row["result"] if isinstance(row["result"], dict) else {}
+                return ("duplicate" if current.get("_worker_receipt") == receipt else "conflict"), None
+            if row["state"] not in ("pending", "running"):
+                return "conflict", None
+            claim = conn.execute(text("""UPDATE product_prechecks SET state='running', attempts=attempts+1,
+                lease_until=now()+interval '3 minutes', last_error=:waiting, updated_at=now()
+                WHERE product_id=:product_id AND revision=:revision
+                RETURNING product_id, revision, attempts"""),
+                {"product_id": product_id, "revision": revision, "waiting": _WAITING_WORKER_RESULT}).mappings().one()
+        return "claimed", dict(claim)
 
     def defer_worker(self, claim: dict, *, running: bool = False, waiting_result: bool = False) -> bool:
         """Release a claim while awaiting its idempotently keyed central task."""
