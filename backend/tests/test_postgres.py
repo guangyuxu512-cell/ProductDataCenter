@@ -22,11 +22,11 @@ def engine():
     if not value:
         pytest.skip("需要显式的隔离 PostgreSQL 连接")
     url = make_url(value)
-    assert url.database == "product_workbench_test", "拒绝对非隔离库执行测试"
+    assert url.database in {"product_workbench_test", "product_workbench_test_direct_v1"}, "拒绝对非隔离库执行测试"
     assert url.host in {"127.0.0.1", "localhost", "postgres"}, "拒绝访问外部数据库"
     engine = create_engine(value)
     with engine.begin() as conn:
-        assert conn.execute(text("SELECT current_database()")).scalar_one() == "product_workbench_test"
+        assert conn.execute(text("SELECT current_database()")).scalar_one() == url.database
         assert conn.execute(text("SELECT count(*) FROM pg_tables WHERE schemaname='public'")).scalar_one() == 0, "需要全新的隔离库"
         for path in sorted((Path(__file__).parent / "fixtures/collector").glob("*.sql")):
             conn.exec_driver_sql(path.read_text(encoding="utf-8"))
@@ -1239,5 +1239,72 @@ def test_worker_brand_waits_for_concurrent_edit_then_rejects_stale_claim(engine)
         assert queue.complete(claim, {"status": "ready", "issues": []}) is False
     finally:
         release.set()
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
+def test_direct_worker_result_uses_real_queue_and_preserves_new_revision(engine, monkeypatch):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from fastapi.testclient import TestClient
+    from app.main import create_application
+    from app.modules.prechecks import worker_delivery
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    task_id, device_id = uuid4(), uuid4()
+    product_id = "12345678"
+    queue = PrecheckQueue(engine)
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO products(product_id, source_platform, source_product_id, title,
+            shop_name, category_path, current_price_min, current_price_max, captured_at, title_status, uu_json)
+            VALUES (:id, 'douyin', :id, '测试商品', '测试店', '家居/厨房', 9.9, 9.9,
+                    now(), '商品库已修改', '{"goodsInfo":{"catId1":"100","catId2":"200","catId3":"300"}}')"""),
+            {"id": product_id})
+        conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+            VALUES (:id,'main',0,'','https://fixture.invalid/main.png')"""), {"id": product_id})
+        conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,sort_order)
+            VALUES (:id,'sku-1','白色',9.9,0)"""), {"id": product_id})
+    try:
+        revision = queue.results([product_id])[0]["revision"]
+        original_claim = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        context = SimpleNamespace(task_id=task_id, device_id=device_id, product_id=product_id,
+                                  revision=revision, category_id="300", local_shop_id="local", platform_shop_id="shop")
+        settings = Settings(_env_file=None, auto_precheck_enabled=True, worker_precheck_enabled=True)
+
+        class Central:
+            def __init__(self, settings):
+                pass
+            def worker_delivery_context(self, actual_task, actual_device, token):
+                assert (actual_task, actual_device, token) == (task_id, device_id, "ccw_test")
+                return context
+
+        monkeypatch.setattr(worker_delivery, "get_settings", lambda: settings)
+        monkeypatch.setattr(worker_delivery, "get_database_engine", lambda: engine)
+        monkeypatch.setattr(worker_delivery, "CentralApplicationClient", Central)
+        body = {"status": "success", "error_code": None, "error_message": None,
+                "result": {"kind": "douyin.category_schema", "category_id": "300", "device_id": str(device_id),
+                           "local_shop_id": "local", "platform_shop_id": "shop", "http_status": 200,
+                           "platform_code": 0, "items": []}}
+        wire = json.dumps(body, separators=(",", ":")).encode()
+        headers = {"Authorization": "Bearer ccw_test", "X-Device-ID": str(device_id)}
+        with TestClient(create_application()) as client:
+            first = client.post(f"/api/v1/worker-precheck-results/{task_id}", content=wire, headers=headers)
+            assert first.status_code == 200 and first.json()["accepted"] is True
+            assert not queue.wait_for_worker(original_claim)  # a fast Worker already finished this claim
+            saved = queue.results([product_id])[0]
+            assert saved["state"] == "done" and saved["result"]["status"] == "ready"
+            assert "_worker_receipt" not in saved["result"]
+            repeated = client.post(f"/api/v1/worker-precheck-results/{task_id}", content=wire, headers=headers)
+            assert repeated.status_code == 200 and repeated.json()["accepted"] is True
+            changed = dict(body, result={**body["result"], "items": [{"id": "different"}]})
+            conflict = client.post(f"/api/v1/worker-precheck-results/{task_id}",
+                                   content=json.dumps(changed).encode(), headers=headers)
+            assert conflict.status_code == 409
+            assert queue.results([product_id])[0]["result"] == saved["result"]
+            assert queue.enqueue([product_id])[0]["revision"] > revision
+            stale = client.post(f"/api/v1/worker-precheck-results/{task_id}", content=wire, headers=headers)
+            assert stale.status_code == 200 and stale.json()["accepted"] is False
+            assert queue.results([product_id])[0]["state"] == "pending"
+    finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})

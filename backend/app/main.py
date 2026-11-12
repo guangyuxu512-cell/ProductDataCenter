@@ -10,6 +10,7 @@ from app.modules.products.api import router as products_router
 from app.modules.products.rpa_api import router as rpa_router
 from app.modules.product_images.api import router as product_images_router
 from app.modules.prechecks.api import router as precheck_router
+from app.modules.prechecks.worker_delivery import router as worker_precheck_results_router
 from app.modules.access_tokens.api import router as access_tokens_router
 
 
@@ -41,6 +42,7 @@ def create_application() -> FastAPI:
     app.include_router(rpa_router)
     app.include_router(product_images_router)
     app.include_router(precheck_router)
+    app.include_router(worker_precheck_results_router)
     app.include_router(access_tokens_router)
     # 现有库的 schema_migrations 由手机采集项目唯一管理，本服务不执行 DDL。
     return app
