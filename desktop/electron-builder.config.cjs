@@ -1,7 +1,7 @@
 const { execFileSync } = require('node:child_process')
 const path = require('node:path')
 
-const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim()
+const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: path.join(__dirname, '..'), encoding: 'utf8', windowsHide: true }).trim()
 if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('无法读取发行包源提交 SHA')
 
 async function applyElectronFuses(context) {
@@ -27,7 +27,7 @@ module.exports = {
   productName: '商品云库',
   directories: { output: 'release' },
   asar: true,
-  files: ['dist/main.js', 'dist/runtime.js', 'package.json'],
+  files: ['dist/main.js', 'dist/runtime.js', 'dist/credentials.js', 'dist/login-preload.js', 'login.html', 'login-renderer.js', 'package.json'],
   npmRebuild: false,
   electronDownload: {
     checksums: {

@@ -1,6 +1,6 @@
 # 商品云库
 
-独立的商品工作台：使用中控的页面外壳、布局、主题和组件，读取手机采集项目现有的 NAS 商品库。代码保留在原 ProductDataCenter 仓库；历史 Electron 安装产物未覆盖。
+独立的商品工作台：使用中控的页面外壳、布局、主题和组件，读取服务器上的共享商品数据库；用户上传图片保存在 NAS。代码保留在 ProductDataCenter 仓库。
 
 ## V1 范围
 
@@ -25,7 +25,7 @@
 
 原样复用文件的校验记录在 `docs/source-baseline.json`。商品页面数据绑定、详情字段和 HTTP 环境下的复制行为进行了适配，公共布局和样式没有重设计。
 
-桌面客户端和免网页登录的局域网部署方式见 [桌面客户端说明](docs/product-desktop-lan-v1.md)；SKU 表格及桌面输入修复见 [SKU 表格整理](docs/sku-table-order-20261108.md)；抖音商品中文类目和 RPA 读取方式见 [类目映射说明](docs/douyin-category-mapping-20261109.md)。RPA 专用只读凭据保持独立。
+桌面客户端服务器直连及历史局域网部署说明见 [桌面客户端说明](docs/product-desktop-lan-v1.md)；SKU 表格及桌面输入修复见 [SKU 表格整理](docs/sku-table-order-20261108.md)；抖音商品中文类目和 RPA 读取方式见 [类目映射说明](docs/douyin-category-mapping-20261109.md)。RPA 专用只读凭据保持独立。
 
 AI 的独立 Token 管理页面与权限接口见 [Token 管理说明](docs/scoped-api-tokens.md)。
 
