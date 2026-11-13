@@ -14,6 +14,7 @@ const product = (id: string, platform = 'douyin') => ({
 
 async function fixtures(page: Page) {
   const listRequests: URL[] = []
+  const deletedGroups: string[] = []
   const groups = [{ groupId: '00000000-0000-4000-8000-000000000001', name: '正价品', productCount: 2 }]
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url())
@@ -29,6 +30,13 @@ async function fixtures(page: Page) {
       const group = groups.find((item) => url.pathname.endsWith(item.groupId))!
       group.name = route.request().postDataJSON().name
       return route.fulfill({ json: { group } })
+    }
+    if (url.pathname.startsWith('/api/v1/product-groups/') && method === 'DELETE') {
+      const index = groups.findIndex((item) => url.pathname.endsWith(item.groupId))
+      if (index < 0) return route.fulfill({ status: 404, json: { detail: '商品分组不存在' } })
+      const [group] = groups.splice(index, 1)
+      deletedGroups.push(group.groupId)
+      return route.fulfill({ json: { deleted: group } })
     }
     if (url.pathname === '/api/v1/products') {
       listRequests.push(url)
@@ -51,7 +59,7 @@ async function fixtures(page: Page) {
     }
     return route.fulfill({ status: 404, json: { message: 'fixture endpoint not defined' } })
   })
-  return { listRequests }
+  return { listRequests, deletedGroups }
 }
 
 async function confirmImageLink(page: Page, value: string) {
@@ -226,6 +234,51 @@ test('分组新增和重命名使用真实交互，生产数据不参与测试',
   await page.getByRole('textbox', { name: '分组名称', exact: true }).fill('更新分组')
   await page.getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.locator('tr').filter({ hasText: '更新分组' })).toHaveCount(1)
+})
+
+test('确认删除分组会发送请求，取消不会删除', async ({ page }) => {
+  const { deletedGroups } = await fixtures(page)
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '分组管理', exact: true }).click()
+  const row = page.locator('tr').filter({ hasText: '正价品' })
+  await row.getByRole('button', { name: '删除', exact: true }).click()
+  const confirm = page.getByRole('dialog').filter({ hasText: '删除分组' })
+  await expect(confirm).toContainText('其中商品将保留并变为未分组')
+  await confirm.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(confirm).not.toBeVisible()
+  await expect(row).toHaveCount(1)
+  expect(deletedGroups).toEqual([])
+  await row.getByRole('button', { name: '删除', exact: true }).click()
+  await confirm.getByRole('button', { name: '删除', exact: true }).click()
+  await expect(confirm).not.toBeVisible()
+  await expect(row).toHaveCount(0)
+  expect(deletedGroups).toEqual(['00000000-0000-4000-8000-000000000001'])
+})
+
+test('删除分组失败时保留确认框并允许重试', async ({ page }) => {
+  const { deletedGroups } = await fixtures(page)
+  let shouldFail = true
+  await page.route('**/api/v1/product-groups/*', async (route) => {
+    if (route.request().method() === 'DELETE' && shouldFail) {
+      shouldFail = false
+      return route.fulfill({ status: 500, json: { detail: '暂时无法删除' } })
+    }
+    return route.fallback()
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '分组管理', exact: true }).click()
+  const row = page.locator('tr').filter({ hasText: '正价品' })
+  await row.getByRole('button', { name: '删除', exact: true }).click()
+  const confirm = page.getByRole('dialog').filter({ hasText: '删除分组' })
+  await confirm.getByRole('button', { name: '删除', exact: true }).click()
+  await expect(page.locator('.n-message')).toBeVisible()
+  await expect(confirm).toBeVisible()
+  await expect(row).toHaveCount(1)
+  expect(deletedGroups).toEqual([])
+  await confirm.getByRole('button', { name: '删除', exact: true }).click()
+  await expect(confirm).not.toBeVisible()
+  await expect(row).toHaveCount(0)
+  expect(deletedGroups).toEqual(['00000000-0000-4000-8000-000000000001'])
 })
 
 test('慢速翻页与切换详情保持外框，旧数据加载时不可操作', async ({ page }) => {

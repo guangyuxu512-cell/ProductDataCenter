@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref } from 'vue'
-import { NForm, NFormItem, useDialog, useMessage, type DataTableColumns } from 'naive-ui'
+import { NForm, NFormItem, useMessage, type DataTableColumns } from 'naive-ui'
 import { AppButton, AppDialog, AppInput } from '@/shared/ui'
 import { DataTable } from '@/shared/components'
 import { saveGroup, deleteGroup } from '../api/products'
@@ -8,8 +8,9 @@ import type { ProductGroup } from '../model/nas-contracts'
 
 const props = defineProps<{ show: boolean; groups: ProductGroup[]; writable: boolean }>()
 const emit = defineEmits<{ 'update:show': [value: boolean]; changed: [] }>()
-const message = useMessage(), dialog = useDialog()
+const message = useMessage()
 const name = ref(''), editingId = ref<string | undefined>(), saving = ref(false)
+const pendingDeletion = ref<ProductGroup | null>(null)
 const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败'
 
 async function submit() {
@@ -27,18 +28,24 @@ async function submit() {
 
 function remove(group: ProductGroup) {
   if (!props.writable || saving.value) return
-  dialog.warning({ title: '删除分组', content: `删除“${group.name}”？其中商品将保留并变为未分组。`,
-    positiveText: '删除', negativeText: '取消',
-    onPositiveClick: async () => {
-      saving.value = true
-      try {
-        await deleteGroup(group.groupId)
-        if (editingId.value === group.groupId) { editingId.value = undefined; name.value = '' }
-        message.success('分组已删除'); emit('changed')
-      } catch (error) { message.error(errorText(error)); return false }
-      finally { saving.value = false }
-    },
-  })
+  pendingDeletion.value = group
+}
+
+function updateDeleteDialog(show: boolean) {
+  if (!show && !saving.value) pendingDeletion.value = null
+}
+
+async function confirmRemove() {
+  const group = pendingDeletion.value
+  if (!group || !props.writable || saving.value) return
+  saving.value = true
+  try {
+    await deleteGroup(group.groupId)
+    if (editingId.value === group.groupId) { editingId.value = undefined; name.value = '' }
+    pendingDeletion.value = null
+    message.success('分组已删除'); emit('changed')
+  } catch (error) { message.error(errorText(error)) }
+  finally { saving.value = false }
 }
 
 const columns = computed<DataTableColumns<ProductGroup>>(() => [
@@ -66,5 +73,9 @@ const columns = computed<DataTableColumns<ProductGroup>>(() => [
       <NFormItem v-if="editingId"><AppButton @click="editingId = undefined; name = ''">取消</AppButton></NFormItem>
     </NForm>
     <DataTable :columns="columns" :data="groups" :row-key="(row: ProductGroup) => row.groupId" viewport="stable" />
+  </AppDialog>
+  <AppDialog :show="pendingDeletion !== null" title="删除分组" size="sm" positive-text="删除"
+    :loading="saving" :positive-disabled="saving" @update:show="updateDeleteDialog" @confirm="confirmRemove">
+    删除“{{ pendingDeletion?.name }}”？其中商品将保留并变为未分组。
   </AppDialog>
 </template>
