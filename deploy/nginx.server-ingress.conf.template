@@ -40,7 +40,17 @@ server {
         proxy_read_timeout 120s;
     }
 
-    # RPA authentication and public image reads remain controlled by their
+    # Public product images use the existing image-only NAS service.
+    # Do not forward a client credential.
+    location ^~ /rpa/v1/product-images/ {
+        auth_basic off;
+        proxy_pass ${PDC_IMAGE_STORAGE_ORIGIN};
+        proxy_set_header Authorization "";
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
+
+    # RPA authentication remains controlled by its
     # existing routes; never inject the management credential here.
     location ^~ /rpa/v1/ {
         auth_basic off;

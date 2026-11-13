@@ -1,4 +1,4 @@
-export const defaultProductUrl = 'https://119.29.188.118:19001/'
+export const defaultProductUrl = 'https://pdc.mysiyuai.top/'
 
 /** HTTP is supported only for the existing private NAS network. */
 export function resolveProductUrl(value = defaultProductUrl): URL {

@@ -37,13 +37,14 @@ test('凭据只以加密形式保存，并绑定原始服务器地址', async ()
 })
 
 test('仅向预期 HTTPS 服务或本机测试服务响应 Basic 挑战', () => {
-  const origin = 'https://119.29.188.118:19001'
-  const challenge = { isProxy: false, scheme: 'basic', host: '119.29.188.118', port: 19001 }
+  const origin = 'https://pdc.mysiyuai.top'
+  const challenge = { isProxy: false, scheme: 'basic', host: 'pdc.mysiyuai.top', port: 443 }
   assert.equal(isExpectedChallenge(origin + '/api/v1/products', challenge, origin), true)
   assert.equal(isExpectedChallenge('https://other.test/', challenge, origin), false)
+  assert.equal(isExpectedChallenge('https://119.29.188.118:19001/', { ...challenge, host: '119.29.188.118', port: 19001 }, origin), false)
   assert.equal(isExpectedChallenge(origin + '/', { ...challenge, isProxy: true }, origin), false)
   assert.equal(isExpectedChallenge(origin + '/', { ...challenge, host: 'other.test' }, origin), false)
-  assert.equal(isExpectedChallenge(origin + '/', { ...challenge, port: 443 }, origin), false)
+  assert.equal(isExpectedChallenge(origin + '/', { ...challenge, port: 19001 }, origin), false)
   assert.equal(maySendCredentials('http://192.168.0.102:3612'), false)
   assert.equal(maySendCredentials('http://127.0.0.1:3612'), true)
 })

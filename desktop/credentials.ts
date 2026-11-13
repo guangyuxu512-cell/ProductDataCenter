@@ -78,7 +78,7 @@ export class BasicCredentialStore {
 }
 
 /** A one-shot request to the exact configured origin; redirects are never followed. */
-export function verifyCredentials(origin: string, value: BasicCredentials, timeoutMs = 8000): Promise<boolean> {
+export function verifyCredentials(origin: string, value: BasicCredentials, timeoutMs = 15000): Promise<boolean> {
   if (!maySendCredentials(origin)) return Promise.resolve(false)
   const url = new URL('/', origin)
   const credentials = validateCredentials(value)
