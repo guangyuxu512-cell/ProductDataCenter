@@ -1,4 +1,4 @@
-export const defaultProductUrl = 'http://192.168.0.102:3612/'
+export const defaultProductUrl = 'https://119.29.188.118:19001/'
 
 /** HTTP is supported only for the existing private NAS network. */
 export function resolveProductUrl(value = defaultProductUrl): URL {
