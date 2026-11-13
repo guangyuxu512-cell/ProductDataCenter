@@ -86,6 +86,9 @@ class CentralWorkerDeliveryContext(BaseModel):
     category_id: str = Field(pattern=r"^[0-9]{1,32}$")
     local_shop_id: str = Field(min_length=1, max_length=160)
     platform_shop_id: str = Field(min_length=1, max_length=160)
+    session_retry_supported: bool = False
+    superseded: bool = False
+    receipt_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class CentralApplicationClient:
@@ -137,7 +140,8 @@ class CentralApplicationClient:
 
     def worker_delivery_context(self, task_id: UUID, device_id: UUID, worker_token: str) -> CentralWorkerDeliveryContext:
         payload = self._request("GET", f"/api/v1/worker/tasks/{task_id}/precheck-delivery-context",
-                                require_no_store=True, worker_credentials=(device_id, worker_token))
+                                require_no_store=True, worker_credentials=(device_id, worker_token),
+                                protocol_v2=True)
         try:
             context = CentralWorkerDeliveryContext.model_validate(payload)
         except ValidationError:
@@ -199,7 +203,7 @@ class CentralApplicationClient:
     def _request(self, method: str, path: str, *, body: dict | None = None,
                  require_no_store: bool = False, success_status: int = 200,
                  max_response_bytes: int = _MAX_RESPONSE_BYTES, timeout: float = 8.0,
-                 worker_credentials: tuple[UUID, str] | None = None):
+                 worker_credentials: tuple[UUID, str] | None = None, protocol_v2: bool = False):
         base_url, client_id, token = self._connection()
         try:
             with httpx.Client(
@@ -214,6 +218,8 @@ class CentralApplicationClient:
                     options["headers"] = {"X-Device-ID": str(device_id),
                                           "Authorization": f"Bearer {worker_token}",
                                           "Cache-Control": "no-store"}
+                if protocol_v2:
+                    options["headers"]["X-Precheck-Protocol"] = "2"
                 if body is not None:
                     options["json"] = body
                 with client.stream(method, path, **options) as response:

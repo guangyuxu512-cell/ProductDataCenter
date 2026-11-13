@@ -108,6 +108,33 @@ def test_terminal_failure_is_visible_without_redispatch(settings, status, result
     assert runner.queue.complete.call_args.args[1]["issues"] == [expected]
 
 
+def test_only_supported_explicit_session_expiry_waits_for_another_shop(settings):
+    runner = make_runner(settings, lambda request: pytest.fail("unexpected request"))
+    claim = {"product_id": "12345678", "revision": 2, "attempts": 1}
+    runner.queue.claim_worker_result.return_value = ("claimed", claim)
+    runner.queue.defer_worker.return_value = True
+    context = delivery_context(2)
+    context.session_retry_supported = True
+    identity = {key: value for key, value in success_result().items() if key != "items"}
+    terminal = SimpleNamespace(status="failed", error_code="SHOP_SESSION_EXPIRED",
+        result={**identity, "error_stage": "session", "safe_error_code": "SHOP_SESSION_EXPIRED"})
+    assert runner.accept_worker_delivery(context, terminal, "a" * 64)
+    runner.queue.defer_worker.assert_called_once_with(claim)
+    runner.queue.complete.assert_not_called()
+
+
+def test_legacy_worker_session_expiry_is_not_silently_redispatched(settings):
+    runner = make_runner(settings, lambda request: pytest.fail("unexpected request"))
+    claim = {"product_id": "12345678", "revision": 2, "attempts": 1}
+    runner.queue.claim_worker_result.return_value = ("claimed", claim)
+    identity = {key: value for key, value in success_result().items() if key != "items"}
+    terminal = SimpleNamespace(status="failed", error_code="SHOP_SESSION_EXPIRED",
+        result={**identity, "error_stage": "session", "safe_error_code": "SHOP_SESSION_EXPIRED"})
+    assert runner.accept_worker_delivery(delivery_context(2), terminal, "a" * 64)
+    runner.queue.defer_worker.assert_not_called()
+    runner.queue.complete.assert_called_once()
+
+
 def test_late_and_duplicate_results_do_not_repeat_product_processing(settings):
     runner = make_runner(settings, lambda request: pytest.fail("unexpected request"))
     claim = {"product_id": "12345678", "revision": 1, "attempts": 1}

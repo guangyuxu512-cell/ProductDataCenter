@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
@@ -64,6 +66,7 @@ def test_central_checks_the_existing_worker_identity_and_task(tmp_path):
     def handler(request):
         assert request.headers["authorization"] == "Bearer " + worker_token
         assert request.headers["x-device-id"] == str(device_id)
+        assert request.headers["x-precheck-protocol"] == "2"
         assert request.url.path == f"/api/v1/worker/tasks/{task_id}/precheck-delivery-context"
         return httpx.Response(200, headers={"Cache-Control": "no-store"}, json={
             "task_id": str(task_id), "client_id": "product-library", "product_id": "12345678", "revision": 1,
@@ -78,3 +81,27 @@ def test_central_checks_the_existing_worker_identity_and_task(tmp_path):
         assert False, "unapproved Worker must be rejected"
     except CentralConnectionError as error:
         assert error.reason == "worker_denied"
+
+
+def test_superseded_expiry_replay_is_acknowledged_without_saving_again(monkeypatch):
+    task_id, device_id = uuid4(), uuid4()
+    token = "ccw_synthetic_device_token"
+    body = {"status": "failed", "result": {}, "error_code": "SHOP_SESSION_EXPIRED", "error_message": "safe"}
+    wire = json.dumps(body, separators=(",", ":")).encode()
+    context = SimpleNamespace(superseded=True, receipt_sha256=hashlib.sha256(wire).hexdigest())
+    settings = Settings(_env_file=None, auto_precheck_enabled=True, worker_precheck_enabled=True)
+
+    class Central:
+        def __init__(self, settings):
+            pass
+        def worker_delivery_context(self, actual_task, actual_device, actual_token):
+            assert (actual_task, actual_device, actual_token) == (task_id, device_id, token)
+            return context
+
+    monkeypatch.setattr(worker_delivery, "get_settings", lambda: settings)
+    monkeypatch.setattr(worker_delivery, "CentralApplicationClient", Central)
+    monkeypatch.setattr(worker_delivery, "PrecheckRunner", lambda *args: pytest.fail("must not save again"))
+    assert worker_delivery._accept(task_id, device_id, token, wire)["accepted"] is True
+    with pytest.raises(HTTPException) as error:
+        worker_delivery._accept(task_id, device_id, token, wire + b" ")
+    assert error.value.status_code == 409

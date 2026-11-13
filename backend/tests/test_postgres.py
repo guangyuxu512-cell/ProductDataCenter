@@ -22,7 +22,8 @@ def engine():
     if not value:
         pytest.skip("需要显式的隔离 PostgreSQL 连接")
     url = make_url(value)
-    assert url.database in {"product_workbench_test", "product_workbench_test_direct_v1"}, "拒绝对非隔离库执行测试"
+    assert url.database in {"product_workbench_test", "product_workbench_test_direct_v1",
+                            "product_workbench_test_worker_failover"}, "拒绝对非隔离库执行测试"
     assert url.host in {"127.0.0.1", "localhost", "postgres"}, "拒绝访问外部数据库"
     engine = create_engine(value)
     with engine.begin() as conn:
@@ -1305,6 +1306,86 @@ def test_direct_worker_result_uses_real_queue_and_preserves_new_revision(engine,
             stale = client.post(f"/api/v1/worker-precheck-results/{task_id}", content=wire, headers=headers)
             assert stale.status_code == 200 and stale.json()["accepted"] is False
             assert queue.results([product_id])[0]["state"] == "pending"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
+def test_expired_shop_defers_real_queue_then_another_shop_completes(engine, monkeypatch):
+    """Product API and PostgreSQL are real; central/Worker responses are synthetic."""
+    import hashlib
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from fastapi.testclient import TestClient
+    from app.main import create_application
+    from app.modules.prechecks import worker_delivery
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    product_id = "22345678"
+    task_a, task_b, device_id = uuid4(), uuid4(), uuid4()
+    queue = PrecheckQueue(engine)
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO products(product_id,source_platform,source_product_id,title,
+            shop_name,category_path,current_price_min,current_price_max,captured_at,title_status,uu_json)
+            VALUES (:id,'douyin',:id,'测试商品','测试店','家居/厨房',9.9,9.9,now(),
+                    '商品库已修改','{\"goodsInfo\":{\"catId1\":\"100\",\"catId2\":\"200\",\"catId3\":\"300\"}}')"""),
+            {"id": product_id})
+        conn.execute(text("""INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url)
+            VALUES (:id,'main',0,'','https://fixture.invalid/main.png')"""), {"id": product_id})
+        conn.execute(text("""INSERT INTO product_skus(product_id,sku_id,sku_name,current_price,sort_order)
+            VALUES (:id,'sku-1','白色',9.9,0)"""), {"id": product_id})
+    try:
+        revision = queue.results([product_id])[0]["revision"]
+        first_claim = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        contexts = {task: SimpleNamespace(task_id=task, device_id=device_id, product_id=product_id,
+            revision=revision, category_id="300", local_shop_id=local, platform_shop_id=shop,
+            session_retry_supported=True, superseded=False)
+            for task, local, shop in [(task_a, "local-a", "shop-a"), (task_b, "local-b", "shop-b")]}
+        settings = Settings(_env_file=None, auto_precheck_enabled=True, worker_precheck_enabled=True)
+
+        class Central:
+            def __init__(self, settings):
+                pass
+            def worker_delivery_context(self, actual_task, actual_device, token):
+                assert actual_device == device_id and token == "ccw_test"
+                return contexts[actual_task]
+
+        monkeypatch.setattr(worker_delivery, "get_settings", lambda: settings)
+        monkeypatch.setattr(worker_delivery, "get_database_engine", lambda: engine)
+        monkeypatch.setattr(worker_delivery, "CentralApplicationClient", Central)
+        def payload(local, shop, *, expired):
+            result = {"kind": "douyin.category_schema", "category_id": "300", "device_id": str(device_id),
+                      "local_shop_id": local, "platform_shop_id": shop}
+            result.update({"error_stage": "session", "safe_error_code": "SHOP_SESSION_EXPIRED"} if expired
+                          else {"http_status": 200, "platform_code": 0, "items": []})
+            return {"status": "failed" if expired else "success", "result": result,
+                    "error_code": "SHOP_SESSION_EXPIRED" if expired else None, "error_message": None}
+        expired_wire = json.dumps(payload("local-a", "shop-a", expired=True), separators=(",", ":")).encode()
+        success_wire = json.dumps(payload("local-b", "shop-b", expired=False), separators=(",", ":")).encode()
+        headers = {"Authorization": "Bearer ccw_test", "X-Device-ID": str(device_id)}
+        with TestClient(create_application()) as client:
+            first = client.post(f"/api/v1/worker-precheck-results/{task_a}", content=expired_wire, headers=headers)
+            assert first.status_code == 200 and first.json()["accepted"] is True
+            assert not queue.wait_for_worker(first_claim)
+            assert queue.results([product_id])[0]["state"] == "pending"
+            # Simulate the existing five-second queue delay without waiting.
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE product_prechecks SET available_at=now() WHERE product_id=:id"),
+                             {"id": product_id})
+            next_claim = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+            assert next_claim["revision"] == revision
+            contexts[task_a].superseded = True
+            contexts[task_a].receipt_sha256 = hashlib.sha256(expired_wire).hexdigest()
+            replay = client.post(f"/api/v1/worker-precheck-results/{task_a}", content=expired_wire, headers=headers)
+            assert replay.status_code == 200 and replay.json()["accepted"] is True
+            assert queue.results([product_id])[0]["state"] == "running"
+            completed = client.post(f"/api/v1/worker-precheck-results/{task_b}", content=success_wire, headers=headers)
+            assert completed.status_code == 200 and completed.json()["accepted"] is True
+            result = queue.results([product_id])[0]
+            assert result["state"] == "done" and result["result"]["status"] == "ready"
+            assert client.post(f"/api/v1/worker-precheck-results/{task_a}", content=expired_wire,
+                               headers=headers).status_code == 200
+            assert queue.results([product_id])[0]["result"] == result["result"]
     finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
