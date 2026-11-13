@@ -111,7 +111,15 @@ class PrecheckRunner:
         if state != "claimed" or claim is None:
             raise ValueError("worker result conflicts")
         try:
-            self._complete_worker_delivery(context, terminal, claim, receipt)
+            explicit_expiry = (getattr(context, "session_retry_supported", False) and terminal.status == "failed"
+                and terminal.error_code == "SHOP_SESSION_EXPIRED" and isinstance(result, dict)
+                and result.get("error_stage") == "session"
+                and result.get("safe_error_code") == "SHOP_SESSION_EXPIRED")
+            if explicit_expiry:
+                if not self.queue.defer_worker(claim):
+                    raise RuntimeError("precheck changed while waiting for another shop")
+            else:
+                self._complete_worker_delivery(context, terminal, claim, receipt)
         except Exception:
             self.queue.retry(claim)
             raise

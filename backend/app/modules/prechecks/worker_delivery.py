@@ -52,9 +52,18 @@ def _accept(task_id: UUID, device_id: UUID, token: str, body: bytes) -> dict:
         if error.reason in {"worker_denied", "authentication_failed"}:
             raise HTTPException(403, "预检任务未授权") from None
         raise HTTPException(503, "预检任务验证未完成") from None
+    digest = hashlib.sha256(body).hexdigest()
+    if getattr(context, "superseded", False):
+        # An identical, already-acknowledged expired-session result can be
+        # replayed after a replacement task has been assigned, but it must not
+        # overwrite the replacement's result.
+        if (terminal.status == "failed" and terminal.error_code == "SHOP_SESSION_EXPIRED"
+                and context.receipt_sha256 == digest):
+            return {"task_id": str(task_id), "accepted": True}
+        raise HTTPException(409, "预检结果与任务不一致")
     runner = PrecheckRunner(get_database_engine(), settings)
     try:
-        accepted = runner.accept_worker_delivery(context, terminal, hashlib.sha256(body).hexdigest())
+        accepted = runner.accept_worker_delivery(context, terminal, digest)
     except ValueError:
         raise HTTPException(409, "预检结果与任务不一致") from None
     except Exception:
