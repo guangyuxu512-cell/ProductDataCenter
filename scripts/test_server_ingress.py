@@ -19,7 +19,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         authorization = self.headers.get("Authorization", "")
-        if self.server.kind == "api":
+        if self.server.kind == "image":
+            code = 400 if authorization else 200
+        elif self.server.kind == "api":
             code = 200 if authorization == "Bearer synthetic-admin" else 401
         elif self.path.startswith("/rpa/v1/") and not self.path.startswith("/rpa/v1/product-images/"):
             code = 200 if authorization == "Bearer synthetic-rpa" else 401
@@ -53,8 +55,9 @@ def main():
         raise SystemExit("nginx and openssl are required for this isolated test")
     web = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     api = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    web.kind, api.kind = "web", "api"
-    for server in (web, api):
+    image = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    web.kind, api.kind, image.kind = "web", "api", "image"
+    for server in (web, api, image):
         threading.Thread(target=server.serve_forever, daemon=True).start()
     with tempfile.TemporaryDirectory(prefix="pdc-ingress-test-") as directory:
         root = Path(directory)
@@ -83,6 +86,7 @@ def main():
         template = template.replace("/var/lib/product-data-center", str(temp_root))
         values = {"PDC_BIND_IP": "127.0.0.1", "PDC_PUBLIC_PORT": str(port),
                   "PDC_WEB_PORT": str(web.server_port), "PDC_API_PORT": str(api.server_port),
+                  "PDC_IMAGE_STORAGE_ORIGIN": "http://127.0.0.1:" + str(image.server_port),
                   "PDC_TLS_CERTIFICATE": str(cert), "PDC_TLS_PRIVATE_KEY": str(key),
                   "PDC_BASIC_AUTH_FILE": str(users)}
         for name, value in values.items():
@@ -136,7 +140,8 @@ def main():
             assert (default_body.stat().st_mode & 0o777) == 0o500
             assert request("/rpa/v1/products/example/uu")[0] == 401
             assert request("/rpa/v1/products/example/uu", "Bearer synthetic-rpa")[0] == 200
-            assert request("/rpa/v1/product-images/example.png")[0] == 200
+            assert request("/rpa/v1/product-images/example.png") == (200, "image:/rpa/v1/product-images/example.png")
+            assert request("/rpa/v1/product-images/example.png", "Bearer should-not-forward") == (200, "image:/rpa/v1/product-images/example.png")
             print("isolated_tls_ingress_auth_routing_and_large_upload=passed")
         finally:
             process.terminate()
@@ -147,8 +152,10 @@ def main():
                 process.wait()
             web.shutdown()
             api.shutdown()
+            image.shutdown()
             web.server_close()
             api.server_close()
+            image.server_close()
 
 
 if __name__ == "__main__":

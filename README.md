@@ -27,7 +27,7 @@
 
 桌面客户端服务器直连及历史局域网部署说明见 [桌面客户端说明](docs/product-desktop-lan-v1.md)；SKU 表格及桌面输入修复见 [SKU 表格整理](docs/sku-table-order-20261108.md)；抖音商品中文类目和 RPA 读取方式见 [类目映射说明](docs/douyin-category-mapping-20261109.md)。RPA 专用只读凭据保持独立。
 
-AI 的独立 Token 管理页面与权限接口见 [Token 管理说明](docs/scoped-api-tokens.md)。
+AI 的独立 Token 管理页面与权限接口见 [Token 管理说明](docs/scoped-api-tokens.md)，服务器域名及图片入口见 [域名访问说明](docs/product-domain-20261113.md)。
 
 ## 本地运行
 
