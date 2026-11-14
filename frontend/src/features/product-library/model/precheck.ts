@@ -33,6 +33,7 @@ export interface AutoPrecheck {
   result: PrecheckResult | null
   error: string | null
   waitingForWorker?: boolean
+  waitingForDevice?: boolean
   updatedAt: string
 }
 

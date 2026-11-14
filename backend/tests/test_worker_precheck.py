@@ -152,7 +152,7 @@ def test_network_failure_is_deferred_but_auth_and_conflict_fail_closed(settings)
         runner = make_runner(settings, lambda request: httpx.Response(http_status))
         runner.process(claim)
         if http_status == 503:
-            runner.queue.defer_worker.assert_called_once_with(claim)
+            runner.queue.defer_worker.assert_called_once_with(claim, unavailable=True)
             runner.queue.complete.assert_not_called()
         else:
             runner.queue.defer_worker.assert_not_called()

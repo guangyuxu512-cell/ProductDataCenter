@@ -81,7 +81,9 @@ class PrecheckRunner:
             self.central.submit_worker_precheck(claim, schema_body.categoryId, schema_body.title, delivery="product")
         except CentralConnectionError as error:
             if error.reason == "upstream_unavailable":
-                self.queue.defer_worker(claim)
+                # An unavailable device or service is not an active check.
+                # Back off instead of redispatching every five seconds.
+                self.queue.defer_worker(claim, unavailable=True)
             else:
                 message = {"authentication_failed": "预检服务未授权",
                            "idempotency_conflict": "预检任务内容不一致，请重新预检",
