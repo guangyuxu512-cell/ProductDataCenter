@@ -1389,3 +1389,42 @@ def test_expired_shop_defers_real_queue_then_another_shop_completes(engine, monk
     finally:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
+def test_one_time_owned_image_migration_is_atomic_and_idempotent(engine):
+    import hashlib
+    from app.modules.product_images.migrate_urls import migrate
+
+    old = "https://migration-old.example.test"
+    public = "https://migration-current.example.test"
+    owned = old + "/rpa/v1/product-images/" + "a" * 32 + ".png"
+    cdn = "https://source.example.test/rpa/v1/product-images/" + "b" * 32 + ".png"
+    repo = ProductRepository(engine)
+    product_id = repo.create_manual("图片迁移隔离商品")
+    try:
+        with engine.begin() as conn:
+            package = conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one()
+            package["goodsInfo"]["goodsImageList"] = [owned, cdn]
+            conn.execute(text("UPDATE products SET uu_json=CAST(:package AS jsonb) WHERE product_id=:id"),
+                         {"package": json.dumps(package, ensure_ascii=False), "id": product_id})
+            conn.execute(text("INSERT INTO product_images(product_id,image_type,sort_order,rel_path,source_url) "
+                              "VALUES (:id,'main',0,'',:url)"), {"id": product_id, "url": owned})
+        report = migrate(engine, public, [old])
+        assert report == {"products": 1, "image_rows": 1, "sku_rows": 0, "applied": False}
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT source_url FROM product_images WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == owned
+        assert migrate(engine, public, [old], apply=True) == {
+            "products": 1, "image_rows": 1, "sku_rows": 0, "applied": True}
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT uu_json::text,uu_sha256 FROM products WHERE product_id=:id"),
+                               {"id": product_id}).one()
+            values = json.loads(row[0])["goodsInfo"]["goodsImageList"]
+            assert values == [public + "/rpa/v1/product-images/" + "a" * 32 + ".png", cdn]
+            assert row[1] == hashlib.sha256(row[0].encode("utf-8")).hexdigest()
+            assert conn.execute(text("SELECT source_url FROM product_images WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == values[0]
+        assert migrate(engine, public, [old], apply=True)["products"] == 0
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})

@@ -133,6 +133,25 @@ def test_upload_is_authenticated_forwarded_and_returns_nas_public_url(tmp_path, 
     assert [item.name for item in tmp_path.iterdir()] == ["storage-credential"]
 
 
+
+@pytest.mark.parametrize("legacy_configured,expected", [(True, 201), (False, 503)])
+def test_nas_legacy_origin_is_rewritten_only_when_explicitly_configured(tmp_path, monkeypatch, legacy_configured, expected):
+    configure(monkeypatch, tmp_path)
+    old = "https://old-images.example.test"
+    if legacy_configured:
+        monkeypatch.setenv("BACKEND_IMAGE_LEGACY_BASE_URLS", old)
+    else:
+        monkeypatch.delenv("BACKEND_IMAGE_LEGACY_BASE_URLS", raising=False)
+    use_transport(monkeypatch, lambda request: httpx.Response(
+        201, json={"url": old + "/rpa/v1/product-images/" + NAME}))
+    with TestClient(create_application()) as client:
+        response = client.post("/api/v1/product-images", content=PNG,
+                               headers={"Authorization": "Bearer " + ADMIN, "Content-Type": "image/png"})
+    assert response.status_code == expected
+    if expected == 201:
+        assert response.json()["url"] == PUBLIC + "/rpa/v1/product-images/" + NAME
+
+
 def test_remote_mode_never_falls_back_or_forwards_invalid_images(tmp_path, monkeypatch):
     configure(monkeypatch, tmp_path)
     monkeypatch.setenv("BACKEND_IMAGE_STORAGE_DIR", str(tmp_path))
