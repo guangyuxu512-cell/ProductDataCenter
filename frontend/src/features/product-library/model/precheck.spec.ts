@@ -19,6 +19,14 @@ describe('自动预检 revision 合并', () => {
     expect(mergePrecheck(running, record(3, 'done', '2026-11-04T10:00:03Z')).state).toBe('done')
   })
 
+  it('设备不可用时保留等待状态，设备恢复后接收新结果', () => {
+    const waiting = { ...record(3, 'pending', '2026-11-04T10:00:02Z'), waitingForDevice: true }
+    const staleRunning = record(3, 'running', '2026-11-04T10:00:01Z')
+    expect(mergePrecheck(waiting, staleRunning).waitingForDevice).toBe(true)
+    const finished = record(3, 'done', '2026-11-04T10:00:03Z')
+    expect(mergePrecheck(waiting, finished)).toBe(finished)
+  })
+
   it('优先按结构化字段问题计数', () => {
     expect(precheckIssueCount({ productId: '1', title: '', status: 'needs_completion',
       issues: ['合并文本'], issueDetails: [
