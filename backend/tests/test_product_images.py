@@ -91,3 +91,53 @@ def test_upload_rejects_non_https_public_origin(tmp_path, monkeypatch):
             headers={"Authorization": "Bearer " + TOKEN, "Content-Type": "image/png"})
         assert response.status_code == 503 and not list(tmp_path.iterdir())
     get_settings.cache_clear()
+
+
+def test_edit_snapshot_rewrites_only_owned_legacy_image_values_without_mutating_source():
+    from types import SimpleNamespace
+    from app.modules.products.service import ProductService
+
+    old = "https://old-images.example.test"
+    current = "https://images.example.test"
+    name = "a" * 32 + ".png"
+    old_url = old + "/rpa/v1/product-images/" + name
+    source_url = "https://source.example.test/rpa/v1/product-images/" + name
+    snapshot = {"version": "test-version", "mainImages": [old_url, source_url],
+                "specImages": [{"specId": "42", "url": old_url}]}
+
+    class Repo:
+        def edit_snapshot(self, product_id, **kwargs):
+            assert product_id == "123" and kwargs == {"allowed_groups": ["group"]}
+            return snapshot
+
+    settings = SimpleNamespace(image_public_base_url=current, image_legacy_base_urls=old)
+    result = ProductService(Repo(), settings).edit_snapshot("123", allowed_groups=["group"])
+    assert result["version"] == "test-version"
+    assert result["mainImages"] == [current + "/rpa/v1/product-images/" + name, source_url]
+    assert result["specImages"][0]["url"] == current + "/rpa/v1/product-images/" + name
+    assert snapshot["mainImages"][0] == old_url and snapshot["specImages"][0]["url"] == old_url
+
+
+def test_edit_write_normalizes_owned_images_without_changing_source_or_explicit_fields():
+    from types import SimpleNamespace
+    from app.modules.products.service import ProductService
+
+    old = "https://old-images.example.test"
+    current = "https://images.example.test"
+    name = "b" * 32 + ".png"
+    old_url = old + "/rpa/v1/product-images/" + name
+    source_url = "https://source.example.test/rpa/v1/product-images/" + name
+    edit = ProductEdit(expectedVersion="a" * 64, mainImages=[old_url, source_url],
+                       specImages=[{"specId": "1", "url": old_url}])
+
+    class Repo:
+        def save_edit(self, product_id, value, **kwargs):
+            assert product_id == "123" and kwargs == {}
+            return value
+
+    settings = SimpleNamespace(image_public_base_url=current, image_legacy_base_urls=old)
+    result = ProductService(Repo(), settings).save_edit("123", edit)
+    assert result.mainImages == [current + "/rpa/v1/product-images/" + name, source_url]
+    assert result.specImages[0].url == current + "/rpa/v1/product-images/" + name
+    assert result.model_fields_set == edit.model_fields_set
+    assert edit.mainImages[0] == old_url

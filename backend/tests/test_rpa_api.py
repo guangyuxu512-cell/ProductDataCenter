@@ -92,6 +92,28 @@ def test_uu_bytes_hash_and_version_check(client):
     assert client.get("/rpa/v1/products/12345678/uu", headers=AUTH).status_code == 404
 
 
+
+def test_rpa_package_rewrites_only_owned_legacy_images(client, monkeypatch):
+    import json
+
+    old = "https://old-images.example.test"
+    current = "https://images.example.test"
+    name = "a" * 32 + ".png"
+    original = {"image": old + "/rpa/v1/product-images/" + name,
+                "source": "https://source.example.test/rpa/v1/product-images/" + name}
+    monkeypatch.setenv("BACKEND_IMAGE_PUBLIC_BASE_URL", current)
+    monkeypatch.setenv("BACKEND_IMAGE_LEGACY_BASE_URLS", old)
+    get_settings.cache_clear()
+    monkeypatch.setattr(FakeRepository, "export_rows", lambda self, ids: [{
+        "product_id": PRODUCT, "uu_text": json.dumps(original),
+    }])
+    response = client.get(f"/rpa/v1/products/{PRODUCT}/uu", headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["image"] == current + "/rpa/v1/product-images/" + name
+    assert response.json()["source"] == original["source"]
+    assert response.headers["x-uu-sha256"] == hashlib.sha256(response.content).hexdigest()
+
+
 def test_rpa_reads_database_even_when_legacy_file_exists(client, tmp_path, monkeypatch):
     original = b'{\r\n  "goodsId": "3760269504500859111"\r\n}\r\n'
     (tmp_path / "product.txt").write_bytes(original)

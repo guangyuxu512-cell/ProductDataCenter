@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import Settings
-from app.modules.product_images.urls import canonical_product_image_url
+from app.modules.product_images.urls import canonical_image_values, canonical_product_image_url
 from .errors import GroupNameConflict, GroupNotFound, ProductNotFound
 from .export import export_archive, resolve_data_file
 from .queries import parse_product_list_options
@@ -39,10 +39,21 @@ class ProductService:
                                            self.settings.image_legacy_base_urls)
 
     def edit_snapshot(self, product_id: str, allowed_groups=None):
-        return (self.repository.edit_snapshot(product_id) if allowed_groups is None else
-                self.repository.edit_snapshot(product_id, allowed_groups=allowed_groups))
+        snapshot = (self.repository.edit_snapshot(product_id) if allowed_groups is None else
+                    self.repository.edit_snapshot(product_id, allowed_groups=allowed_groups))
+        return canonical_image_values(snapshot, self.settings.image_public_base_url,
+                                      self.settings.image_legacy_base_urls)
+
+    def _normalize_edit_images(self, edit):
+        if edit is None or not hasattr(edit, "model_dump"):
+            return edit
+        payload = edit.model_dump(exclude_unset=True)
+        normalized = canonical_image_values(payload, self.settings.image_public_base_url,
+                                            self.settings.image_legacy_base_urls)
+        return type(edit).model_validate(normalized) if normalized != payload else edit
 
     def create_manual(self, title: str, draft_seed=None, edit=None, group_id=None):
+        edit = self._normalize_edit_images(edit)
         if group_id is None:
             return {"productId": self.repository.create_manual(title, draft_seed, edit)}
         if not self.repository.group_exists(group_id):
@@ -50,6 +61,7 @@ class ProductService:
         return {"productId": self.repository.create_manual(title, draft_seed, edit, group_id=group_id)}
 
     def save_edit(self, product_id: str, edit, allowed_groups=None):
+        edit = self._normalize_edit_images(edit)
         return (self.repository.save_edit(product_id, edit) if allowed_groups is None else
                 self.repository.save_edit(product_id, edit, allowed_groups=allowed_groups))
 

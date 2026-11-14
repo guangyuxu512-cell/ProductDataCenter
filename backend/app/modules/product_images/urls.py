@@ -50,24 +50,23 @@ def canonical_product_image_url(value: str | None, public_base: str | None,
     return value
 
 
+def canonical_image_values(value, public_base: str | None, legacy_bases: str = ""):
+    """Rewrite configured owned-image URLs in a JSON-like value without mutating it."""
+    if not public_base or not legacy_bases:
+        return value
+    if isinstance(value, str):
+        return canonical_product_image_url(value, public_base, legacy_bases)
+    if isinstance(value, list):
+        return [canonical_image_values(item, public_base, legacy_bases) for item in value]
+    if isinstance(value, dict):
+        return {key: canonical_image_values(item, public_base, legacy_bases) for key, item in value.items()}
+    return value
+
+
 def canonical_package_text(value: str, public_base: str | None,
                            legacy_bases: str = "") -> str:
     if not public_base or not legacy_bases:
         return value
     data = json.loads(value)
-    changed = False
-
-    def visit(node):
-        nonlocal changed
-        if isinstance(node, str):
-            result = canonical_product_image_url(node, public_base, legacy_bases)
-            changed = changed or result != node
-            return result
-        if isinstance(node, list):
-            return [visit(item) for item in node]
-        if isinstance(node, dict):
-            return {key: visit(item) for key, item in node.items()}
-        return node
-
-    result = visit(data)
-    return json.dumps(result, ensure_ascii=False, separators=(",", ":")) if changed else value
+    result = canonical_image_values(data, public_base, legacy_bases)
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":")) if result != data else value

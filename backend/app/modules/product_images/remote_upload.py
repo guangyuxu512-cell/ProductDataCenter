@@ -12,6 +12,8 @@ import httpx
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from .urls import canonical_product_image_url
+
 _PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "100.64.0.0/10",
 ))
@@ -136,6 +138,10 @@ async def upload_to_nas(request: Request, settings, public_base: str, media_type
                         raw.extend(chunk)
             result = json.loads(raw)
             url = result.get("url") if isinstance(result, dict) else None
+            # NAS may still return a configured former public origin. Validate
+            # its exact owned-image route, then return the current public domain.
+            url = (canonical_product_image_url(url, public_base, settings.image_legacy_base_urls)
+                   if isinstance(url, str) else None)
             prefix = public_base + "/rpa/v1/product-images/"
             name = url[len(prefix):] if isinstance(url, str) and url.startswith(prefix) else ""
             if not _NAME.fullmatch(name) or not name.endswith("." + detected[0]):

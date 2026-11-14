@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+import pytest
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/CZYAAAAASUVORK5CYII=")
@@ -56,7 +57,8 @@ def stop(process):
             process.wait(timeout=5)
 
 
-def test_cloud_upload_writes_only_to_nas_service_and_reports_outage(tmp_path):
+@pytest.mark.parametrize("nas_uses_legacy_origin", [False, True])
+def test_cloud_upload_writes_only_to_nas_service_and_reports_outage(tmp_path, nas_uses_legacy_origin):
     storage_port, cloud_port = free_port(), free_port()
     while cloud_port == storage_port:
         cloud_port = free_port()
@@ -65,20 +67,24 @@ def test_cloud_upload_writes_only_to_nas_service_and_reports_outage(tmp_path):
     storage_secret = tmp_path / "nas-token"
     storage_secret.write_text(STORAGE, encoding="utf-8")
     common = {"BACKEND_ENABLE_PRODUCT_WRITES": "true", "BACKEND_IMAGE_PUBLIC_BASE_URL": "https://images.example.test"}
+    nas_public = "https://old-images.example.test" if nas_uses_legacy_origin else "https://images.example.test"
     nas = cloud = None
     try:
         nas = start_server("app.image_storage:app", storage_port, {
             **common, "BACKEND_API_TOKEN": STORAGE, "BACKEND_IMAGE_STORAGE_DIR": str(storage_dir),
+            "BACKEND_IMAGE_PUBLIC_BASE_URL": nas_public,
         })
         cloud = start_server("app.main:app", cloud_port, {
             **common, "BACKEND_API_TOKEN": ADMIN,
             "BACKEND_IMAGE_REMOTE_UPLOAD_ORIGIN": f"http://127.0.0.1:{storage_port}",
             "BACKEND_IMAGE_REMOTE_UPLOAD_TOKEN_FILE": str(storage_secret),
+            "BACKEND_IMAGE_LEGACY_BASE_URLS": nas_public if nas_uses_legacy_origin else "",
         })
         headers = {"Authorization": "Bearer " + ADMIN, "Content-Type": "image/png"}
         with httpx.Client(timeout=10, trust_env=False) as client:
             upload = client.post(f"http://127.0.0.1:{cloud_port}/api/v1/product-images", headers=headers, content=PNG)
             assert upload.status_code == 201
+            assert upload.json()["url"].startswith("https://images.example.test/rpa/v1/product-images/")
             path = urlsplit(upload.json()["url"]).path
             name = path.rsplit("/", 1)[1]
             assert (storage_dir / name).read_bytes() == PNG
