@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from .title import title_units
+
 
 class ProductRead(BaseModel):
     product_id: str
@@ -142,6 +144,7 @@ class AssignGroupResponse(BaseModel):
 
 class Capabilities(BaseModel):
     groupWrites: bool
+    autoGroupRules: bool = False
     export: bool = True
     productEdit: bool = False
     importProducts: bool = False
@@ -284,8 +287,7 @@ class ProductEdit(BaseModel):
         if value is None:
             return None
         value = value.strip()
-        # Match the existing editor's platform counter (non-ASCII characters count twice).
-        if not value or sum(2 if ord(character) > 127 else 1 for character in value) > 60:
+        if not value or title_units(value) > 60:
             raise ValueError("商品标题不能为空，长度不能超过 60")
         return value
 

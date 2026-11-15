@@ -62,6 +62,23 @@ export async function queuePrechecks(productIds: string[]) {
   return (await http.post<{ items: AutoPrecheck[]; missing: string[] }>('/prechecks/run', { productIds })).data
 }
 
+export interface PrecheckGroupRule {
+  id: string
+  enabled: boolean
+  source: string
+  passed: string
+  incomplete: string
+}
+export interface PrecheckGroupRules { version: number; rules: PrecheckGroupRule[] }
+
+export async function fetchPrecheckGroupRules() {
+  return (await http.get<PrecheckGroupRules>('/prechecks/group-rules')).data
+}
+
+export async function savePrecheckGroupRules(config: PrecheckGroupRules) {
+  return (await http.put<PrecheckGroupRules>('/prechecks/group-rules', config)).data
+}
+
 export function productListParams(filters: ProductFilters, includeTotal: boolean) {
   return {
     q: filters.query.trim(),

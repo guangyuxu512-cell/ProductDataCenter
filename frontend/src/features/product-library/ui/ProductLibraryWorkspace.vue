@@ -15,11 +15,12 @@ import type { ProductRow } from '../model/nas-contracts'
 import { mergePrecheck, precheckIssueCount, type AutoPrecheck, type PrecheckIssue } from '../model/precheck'
 import ProductPreviewDialog from './ProductPreviewDialog.vue'
 import ProductGroupManager from './ProductGroupManager.vue'
+import PrecheckGroupRulesDialog from './PrecheckGroupRulesDialog.vue'
 
-const { filters, selected, detailId, list, groups, capabilities, detail, total, refresh, reset } = useProductLibrary()
+const { filters, selected, detailId, list, groups, capabilities, detail, total, refresh, refreshAfterAutoGroup, reset } = useProductLibrary()
 const message = useMessage()
 const keyword = ref(''), capturedFrom = ref<string | null>(null), capturedTo = ref<string | null>(null)
-const managerOpen = ref(false), moveOpen = ref(false), moveTarget = ref('ungrouped'), moveIds = ref<string[]>([]), busy = ref(false)
+const managerOpen = ref(false), rulesOpen = ref(false), moveOpen = ref(false), moveTarget = ref('ungrouped'), moveIds = ref<string[]>([]), busy = ref(false)
 const manualOpen = ref(false), manualSeed = ref('')
 const manualProduct = ref<LibraryProduct | null>(null)
 const precheckRunning = ref(false)
@@ -28,6 +29,7 @@ const precheckTargets = ref<Record<string, number>>({})
 const precheckRecords = ref<Record<string, AutoPrecheck>>({})
 const precheckPending = ref(new Set<string>())
 const precheckRequestErrors = ref<Record<string, string>>({})
+const silentGroupRefresh = ref(false)
 const requestedIssue = ref<PrecheckIssue | null>(null)
 const rows = computed(() => list.data.value?.items ?? [])
 const hasCategoryName = (path: string | null | undefined) => !!path?.trim() && !/^[\d\s→>\/\\-]+$/.test(path.trim())
@@ -60,8 +62,18 @@ const autoChecks = useQuery({
 watch(() => autoChecks.data.value, (items) => {
   if (!items) return
   const next = { ...precheckRecords.value }
+  let moved = false
+  for (const item of items) {
+    const previous = next[item.productId]
+    if (previous && previous.revision === item.revision && previous.state !== 'done' &&
+        item.state === 'done' && item.result?.groupRoutingMoved) moved = true
+  }
   for (const item of items) next[item.productId] = mergePrecheck(next[item.productId], item)
   precheckRecords.value = next
+  if (moved && !silentGroupRefresh.value) {
+    silentGroupRefresh.value = true
+    void refreshAfterAutoGroup().finally(() => { silentGroupRefresh.value = false })
+  }
 }, { immediate: true })
 const autoResults = computed(() => precheckRecords.value)
 const precheckCompleted = computed(() => precheckIds.value.filter((id) => {
@@ -246,10 +258,14 @@ function precheckView(id: string) {
   if (record.state === 'running') return { label: '预检中', tone: 'running', issues: [] as string[], retry: false }
   const result = record.result
   if (!result) return { label: '预检失败', tone: 'failed', issues: ['预检结果为空'], retry: true }
+  if (result.status === 'ready' && result.groupRoutingError) return {
+    label: '预检通过，分组失败', tone: 'warning', issues: [result.groupRoutingError], retry: false,
+  }
   if (result.status === 'ready') return { label: '预检通过', tone: 'ready', issues: [], retry: false }
-  if (result.status === 'needs_category') return { label: '待选择类目', tone: 'warning', issues: result.issues, retry: false }
+  const issues = result.groupRoutingError ? [...result.issues, result.groupRoutingError] : result.issues
+  if (result.status === 'needs_category') return { label: '待选择类目', tone: 'warning', issues, retry: false }
   if (result.status === 'needs_completion') return {
-    label: `待完善 ${precheckIssueCount(result)} 项`, tone: 'warning', issues: result.issues, retry: false,
+    label: `待完善 ${precheckIssueCount(result)} 项`, tone: 'warning', issues, retry: false,
   }
   return { label: '预检失败', tone: 'failed', issues: result.issues, retry: true }
 }
@@ -338,17 +354,18 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
           <AppButton size="small" :disabled="!selected.length || busy" @click="download(selected)">批量导出</AppButton>
           <AppButton size="small" :disabled="!selected.length || busy || !capabilities.data.value?.productEdit" @click="removeProducts(selected)">批量删除</AppButton>
           <AppButton size="small" :disabled="!selected.length || precheckRunning || !capabilities.data.value?.autoPrecheck" @click="startPrecheck">批量预检</AppButton>
+          <AppButton size="small" :disabled="!capabilities.data.value?.autoGroupRules || !capabilities.data.value?.autoPrecheck" @click="rulesOpen = true">自动分组</AppButton>
           <span v-if="precheckIds.length" class="product-library-precheck-progress">{{ precheckCompleted }}/{{ precheckIds.length }}</span>
           <AppButton size="small" :disabled="!selected.length || busy || !canWriteGroups" @click="openMove(selected)">移动分组</AppButton>
           <AppButton size="small" :disabled="busy" @click="refresh">刷新</AppButton>
         </template>
       </TableToolbar>
-      <DataTable :columns="columns" :data="rows" :loading="list.isFetching.value"
-        :inert="list.isFetching.value || undefined"
+      <DataTable :columns="columns" :data="rows" :loading="list.isFetching.value && (!silentGroupRefresh || list.isPlaceholderData.value)"
+        :inert="(list.isFetching.value && (!silentGroupRefresh || list.isPlaceholderData.value)) || undefined"
         :error="list.error.value ? errorText(list.error.value) : null" :row-key="(row: ProductRow) => row.product_id"
         :checked-row-keys="selected" :scroll-x="1690" viewport="fill" appearance="list" show-header-when-empty
         empty-description="暂无商品" @update:checked-row-keys="selected = $event.map(String)" @retry="refresh" />
-      <PaginationBar :inert="list.isFetching.value || undefined" :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
+      <PaginationBar :inert="(list.isFetching.value && (!silentGroupRefresh || list.isPlaceholderData.value)) || undefined" :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
         @update:page="filters.page = $event" @update:page-size="filters.pageSize = $event; filters.page = 1" />
     </ManagementListSection>
     <ProductPreviewDialog :show="!!detailId" :product="preview" :exportable="!busy"
@@ -368,6 +385,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
       @retry="detail.refetch()"
       @export="download([$event.id])" @group="openMove([$event.id])" />
     <ProductGroupManager v-model:show="managerOpen" :groups="groupItems" :writable="canWriteGroups" @changed="groupsChanged" />
+    <PrecheckGroupRulesDialog v-model:show="rulesOpen" :groups="groupItems" />
     <ProductPreviewDialog :show="manualOpen" :product="manualProduct" :manual-seed="manualSeed"
       creating :editable="capabilities.data.value?.productEdit === true"
       :category-lookup-enabled="capabilities.data.value?.categoryLookup === true"

@@ -12,6 +12,7 @@ from app.modules.category_lookup.client import DouyinCategoryClient
 from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, normalize_multi_values
 from app.modules.central.client import CentralApplicationClient
 from app.modules.products.service import ProductService
+from app.modules.products.title import title_units
 
 _schema_locks = [Lock() for _ in range(64)]
 
@@ -110,6 +111,8 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
               "issues": [], "issueDetails": []}
     if not title.strip():
         _add_issue(result, "title_missing", "商品标题未填写", "base", fieldId="title")
+    elif title_units(title.strip()) > 60:
+        _add_issue(result, "title_too_long", "商品标题长度超过 60", "base", fieldId="title")
     image_url = _main_image(detail)
     if not image_url and not any(item.get("image_type") == "main" and item.get("rel_path")
                                  for item in detail["images"]):

@@ -29,6 +29,7 @@ PERMISSIONS = {
     "image.upload": "上传图片",
     "precheck.read": "读取预检结果",
     "precheck.run": "发起预检",
+    "precheck.group_rules": "管理预检自动分组规则",
     "category.read": "查询类目和属性规则",
     "central.read": "查看中控连接状态",
     "rpa.read": "通过 RPA 接口读取分组和数据包",

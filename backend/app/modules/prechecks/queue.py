@@ -1,13 +1,17 @@
 """Claim and finish automatic checks without modifying product packages."""
 from copy import deepcopy
 import json
+import logging
 from sqlalchemy import Engine, text
 from app.modules.products.queries import group_scope_sql
+from app.modules.products.title import title_units
+from .group_rules import GroupRuleStore, GroupRules, RulesUnavailable, destination
 
 
 _WAITING_WORKER_RESULT = "worker_result_pending"
 _WAITING_WORKER_DEVICE = "worker_dispatch_unavailable"
 SESSION_READ_INCOMPLETE_MESSAGE = "读取本机店铺会话未完成"
+log = logging.getLogger(__name__)
 
 
 def present_result(result):
@@ -28,6 +32,18 @@ def present_result(result):
         if isinstance(filtered_details, list):
             value["issueDetails"] = filtered_details
         value["status"] = "failed"
+    # Older completed checks predate the title-length rule. Show the local
+    # issue without rerunning a platform check or rewriting the product.
+    title = value.get("title")
+    if isinstance(title, str) and title_units(title.strip()) > 60:
+        details = value.get("issueDetails") if isinstance(value.get("issueDetails"), list) else []
+        if not any(isinstance(item, dict) and item.get("code") == "title_too_long" for item in details):
+            value["issueDetails"] = [*details, {"code": "title_too_long", "message": "商品标题长度超过 60",
+                                                 "tab": "base", "fieldId": "title"}]
+            current = value.get("issues") if isinstance(value.get("issues"), list) else []
+            value["issues"] = [*current, "商品标题长度超过 60"]
+        if value.get("status") == "ready":
+            value["status"] = "needs_completion"
     if value.get("status") == "failed" and isinstance(value.get("issues"), list):
         value["issues"] = [SESSION_READ_INCOMPLETE_MESSAGE if issue == "本机店铺登录状态不可用" else issue
                            for issue in value["issues"]]
@@ -35,8 +51,9 @@ def present_result(result):
 
 
 class PrecheckQueue:
-    def __init__(self, engine: Engine):
+    def __init__(self, engine: Engine, group_rules: GroupRuleStore | None = None):
         self.engine = engine
+        self.group_rules = group_rules
 
     def claim(self, limit: int) -> list[dict]:
         with self.engine.begin() as conn:
@@ -79,11 +96,44 @@ class PrecheckQueue:
                  "updatedAt": row["updated_at"]} for row in rows]
 
     def complete(self, claim: dict, result: dict) -> bool:
+        if self.group_rules is not None:
+            try:
+                with self.group_rules.snapshot() as config:
+                    return self._complete(claim, result, config)
+            except RulesUnavailable:
+                # A settings failure must not invent a routing decision or
+                # prevent the product's actual validation result being saved.
+                log.warning("自动分组规则读取失败；商品未自动移动")
+                result = {**result, "groupRoutingError": "自动分组规则读取失败"}
+        return self._complete(claim, result, GroupRules())
+
+    def _complete(self, claim: dict, result: dict, config: GroupRules) -> bool:
+        # A product edit locks the product before the precheck row via the
+        # collector trigger. Take the same lock order when a rule may move it.
+        eligible = any(rule.enabled for rule in config.rules) and present_result(result).get("status") in {
+            "ready", "needs_completion", "needs_category"}
         with self.engine.begin() as conn:
+            target = None
+            if eligible:
+                product = conn.execute(text("SELECT group_id::text FROM products WHERE product_id=:product_id FOR UPDATE"),
+                                       claim).first()
+                if product is not None:
+                    target = destination(config, product[0], present_result(result)["status"])
+                if target and target != "ungrouped":
+                    exists = conn.execute(text("SELECT group_id FROM product_groups WHERE group_id::text=:target FOR KEY SHARE"),
+                                          {"target": target}).first()
+                    if exists is None:
+                        target = None
+                        result = {**result, "groupRoutingError": "自动分组目标不存在"}
+            if target:
+                result = {**result, "groupRoutingMoved": True}
             done = conn.execute(text("""UPDATE product_prechecks SET state='done', result=CAST(:result AS jsonb),
                 lease_until=NULL, last_error=NULL, updated_at=now()
                 WHERE product_id=:product_id AND revision=:revision AND attempts=:attempts AND state='running'"""),
                 {**claim, "result": json.dumps(result, ensure_ascii=False)}).rowcount
+            if done and target:
+                conn.execute(text("UPDATE products SET group_id=CAST(:target AS uuid) WHERE product_id=:product_id"),
+                             {"product_id": claim["product_id"], "target": None if target == "ungrouped" else target})
         return bool(done)
 
     def wait_for_worker(self, claim: dict) -> bool:
