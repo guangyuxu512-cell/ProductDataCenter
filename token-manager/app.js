@@ -5,7 +5,7 @@ const titles = {
   'product.delete': '删除商品', 'product.export': '导出商品', 'group.read': '查看分组',
   'group.create': '创建分组', 'group.update': '修改分组', 'group.delete': '删除分组',
   'group.assign': '调整商品分组', 'image.upload': '上传图片', 'precheck.read': '查看预检',
-  'precheck.run': '发起预检', 'category.read': '查看类目和属性', 'central.read': '查看中控连接',
+  'precheck.run': '发起预检', 'precheck.group_rules': '管理预检自动分组', 'category.read': '查看类目和属性', 'central.read': '查看中控连接',
   'rpa.read': 'RPA 读取', 'token.read': '查看下级 Token', 'token.create': '发放 Token',
   'token.update': '修改 Token', 'token.revoke': '撤销 Token',
 }

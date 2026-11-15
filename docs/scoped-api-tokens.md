@@ -68,6 +68,7 @@ AI 不能分配超过自身的权限或分组范围，也不能发放比自身�
 - `product.read/create/update/delete/export`：分别控制读取、新建、编辑、删除和导出商品；编辑快照需要 `product.update`。
 - `group.read/create/update/delete/assign`：分别控制查看、创建、重命名、删除分组以及移动商品。限定分组的 Token 不能创建新分组；可在允许的分组中新建商品时传 `groupId`。
 - `image.upload`、`precheck.read`、`precheck.run`、`category.read`、`central.read`：分别控制图片上传、预检结果、发起预检、类目查询及中控连接状态。
+- `precheck.group_rules`：管理预检自动分组规则；还需要 `group.read`、`group.assign`、`precheck.run` 且不能限定分组范围。已有 Token 不会自动获得新权限。
 - `rpa.read`：访问现有 RPA 只读接口；旧 RPA Token 仍然只适用于 RPA。图片公网 URL 本身仍可不带 Token 读取，分组权限不改变已公开的图片 URL。
 - `token.read/create/update/revoke`：分别控制查看、发放、修改、撤销下级 Token。`*` 在创建或修改时展开为当前全部权限，不会自动获得未来新增的权限。
 

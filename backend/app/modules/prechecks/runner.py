@@ -14,6 +14,7 @@ from app.modules.products.repository import ProductRepository
 from app.modules.products.brand_defaults import no_brand_selection
 from app.modules.products.service import ProductService
 from .queue import PrecheckQueue, SESSION_READ_INCOMPLETE_MESSAGE
+from .group_rules import GroupRuleStore
 from .service import check_product
 from .worker_schema import WorkerSchemaResultError, read_worker_schema
 
@@ -22,7 +23,8 @@ log = logging.getLogger(__name__)
 
 class PrecheckRunner:
     def __init__(self, engine, settings):
-        self.queue = PrecheckQueue(engine)
+        rules_path = settings.configured_precheck_group_rules() if settings.enable_group_writes else None
+        self.queue = PrecheckQueue(engine, GroupRuleStore(rules_path) if rules_path else None)
         self.service = ProductService(ProductRepository(engine), settings)
         self.central = CentralApplicationClient(settings)
         self.lookup = DouyinCategoryClient(settings)

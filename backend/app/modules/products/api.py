@@ -38,6 +38,9 @@ def capabilities(principal: Annotated[Principal, Depends(require_api_access)]):
     settings = get_settings()
     can = principal.has
     return Capabilities(groupWrites=settings.enable_group_writes and all(can(p) for p in ("group.create", "group.update", "group.delete", "group.assign")),
+                        autoGroupRules=settings.enable_group_writes and principal.groups is None
+                        and settings.configured_precheck_group_rules() is not None
+                        and all(can(p) for p in ("group.read", "group.assign", "precheck.run", "precheck.group_rules")),
                         productEdit=settings.enable_product_writes and all(can(p) for p in ("product.read", "product.create", "product.update", "product.delete", "image.upload")),
                         export=can("product.export"), categoryLookup=settings.douyin_category_lookup_enabled and can("category.read"),
                         autoPrecheck=settings.auto_precheck_enabled and can("precheck.read") and can("precheck.run"),

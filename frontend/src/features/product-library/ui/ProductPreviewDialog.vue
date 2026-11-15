@@ -18,6 +18,7 @@ import { sourceSpecLayout } from '../model/source-spec-layout'
 import { orderSkuRows, skuGroupRowSpans } from '../model/sku-order'
 import { normalizeMultiValues, originalAttributeValues, pddAttributeValues } from '../model/source-attributes'
 import { validMeasure } from '../model/measure'
+import { titleUnits } from '../model/title'
 import type { AutoPrecheck, CategoryPrediction, PrecheckIssue } from '../model/precheck'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
@@ -809,6 +810,7 @@ const draftIssues = computed<PrecheckIssue[]>(() => {
   if (!product) return []
   const issues: PrecheckIssue[] = []
   if (!draftTitle.value.trim()) issues.push({ code: 'title_missing', message: '商品标题未填写', tab: 'base', fieldId: 'title' })
+  else if (titleUnits(draftTitle.value.trim()) > 60) issues.push({ code: 'title_too_long', message: '商品标题长度超过 60', tab: 'base', fieldId: 'title' })
   if (!draftMain.value.length) issues.push({ code: 'main_image_missing', message: '商品主图未填写', tab: 'images', fieldId: 'mainImages' })
   const active = activeSkuDrafts.value
   if (!active.length) issues.push({ code: 'sku_missing', message: 'SKU 规格未填写', tab: 'sku', fieldId: 'skus' })
@@ -920,8 +922,7 @@ const allText = computed(() => {
   return item ? [basicText.value, '', 'SKU：', skuText.value, '', '属性：',
     ...item.attributes.map((attribute) => `${attribute.name}：${attribute.value}`)].join('\n') : ''
 })
-const titleLength = computed(() => Array.from(props.editable ? draftTitle.value : (props.product?.title ?? ''))
-  .reduce((sum, character) => sum + ((character.codePointAt(0) ?? 0) > 127 ? 2 : 1), 0))
+const titleLength = computed(() => titleUnits(props.editable ? draftTitle.value : (props.product?.title ?? '')))
 const specLayout = computed(() => {
   const skus = canStructure.value ? visibleSkus.value : (props.product?.skus ?? [])
   const fallback = sourceSpecLayout(skus)

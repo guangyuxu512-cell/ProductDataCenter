@@ -25,6 +25,8 @@ export interface PrecheckResult {
   issues: string[]
   issueDetails?: PrecheckIssue[]
   prediction?: CategoryPrediction
+  groupRoutingMoved?: boolean
+  groupRoutingError?: string
 }
 export interface AutoPrecheck {
   productId: string

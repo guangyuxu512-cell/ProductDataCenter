@@ -1,9 +1,55 @@
 from types import SimpleNamespace as Node
 from unittest.mock import Mock, patch
 
+import pytest
+
 from app.modules.category_lookup.api import Attribute, Option
 from app.modules.category_lookup.attribute_values import UNVERIFIED
 from app.modules.prechecks.service import _attribute_problems, _missing_required, check_product
+
+
+@pytest.mark.parametrize(("title", "units"), [
+    ("中" * 30, 60), ("中" * 31, 62), ("中" * 29 + "，!", 60),
+    ("中" * 29 + "，!A", 61), ("A" * 60, 60), ("字😀，", 4),
+    ("𠀀", 2),
+])
+def test_title_units_match_the_editor_and_count_symbols_once(title, units):
+    from app.modules.products.title import title_units
+
+    assert title_units(title) == units
+
+
+def test_overlong_existing_title_is_a_locatable_precheck_issue():
+    detail = {"product": {"source_platform": "douyin", "title": "中" * 30 + "！",
+                          "main_image_url": "https://example.invalid/a"},
+              "images": [], "skus": [{"current_price": "9.90"}], "sourceCategoryId": "100",
+              "sourceAttributes": [], "targetCategory": [], "targetAttributes": []}
+    service = Node(repository=Node(detail=lambda _: detail))
+    with patch("app.modules.prechecks.service.schema_auto", return_value=Node(attributes=[])):
+        result = check_product("12345678", service, None, None)
+    assert result["status"] == "needs_completion"
+    assert result["issueDetails"] == [{"code": "title_too_long", "message": "商品标题长度超过 60",
+                                      "tab": "base", "fieldId": "title"}]
+
+
+def test_title_save_limit_matches_precheck_including_symbols():
+    from pydantic import ValidationError
+    from app.modules.products.schemas import ProductEdit
+
+    assert ProductEdit(expectedVersion="a" * 64, title="中" * 29 + "，!").title == "中" * 29 + "，!"
+    with pytest.raises(ValidationError):
+        ProductEdit(expectedVersion="a" * 64, title="中" * 30 + "，")
+
+
+def test_old_ready_result_reports_an_overlong_title_without_mutation():
+    from app.modules.prechecks.queue import present_result
+
+    original = {"title": "中" * 30 + "，", "status": "ready", "issues": [], "issueDetails": []}
+    shown = present_result(original)
+    assert shown["status"] == "needs_completion"
+    assert shown["issueDetails"][0]["code"] == "title_too_long"
+    assert present_result(shown)["issues"] == ["商品标题长度超过 60"]
+    assert original["status"] == "ready" and original["issues"] == []
 
 
 def test_required_values_match_original_id_or_unambiguous_pdd_name():

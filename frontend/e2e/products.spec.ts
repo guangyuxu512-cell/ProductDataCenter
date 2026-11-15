@@ -67,6 +67,39 @@ async function confirmImageLink(page: Page, value: string) {
   await page.getByRole('dialog').last().getByRole('button', { name: '确定', exact: true }).click()
 }
 
+test('配置自动分组规则并重新打开读回', async ({ page }) => {
+  await fixtures(page)
+  let config: { version: number; rules: Array<Record<string, unknown>> } = { version: 0, rules: [] }
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, autoGroupRules: true, autoPrecheck: true, export: true, productEdit: false, importProducts: false,
+  } }))
+  await page.route('**/api/v1/prechecks/query', (route) => route.fulfill({ json: { items: [] } }))
+  await page.route('**/api/v1/prechecks/group-rules', (route) => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON() as typeof config
+      config = { version: body.version + 1, rules: body.rules }
+    }
+    return route.fulfill({ json: config })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '自动分组', exact: true }).click()
+  const dialog = page.getByRole('dialog').filter({ hasText: '预检自动分组' })
+  await expect(dialog.getByText('还没有自动分组规则。')).toBeVisible()
+  await dialog.getByRole('button', { name: '添加规则' }).click()
+  await dialog.getByLabel('来源商品').click()
+  await page.locator('.n-base-select-option:visible').filter({ hasText: '全部商品' }).click()
+  await dialog.getByLabel('预检通过后移动到').click()
+  await page.locator('.n-base-select-option:visible').filter({ hasText: '正价品' }).click()
+  await dialog.getByLabel('未通过后移动到').click()
+  await page.locator('.n-base-select-option:visible').filter({ hasText: /^未分组$/ }).click()
+  await dialog.getByRole('button', { name: '保存规则' }).click()
+  await expect.poll(() => config.version).toBe(1)
+  expect(config.rules[0]).toMatchObject({ source: 'all', passed: '00000000-0000-4000-8000-000000000001', incomplete: 'ungrouped' })
+  await page.getByRole('button', { name: '自动分组', exact: true }).click()
+  await expect(dialog.getByText('规则 1', { exact: true })).toBeVisible()
+  await expect(dialog).toContainText('正价品')
+})
+
 for (const platform of ['douyin', 'pinduoduo']) {
   test(`${platform} 图片链接和本地替换保存后读回，规格关联保持不变`, async ({ page }) => {
     await fixtures(page)

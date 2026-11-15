@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Separate credential registry on the existing persistent private mount.
     # No DDL is applied to the collector-owned PostgreSQL database.
     scoped_token_store_file: Path | None = None
+    # User-configured precheck routing lives on the same private persistent
+    # mount as other product-service settings, not in the shared collector DB.
+    precheck_group_rules_file: Path | None = None
     data_root: Path = Path("/data")
     # User-uploaded product images live on a persistent NAS mount.  A public
     # URL is configured explicitly; the incoming Host header is never trusted.
@@ -94,6 +97,11 @@ class Settings(BaseSettings):
         if self.scoped_token_store_file:
             return self.scoped_token_store_file
         return self.category_cache_file.with_name("scoped-api-tokens.sqlite3") if self.category_cache_file else None
+
+    def configured_precheck_group_rules(self) -> Path | None:
+        if self.precheck_group_rules_file:
+            return self.precheck_group_rules_file
+        return self.category_cache_file.with_name("precheck-group-rules.sqlite3") if self.category_cache_file else None
 
 
 @lru_cache

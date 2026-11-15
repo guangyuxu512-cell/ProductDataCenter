@@ -471,6 +471,72 @@ def test_automatic_precheck_tracks_committed_package_revisions(engine):
         assert queue.results([product_id]) == []
 
 
+def test_precheck_group_rules_route_only_current_completed_results(engine, tmp_path):
+    from uuid import uuid4
+    from app.modules.prechecks.group_rules import GroupRule, GroupRules, GroupRuleStore
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    repo = ProductRepository(engine)
+    service = ProductService(repo, Settings(_env_file=None, data_root=tmp_path))
+    label = uuid4().hex[:8]
+    source = service.save_group(f"自动分组来源{label}")["group"]["groupId"]
+    passed = service.save_group(f"自动分组通过{label}")["group"]["groupId"]
+    incomplete = service.save_group(f"自动分组待完善{label}")["group"]["groupId"]
+    product_id = repo.create_manual("自动分组隔离商品", group_id=source)
+    store = GroupRuleStore(tmp_path / "precheck-rules.sqlite3")
+    store.save(GroupRules(rules=[GroupRule(source=str(source), passed=str(passed), incomplete=str(incomplete))]))
+    queue = PrecheckQueue(engine, store)
+
+    def claim():
+        return next(row for row in queue.claim(200) if row["product_id"] == product_id)
+
+    def current():
+        with engine.connect() as conn:
+            return conn.execute(text("SELECT group_id, uu_json FROM products WHERE product_id=:id"),
+                                {"id": product_id}).one()
+
+    try:
+        first = claim()
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET uu_json=uu_json || '{\"newRevision\": true}'::jsonb "
+                              "WHERE product_id=:id"), {"id": product_id})
+        before = current()
+        assert queue.complete(first, {"status": "ready", "title": "隔离商品", "issues": []}) is False
+        assert current() == before
+
+        second = claim()
+        assert queue.complete(second, {"status": "ready", "title": "隔离商品", "issues": []}) is True
+        assert current()[0] == passed and current()[1] == before[1]
+        assert queue.results([product_id])[0]["result"]["groupRoutingMoved"] is True
+
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET group_id=:group_id WHERE product_id=:id"),
+                         {"group_id": source, "id": product_id})
+        queue.enqueue([product_id])
+        assert queue.complete(claim(), {"status": "needs_completion", "issues": ["品牌未填写"]})
+        assert current()[0] == incomplete
+
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE products SET group_id=:group_id WHERE product_id=:id"),
+                         {"group_id": source, "id": product_id})
+        queue.enqueue([product_id])
+        assert queue.complete(claim(), {"status": "failed", "issues": ["预检服务不可用"]})
+        assert current()[0] == source
+
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM product_groups WHERE group_id=:group_id"), {"group_id": passed})
+        queue.enqueue([product_id])
+        assert queue.complete(claim(), {"status": "ready", "issues": []})
+        assert current()[0] == source
+        assert queue.results([product_id])[0]["result"]["groupRoutingError"] == "自动分组目标不存在"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+            conn.execute(text("DELETE FROM product_groups WHERE group_id=ANY(CAST(:ids AS uuid[]))"),
+                         {"ids": [str(source), str(passed), str(incomplete)]})
+        assert queue.results([product_id]) == []
+
+
 def test_manual_enqueue_invalidates_an_inflight_precheck(engine):
     from app.modules.prechecks.queue import PrecheckQueue
 

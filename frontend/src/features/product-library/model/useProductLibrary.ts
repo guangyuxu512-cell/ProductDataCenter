@@ -52,10 +52,15 @@ export function useProductLibrary() {
     ])
   }
 
+  async function refreshAfterAutoGroup() {
+    counts.clear()
+    await Promise.all([list.refetch(), groups.refetch()])
+  }
+
   function reset() {
     Object.assign(filters, { query: '', platform: '', groupId: '', capturedFrom: '', capturedTo: '', page: 1 })
   }
 
   return { filters, selected, detailId, list, groups, capabilities, detail,
-    total: computed(() => list.data.value?.total ?? counts.get(filterKey.value) ?? 0), refresh, reset }
+    total: computed(() => list.data.value?.total ?? counts.get(filterKey.value) ?? 0), refresh, refreshAfterAutoGroup, reset }
 }
