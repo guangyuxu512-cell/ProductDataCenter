@@ -1367,7 +1367,10 @@ test('真实复合材质规则的原值与自定义值保存并重新打开', as
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   const material = dialog.locator('[data-precheck-field="785"]')
   await expect(material).toContainText('聚酯纤维100%')
-  await material.locator('.n-base-selection').click()
+  // Clicking the middle of the control can hit the selected tag's delete X
+  // on narrower Linux fonts. Click its label to open without deleting it.
+  await material.getByText('聚酯纤维100%', { exact: true }).click()
+  await expect(material).toContainText('聚酯纤维100%')
   await material.locator('input:visible').fill('棉20%')
   await page.getByText('添加『棉20%』', { exact: true }).click()
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
