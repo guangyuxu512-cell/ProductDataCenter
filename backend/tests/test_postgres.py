@@ -530,6 +530,48 @@ def test_worker_precheck_wait_states_and_revision_fence(engine):
             conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
 
 
+
+def test_unavailable_worker_dispatch_uses_bounded_backoff_and_can_resume(engine):
+    from app.modules.prechecks.queue import PrecheckQueue
+
+    repo, queue = ProductRepository(engine), PrecheckQueue(engine)
+    product_id = repo.create_manual("设备不可用预检隔离商品")
+    try:
+        first = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert queue.defer_worker(first, unavailable=True) is True
+        with engine.connect() as conn:
+            row = conn.execute(text("""SELECT state, revision, attempts, last_error,
+                extract(epoch FROM (available_at-now())) AS delay
+                FROM product_prechecks WHERE product_id=:id"""), {"id": product_id}).mappings().one()
+            assert row["state"] == "pending" and row["revision"] == first["revision"]
+            assert row["last_error"] == "worker_dispatch_unavailable" and 10 <= row["delay"] <= 15
+        waiting = queue.results([product_id])[0]
+        assert waiting["state"] == "pending" and waiting["waitingForDevice"] is True and waiting["error"] is None
+        assert all(item["product_id"] != product_id for item in queue.claim(100))
+
+        with engine.begin() as conn:
+            conn.execute(text("""UPDATE product_prechecks SET attempts=2000,
+                available_at=now()-interval '1 second' WHERE product_id=:id"""), {"id": product_id})
+        next_claim = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        during_retry = queue.results([product_id])[0]
+        assert during_retry["state"] == "running" and during_retry["waitingForDevice"] is True
+        assert during_retry["error"] is None
+        assert queue.defer_worker(next_claim, unavailable=True) is True
+        with engine.connect() as conn:
+            delay = conn.execute(text("""SELECT extract(epoch FROM (available_at-now()))
+                FROM product_prechecks WHERE product_id=:id"""), {"id": product_id}).scalar_one()
+            assert 295 <= delay <= 300
+
+        queued = queue.enqueue([product_id])[0]
+        assert queued["revision"] == first["revision"] + 1
+        restored = next(item for item in queue.claim(100) if item["product_id"] == product_id)
+        assert restored["revision"] == queued["revision"] and restored["attempts"] == 1
+        assert queue.complete(restored, {"status": "ready", "issues": []}) is True
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
 def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engine, tmp_path):
     from uuid import uuid4
     from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession

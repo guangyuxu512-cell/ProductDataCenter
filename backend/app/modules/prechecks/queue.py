@@ -6,6 +6,7 @@ from app.modules.products.queries import group_scope_sql
 
 
 _WAITING_WORKER_RESULT = "worker_result_pending"
+_WAITING_WORKER_DEVICE = "worker_dispatch_unavailable"
 SESSION_READ_INCOMPLETE_MESSAGE = "读取本机店铺会话未完成"
 
 
@@ -113,10 +114,17 @@ class PrecheckQueue:
                 {"product_id": product_id, "revision": revision, "waiting": _WAITING_WORKER_RESULT}).mappings().one()
         return "claimed", dict(claim)
 
-    def defer_worker(self, claim: dict, *, running: bool = False, waiting_result: bool = False) -> bool:
+    def defer_worker(self, claim: dict, *, running: bool = False, waiting_result: bool = False,
+                     unavailable: bool = False) -> bool:
         """Release a claim while awaiting its idempotently keyed central task."""
         if waiting_result and not running:
             raise ValueError("A pending Worker result must remain running")
+        if unavailable and running:
+            raise ValueError("An unavailable Worker must remain pending")
+        # Devices can be offline for hours. Slow down repeated failed dispatches
+        # while retaining a bounded delay for automatic recovery.
+        delay = (min(300, 15 * (2 ** min(max(claim["attempts"] - 1, 0), 5)))
+                 if unavailable else 30 if waiting_result else 5)
         with self.engine.begin() as conn:
             updated = conn.execute(text("""UPDATE product_prechecks SET
                 state=CASE WHEN :running THEN 'running' ELSE 'pending' END,
@@ -124,8 +132,9 @@ class PrecheckQueue:
                 lease_until=CASE WHEN :running THEN now()+(:delay * interval '1 second') ELSE NULL END, result=NULL,
                 last_error=:waiting, updated_at=now()
                 WHERE product_id=:product_id AND revision=:revision AND attempts=:attempts
-                  AND state='running'"""), {**claim, "running": running, "delay": 30 if waiting_result else 5,
-                                             "waiting": _WAITING_WORKER_RESULT if waiting_result else None}).rowcount
+                  AND state='running'"""), {**claim, "running": running, "delay": delay,
+                                             "waiting": (_WAITING_WORKER_RESULT if waiting_result else
+                                                         _WAITING_WORKER_DEVICE if unavailable else None)}).rowcount
         return bool(updated)
 
     def retry(self, claim: dict) -> None:
@@ -154,10 +163,13 @@ class PrecheckQueue:
         records = []
         for row in rows:
             waiting = row["state"] == "running" and row["last_error"] == _WAITING_WORKER_RESULT
+            waiting_device = row["state"] in ("pending", "running") and row["last_error"] == _WAITING_WORKER_DEVICE
             record = {"productId": row["product_id"], "revision": row["revision"],
                       "state": row["state"], "result": present_result(row["result"]),
-                      "error": None if waiting else row["last_error"], "updatedAt": row["updated_at"]}
+                      "error": None if waiting or waiting_device else row["last_error"], "updatedAt": row["updated_at"]}
             if waiting:
                 record["waitingForWorker"] = True
+            if waiting_device:
+                record["waitingForDevice"] = True
             records.append(record)
         return records
