@@ -74,3 +74,42 @@ def measure_valid(value: str, templates) -> bool:
         if valid and has_number:
             return True
     return False
+
+
+def multi_measure_valid(value: str, rule, options=()) -> bool | None:
+    """Validate a composite value; None means the joined text is ambiguous."""
+    if rule is None or not rule.units:
+        return False
+    units = sorted((unit.label for unit in rule.units if unit.label), key=len, reverse=True)
+    text = value.strip()
+    unit = next((unit for unit in units if text.endswith(unit)), None)
+    if not unit:
+        return False
+    text = text[:-len(unit)].strip()
+    numeric = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
+
+    def valid_number(raw):
+        try:
+            number = Decimal(raw)
+            decimals = max(-number.as_tuple().exponent, 0)
+            return (number.is_finite() and (rule.dataType != "int" or number == number.to_integral_value())
+                    and (rule.minimum is None or number >= Decimal(str(rule.minimum)))
+                    and (rule.maximum is None or number <= Decimal(str(rule.maximum)))
+                    and (rule.precision is None or decimals <= rule.precision))
+        except InvalidOperation:
+            return False
+
+    # Prefer an actual platform option when it uniquely defines the boundary.
+    known = {text[len(option.label):].strip() for option in options
+             if option.label and text.startswith(option.label)
+             and numeric.fullmatch(text[len(option.label):].strip())}
+    if len(known) == 1:
+        return valid_number(next(iter(known)))
+    if len(known) > 1:
+        return None
+    # Custom enum values may themselves end in digits. Only accept them when
+    # exactly one split satisfies the explicit platform number rules.
+    candidates = {(text[:index].strip(), text[index:].strip()) for index in range(1, len(text))
+                  if text[:index].strip() and numeric.fullmatch(text[index:].strip())}
+    valid = [(name, number) for name, number in candidates if valid_number(number)]
+    return True if len(valid) == 1 else None if len(valid) > 1 else False

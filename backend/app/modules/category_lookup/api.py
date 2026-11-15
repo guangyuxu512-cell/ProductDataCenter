@@ -146,16 +146,25 @@ class MeasureTemplate(BaseModel):
     modules: list[MeasureModule]
 
 
+class MultiMeasureRule(BaseModel):
+    units: list[Option]
+    minimum: float | None = None
+    maximum: float | None = None
+    precision: int | None = None
+    dataType: Literal["float", "int"]
+
+
 class Attribute(BaseModel):
     id: str
     label: str
     required: bool
     options: list[Option]
-    control: Literal["single", "multi", "text", "number", "measure", "unknown"] = "unknown"
+    control: Literal["single", "multi", "text", "number", "measure", "multi_measure", "unknown"] = "unknown"
     allowCustom: bool | None = None
     ruleStatus: Literal["confirmed", "unknown"] = "unknown"
     maxValues: int | None = None
     measureTemplates: list[MeasureTemplate] = Field(default_factory=list)
+    multiMeasureRule: MultiMeasureRule | None = None
 
 
 class SearchResponse(BaseModel):

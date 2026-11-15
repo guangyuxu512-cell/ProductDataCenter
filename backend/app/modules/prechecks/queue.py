@@ -47,6 +47,9 @@ def present_result(result):
     if value.get("status") == "failed" and isinstance(value.get("issues"), list):
         value["issues"] = [SESSION_READ_INCOMPLETE_MESSAGE if issue == "本机店铺登录状态不可用" else issue
                            for issue in value["issues"]]
+        if not value["issues"]:
+            # Older failed results did not record why validation was incomplete.
+            value["issues"] = ["预检未完成，请重试"]
     return value
 
 

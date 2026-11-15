@@ -35,7 +35,7 @@ export async function fetchEditSnapshot(id: string) {
 }
 
 export async function saveProduct(id: string, patch: ProductPatch) {
-  return (await http.patch<{ version: string }>(`/products/${encodeURIComponent(id)}`, patch)).data
+  return (await http.patch<{ version: string; precheckRevision?: number | null }>(`/products/${encodeURIComponent(id)}`, patch)).data
 }
 
 export async function createManualProduct(title: string, draftSeed?: string, edit?: ProductPatch) {

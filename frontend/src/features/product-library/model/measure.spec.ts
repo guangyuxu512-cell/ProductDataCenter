@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MeasureTemplate } from '../api/category-lookup'
-import { formatMeasure, parseMeasure, validMeasure } from './measure'
+import { formatMeasure, parseMeasure, validMeasure, validMultiMeasure } from './measure'
 
 // Sanitized measure template from category 1000001535's getSchema response.
 const template: MeasureTemplate = { id: '53', name: '三脚架长宽高度量衡模板', modules: [48, 49, 50].map((id, index) => ({
@@ -21,4 +21,15 @@ describe('按平台度量模板处理尺寸', () => {
       expect(validMeasure(template, value)).toBe(false)
     }
   })
+})
+
+it('依据真实复合多值规则检查材质和百分比', () => {
+  const rule = { units: [{ label: '%', value: '15' }], minimum: 0.01, maximum: 100, precision: 2, dataType: 'float' as const }
+  const options = [{ label: '聚酯纤维', value: '5673' }]
+  expect(validMultiMeasure(rule, '聚酯纤维100%', options)).toBe(true)
+  expect(validMultiMeasure(rule, '棉20%')).toBe(true)
+  for (const value of ['聚酯纤维', '100%', '聚酯纤维0%', '聚酯纤维100.01%', '聚酯纤维1.234%']) {
+    expect(validMultiMeasure(rule, value, options)).toBe(false)
+  }
+  expect(validMultiMeasure(rule, '自定义99%', options)).toBeNull()
 })

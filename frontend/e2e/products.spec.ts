@@ -67,6 +67,39 @@ async function confirmImageLink(page: Page, value: string) {
   await page.getByRole('dialog').last().getByRole('button', { name: '确定', exact: true }).click()
 }
 
+test('后台刷新显示新采集商品，不遮罩表格或丢失编辑草稿', async ({ page }) => {
+  await page.clock.install()
+  await fixtures(page)
+  let listCalls = 0
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, productEdit: true, autoPrecheck: false, categoryLookup: false,
+  } }))
+  await page.route('**/api/v1/products?*', async (route) => {
+    listCalls++
+    if (listCalls > 1) await gate
+    const items = listCalls > 1 ? [{ ...product('9999999999999999999'), title: '后台新采集商品' }, product(firstId)] : [product(firstId)]
+    return route.fulfill({ json: { items, total: items.length, totalIncluded: true, limit: 20, offset: 0 } })
+  })
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version: 'a'.repeat(64), specImageGroup: '规格', specImages: [{ id: '11', name: '默认', url: '' }],
+    specGroups: [{ index: 0, name: '规格', movable: false, values: [{ id: '11', name: '默认', url: '' }] }],
+    skus: [{ skuId: 'sku-1', specIds: ['11'], price: '19.99', stock: 9, enabled: true, merchantCode: '' }],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('textbox', { name: '商品标题' }).fill('未保存的草稿')
+  await page.clock.fastForward(30_000)
+  await expect.poll(() => listCalls).toBe(2)
+  expect(await page.locator('.data-table').evaluate((element) => element.hasAttribute('inert'))).toBe(false)
+  await expect(dialog.getByRole('textbox', { name: '商品标题' })).toHaveValue('未保存的草稿')
+  release()
+  await expect(page.locator('.product-info-cell__title').filter({ hasText: '后台新采集商品' })).toBeVisible()
+  await expect(dialog.getByRole('textbox', { name: '商品标题' })).toHaveValue('未保存的草稿')
+})
+
 test('配置自动分组规则并重新打开读回', async ({ page }) => {
   await fixtures(page)
   let config: { version: number; rules: Array<Record<string, unknown>> } = { version: 0, rules: [] }
@@ -1293,6 +1326,61 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   await expect(dialog.locator('.n-form-item').filter({ hasText: '自定义多选' })).toContainText('定制乙')
 })
 
+test('真实复合材质规则的原值与自定义值保存并重新打开', async ({ page }) => {
+  await fixtures(page)
+  let version = 'a'.repeat(64)
+  let values = [{ valueId: '0', name: '聚酯纤维100%' }]
+  let saved: ProductPatch | undefined
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: true, categoryLookup: true,
+  } }))
+  await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
+    version, specImageGroup: '规格', specImages: [{ id: '11', name: '默认', url: '' }],
+    specGroups: [{ index: 0, name: '规格', movable: false, values: [{ id: '11', name: '默认', url: '' }] }],
+    skus: [{ skuId: 'sku-1', specIds: ['11'], price: '19.99', stock: 9, enabled: true, merchantCode: '' }],
+  } }))
+  await page.route(`**/api/v1/products/${firstId}`, (route) => {
+    if (route.request().method() === 'PATCH') {
+      saved = route.request().postDataJSON() as ProductPatch
+      values = saved.attributes?.[0]?.values ?? values
+      version = 'b'.repeat(64)
+      return route.fulfill({ json: { version } })
+    }
+    return route.fulfill({ json: { product: product(firstId), sourceCategoryId: '1000003443',
+      sourceAttributes: [{ id: '785', name: '面料材质', values: values.map((item) => item.name), valueItems: values }],
+      targetCategory: [], targetAttributes: [],
+      skus: [{ sku_id: 'sku-1', sku_name: '规格: 默认', current_price: '19.99', image_rel_path: '', sort_order: 0 }],
+      images: [{ image_type: 'main', sort_order: 0, rel_path: '', source_url: image }] } })
+  })
+  await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
+    shopId: '00000000-0000-4000-8000-000000000111', categoryId: '1000003443', attributes: [{
+      id: '785', label: '面料材质', required: false, options: [{ label: '聚酯纤维', value: '5673' }],
+      control: 'multi_measure', allowCustom: true, ruleStatus: 'confirmed', maxValues: 10,
+      multiMeasureRule: { units: [{ label: '%', value: '15' }], minimum: 0.01, maximum: 100, precision: 2, dataType: 'float' },
+    }],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  let dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  const material = dialog.locator('[data-precheck-field="785"]')
+  await expect(material).toContainText('聚酯纤维100%')
+  await material.locator('.n-base-selection').click()
+  await material.locator('input').fill('棉20%')
+  await page.getByText('添加『棉20%』', { exact: true }).click()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => saved?.attributes?.[0]?.values).toEqual([
+    { valueId: '0', name: '聚酯纤维100%' }, { valueId: '0', name: '棉20%' },
+  ])
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await page.reload()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  dialog = page.getByRole('dialog')
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect(dialog.locator('[data-precheck-field="785"]')).toContainText('聚酯纤维100%')
+  await expect(dialog.locator('[data-precheck-field="785"]')).toContainText('棉20%')
+})
+
 test('列表单删和批删确认后刷新数量及选择', async ({ page }) => {
   await fixtures(page)
   const ids = [firstId, '3760269504500859112', '3760269504500859113']
@@ -1518,6 +1606,7 @@ test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读�
   let version = 'a'.repeat(64)
   let title = '厨房收纳盒 · 隔离测试商品'
   let runCount = 0
+  let saveCount = 0
   let lateRevisionSent = false
   const issue = { productId: firstId, title, status: 'needs_completion', issues: ['品牌未填写'],
     issueDetails: [{ code: 'attribute_missing', message: '品牌未填写', tab: 'attributes', fieldId: '502' }] }
@@ -1534,8 +1623,9 @@ test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读�
     if (route.request().method() === 'PATCH') {
       const body = route.request().postDataJSON() as ProductPatch
       title = body.title ?? title
-      version = runCount ? 'c'.repeat(64) : 'b'.repeat(64)
-      return route.fulfill({ json: { version } })
+      saveCount++
+      version = saveCount > 1 ? 'c'.repeat(64) : 'b'.repeat(64)
+      return route.fulfill({ json: { version, precheckRevision: saveCount + 1 } })
     }
     return route.fulfill({ json: { product: { ...product(firstId), title }, sourceCategoryId: '100', sourceAttributes: [],
       skus: [{ sku_id: 'sku-1', sku_name: '规格: 默认', current_price: '19.99', image_rel_path: '', sort_order: 0 }],
@@ -1552,9 +1642,9 @@ test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读�
       result: null, error: null, updatedAt: `2026-11-05T00:00:0${runCount}Z` }] } })
   })
   await page.route('**/api/v1/prechecks/query', (route) => {
-    if (!runCount) return route.fulfill({ json: { items: [{ productId: firstId, revision: 1, state: 'done', result: issue,
+    if (!saveCount) return route.fulfill({ json: { items: [{ productId: firstId, revision: 1, state: 'done', result: issue,
       error: null, updatedAt: '2026-11-05T00:00:00Z' }] } })
-    if (runCount === 1) return route.fulfill({ json: { items: [{ productId: firstId, revision: 2, state: 'running', result: null,
+    if (saveCount === 1) return route.fulfill({ json: { items: [{ productId: firstId, revision: 2, state: 'running', result: null,
       error: null, updatedAt: '2026-11-05T00:00:02Z' }] } })
     if (!lateRevisionSent) {
       lateRevisionSent = true
@@ -1577,7 +1667,8 @@ test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读�
   await dialog.getByRole('tab', { name: '基本信息' }).click()
   await dialog.getByRole('textbox', { name: '商品标题' }).fill('第二次保存标题')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
-  await expect.poll(() => runCount).toBe(2)
+  await expect.poll(() => saveCount).toBe(2)
+  expect(runCount).toBe(0)
   await expect(dialog.getByRole('status')).toContainText('排队中')
   await expect(dialog.getByRole('status')).not.toContainText('品牌未填写')
   await expect(dialog.getByText('自动预检：已通过')).toBeVisible({ timeout: 7_000 })

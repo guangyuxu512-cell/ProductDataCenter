@@ -17,7 +17,7 @@ import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
 import { orderSkuRows, skuGroupRowSpans } from '../model/sku-order'
 import { normalizeMultiValues, originalAttributeValues, pddAttributeValues } from '../model/source-attributes'
-import { validMeasure } from '../model/measure'
+import { validMeasure, validMultiMeasure } from '../model/measure'
 import { titleUnits } from '../model/title'
 import type { AutoPrecheck, CategoryPrediction, PrecheckIssue } from '../model/precheck'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
@@ -59,7 +59,7 @@ const emit = defineEmits<{
   retry: []
   navigate: [direction: 'previous' | 'next']
   'navigate-to': [id: string]
-  saved: [id: string]
+  saved: [id: string, precheckRevision?: number | null]
   created: [id: string]
 }>()
 
@@ -185,8 +185,8 @@ function retainedToken(value: ProductAttributeValue) {
 }
 function setAttribute(item: CategoryAttribute, value: string | number | Array<string | number> | null) {
   const raw = Array.isArray(value) ? value : value === null ? [] : [value]
-  if (item.control === 'multi' && item.maxValues && raw.length > item.maxValues && raw.length > attributeValues(item).length) return
-  if (!['single', 'multi'].includes(item.control)) {
+  if (['multi', 'multi_measure'].includes(item.control) && item.maxValues && raw.length > item.maxValues && raw.length > attributeValues(item).length) return
+  if (!['single', 'multi', 'multi_measure'].includes(item.control)) {
     attributeInputs.value[item.id] = raw.map(String).map((name) => name.trim()).filter(Boolean)
       .map((name) => ({ valueId: '0', name }))
   } else {
@@ -263,37 +263,38 @@ function attributeValues(item: CategoryAttribute): ProductAttributeValue[] {
   return product ? originalAttributeValues(item, categoryAttributes.value, product, selectedCategory.value) : []
 }
 function attributeTextValue(item: CategoryAttribute) {
-  return attributeValues(item).map((value) => value.name).join(attributeControl(item) === 'multi' ? '、' : '')
+  return attributeValues(item).map((value) => value.name).join(['multi', 'multi_measure'].includes(attributeControl(item)) ? '、' : '')
 }
 function attributeProblem(item: CategoryAttribute): string | null {
   const values = attributeValues(item)
   if (!values.length) return item.required ? '未填写' : null
   if (item.ruleStatus !== 'confirmed' || attributeControl(item) === 'unknown') return null
   if (attributeControl(item) === 'single' && values.length !== 1) return '只能选择一项'
-  if (attributeControl(item) === 'multi' && item.maxValues && values.length > item.maxValues) return `最多选${item.maxValues}项`
+  if (['multi', 'multi_measure'].includes(attributeControl(item)) && item.maxValues && values.length > item.maxValues) return `最多选${item.maxValues}项`
+  if (item.control === 'multi_measure' && values.some((value) => validMultiMeasure(item.multiMeasureRule, value.name, item.options) === false)) return '格式无效'
   if (attributeControl(item) === 'measure' && (values.length !== 1 ||
       !(item.measureTemplates ?? []).some((template) => validMeasure(template, values[0].name)))) return '格式无效'
   if (attributeControl(item) === 'number' && values.some((value) => !value.name.trim() || !Number.isFinite(Number(value.name)))) return '数字无效'
-  if (item.options.length && item.allowCustom !== true && values.some((value) =>
+  if (item.control !== 'multi_measure' && item.options.length && item.allowCustom !== true && values.some((value) =>
     value.valueId !== '0'
       ? item.options.filter((option) => option.value === value.valueId).length !== 1
       : item.options.filter((option) => option.label === value.name).length !== 1)) return '包含无效选项'
   return null
 }
 function attributeOptions(item: CategoryAttribute): SelectOption[] {
-  const options: SelectOption[] = item.options.map((option) => ({ label: option.label, value: `option:${option.value}` }))
+  const options: SelectOption[] = item.control === 'multi_measure' ? [] : item.options.map((option) => ({ label: option.label, value: `option:${option.value}` }))
   for (const value of attributeValues(item)) {
-    if (item.options.some((option) => option.value === value.valueId)) continue
+    if (item.control !== 'multi_measure' && item.options.some((option) => option.value === value.valueId)) continue
     const token = value.valueId === '0' ? customToken(value.name) : retainedToken(value)
     if (!options.some((option) => option.value === token)) options.push({ label: value.name, value: token })
   }
   return options
 }
 function attributeModelValue(item: CategoryAttribute) {
-  const tokens = attributeValues(item).map((value) => item.options.some((option) => option.value === value.valueId)
+  const tokens = attributeValues(item).map((value) => item.control !== 'multi_measure' && item.options.some((option) => option.value === value.valueId)
     ? `option:${value.valueId}`
     : value.valueId === '0' ? customToken(value.name) : retainedToken(value))
-  return attributeControl(item) === 'multi' ? tokens : (tokens[0] ?? null)
+  return ['multi', 'multi_measure'].includes(attributeControl(item)) ? tokens : (tokens[0] ?? null)
 }
 function createAttributeOption(label: string): SelectOption {
   return { label: `添加『${label}』`, value: customToken(label), __customCreate: true, __customLabel: label }
@@ -633,7 +634,7 @@ async function submitEdit() {
     message.success('商品已保存')
     selectedParts.value = null; touchedAttributes.value = []
     initialMain.value = [...draftMain.value]; initialDetail.value = [...draftDetail.value]
-    emit('saved', product.id)
+    emit('saved', product.id, result.precheckRevision)
     try {
       const snapshot = await fetchEditSnapshot(product.id)
       if (props.product?.id === product.id) setEditSnapshot(snapshot)
@@ -855,7 +856,9 @@ const precheckSummary = computed(() => {
   if (record.waitingForWorker) return { text: '自动预检：等待设备结果', tone: 'warning' as const }
   if (record.error) return { text: `自动预检失败：${record.error}`, tone: 'error' as const }
   if (record.state !== 'done') return { text: `自动预检：${record.state === 'running' ? '预检中' : '排队中'}`, tone: 'default' as const }
-  if (record.result?.status === 'failed' || !record.result) return { text: '自动预检失败', tone: 'error' as const }
+  if (record.result?.status === 'failed' || !record.result) return {
+    text: `自动预检失败${record.result?.issues.length ? `：${record.result.issues.join('；')}` : ''}`, tone: 'error' as const,
+  }
   return displayedPrecheckIssues.value.length
     ? { text: `自动预检待处理：${displayedPrecheckIssues.value.map((item) => item.message).join('；')}`, tone: 'warning' as const }
     : { text: '自动预检：已通过', tone: 'success' as const }
@@ -1113,10 +1116,10 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   :model-value="attributeTextValue(item)" :templates="item.measureTemplates" :label="item.label"
                   :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)"
                   @update:model-value="setAttribute(item, $event)" />
-                <div v-else-if="editable && ['single', 'multi'].includes(item.control)" class="product-preview__attribute-input">
+                <div v-else-if="editable && ['single', 'multi', 'multi_measure'].includes(item.control)" class="product-preview__attribute-input">
                   <AppSelect :model-value="attributeModelValue(item)"
                     :options="attributeOptions(item)" clearable filterable show-on-focus
-                    :multiple="attributeControl(item) === 'multi'"
+                    :multiple="['multi', 'multi_measure'].includes(attributeControl(item))"
                     :tag="item.allowCustom === true && (!item.maxValues || attributeValues(item).length < item.maxValues)"
                     :on-create="item.allowCustom === true ? createAttributeOption : undefined"
                     :render-label="renderAttributeLabel"

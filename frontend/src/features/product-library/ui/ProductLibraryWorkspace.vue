@@ -17,7 +17,7 @@ import ProductPreviewDialog from './ProductPreviewDialog.vue'
 import ProductGroupManager from './ProductGroupManager.vue'
 import PrecheckGroupRulesDialog from './PrecheckGroupRulesDialog.vue'
 
-const { filters, selected, detailId, list, groups, capabilities, detail, total, refresh, refreshAfterAutoGroup, reset } = useProductLibrary()
+const { filters, selected, detailId, list, groups, capabilities, detail, total, refresh, refreshAfterAutoGroup, backgroundRefreshing, reset } = useProductLibrary()
 const message = useMessage()
 const keyword = ref(''), capturedFrom = ref<string | null>(null), capturedTo = ref<string | null>(null)
 const managerOpen = ref(false), rulesOpen = ref(false), moveOpen = ref(false), moveTarget = ref('ungrouped'), moveIds = ref<string[]>([]), busy = ref(false)
@@ -29,6 +29,7 @@ const precheckTargets = ref<Record<string, number>>({})
 const precheckRecords = ref<Record<string, AutoPrecheck>>({})
 const precheckPending = ref(new Set<string>())
 const precheckRequestErrors = ref<Record<string, string>>({})
+const savedPrecheckRequests = new Map<string, number>()
 const silentGroupRefresh = ref(false)
 const requestedIssue = ref<PrecheckIssue | null>(null)
 const rows = computed(() => list.data.value?.items ?? [])
@@ -189,7 +190,7 @@ function openManual() {
 async function manualCreated(id: string) {
   manualOpen.value = false
   manualProduct.value = null
-  void requestPrechecks([id], false)
+  void syncSavedPrecheck(id)
   await refresh()
   detailId.value = id
 }
@@ -205,6 +206,34 @@ function clearRequestPending(ids: string[]) {
   const pending = new Set(precheckPending.value)
   for (const id of ids) pending.delete(id)
   precheckPending.value = pending
+}
+
+async function syncSavedPrecheck(id: string, revision?: number | null) {
+  if (!capabilities.data.value?.autoPrecheck) return
+  const request = (savedPrecheckRequests.get(id) ?? 0) + 1
+  savedPrecheckRequests.set(id, request)
+  const previous = precheckRecords.value[id]
+  if (revision != null && (!previous || revision > previous.revision)) {
+    precheckRecords.value = { ...precheckRecords.value, [id]: {
+      productId: id, revision, state: 'pending', result: null, error: null, updatedAt: '1970-01-01T00:00:00Z',
+    } }
+  }
+  markRequestPending([id])
+  try {
+    // The database trigger owns automatic enqueueing. Reading its result avoids
+    // issuing a second precheck after every create or save.
+    const items = await fetchAutoPrechecks([id])
+    if (!items.length) throw new Error('未找到自动预检状态')
+    const next = { ...precheckRecords.value }
+    for (const item of items) next[item.productId] = mergePrecheck(next[item.productId], item)
+    precheckRecords.value = next
+  } catch (error) {
+    if (savedPrecheckRequests.get(id) === request) {
+      precheckRequestErrors.value = { ...precheckRequestErrors.value, [id]: errorText(error) }
+    }
+  } finally {
+    if (savedPrecheckRequests.get(id) === request) clearRequestPending([id])
+  }
 }
 
 async function requestPrechecks(ids: string[], trackBatch: boolean) {
@@ -292,9 +321,9 @@ function renderPrecheckStatus(id: string) {
     : status
 }
 
-function productSaved(id: string) {
+function productSaved(id: string, revision?: number | null) {
   requestedIssue.value = null
-  void requestPrechecks([id], false)
+  void syncSavedPrecheck(id, revision)
   void refresh()
 }
 
@@ -360,12 +389,12 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
           <AppButton size="small" :disabled="busy" @click="refresh">刷新</AppButton>
         </template>
       </TableToolbar>
-      <DataTable :columns="columns" :data="rows" :loading="list.isFetching.value && (!silentGroupRefresh || list.isPlaceholderData.value)"
-        :inert="(list.isFetching.value && (!silentGroupRefresh || list.isPlaceholderData.value)) || undefined"
-        :error="list.error.value ? errorText(list.error.value) : null" :row-key="(row: ProductRow) => row.product_id"
+      <DataTable :columns="columns" :data="rows" :loading="list.isFetching.value && (!(silentGroupRefresh || backgroundRefreshing) || list.isPlaceholderData.value)"
+        :inert="(list.isFetching.value && (!(silentGroupRefresh || backgroundRefreshing) || list.isPlaceholderData.value)) || undefined"
+        :error="list.error.value && !list.data.value ? errorText(list.error.value) : null" :row-key="(row: ProductRow) => row.product_id"
         :checked-row-keys="selected" :scroll-x="1690" viewport="fill" appearance="list" show-header-when-empty
         empty-description="暂无商品" @update:checked-row-keys="selected = $event.map(String)" @retry="refresh" />
-      <PaginationBar :inert="(list.isFetching.value && (!silentGroupRefresh || list.isPlaceholderData.value)) || undefined" :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
+      <PaginationBar :inert="(list.isFetching.value && (!(silentGroupRefresh || backgroundRefreshing) || list.isPlaceholderData.value)) || undefined" :page="filters.page" :page-size="filters.pageSize" :item-count="total" density="compact"
         @update:page="filters.page = $event" @update:page-size="filters.pageSize = $event; filters.page = 1" />
     </ManagementListSection>
     <ProductPreviewDialog :show="!!detailId" :product="preview" :exportable="!busy"

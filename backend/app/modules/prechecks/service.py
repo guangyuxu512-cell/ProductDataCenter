@@ -9,7 +9,7 @@ from app.modules.category_lookup.api import (
     AutoSchemaBody, PredictBody, PredictManualBody, SchemaResponse, predict, predict_manual, schema_auto,
 )
 from app.modules.category_lookup.client import DouyinCategoryClient
-from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, normalize_multi_values
+from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, multi_measure_valid, normalize_multi_values
 from app.modules.central.client import CentralApplicationClient
 from app.modules.products.service import ProductService
 from app.modules.products.title import title_units
@@ -55,8 +55,15 @@ def _attribute_problem(field, values: list[dict]) -> str | None:
     if control == "single" and len(values) != 1:
         return "只能选择一项"
     maximum = getattr(field, "maxValues", None)
-    if control == "multi" and maximum is not None and len(values) > maximum:
+    if control in ("multi", "multi_measure") and maximum is not None and len(values) > maximum:
         return f"最多选{maximum}项"
+    if control == "multi_measure":
+        checks = [multi_measure_valid(value["name"], getattr(field, "multiMeasureRule", None), field.options)
+                  for value in values]
+        if any(check is None for check in checks):
+            return UNVERIFIED
+        if not all(checks):
+            return "格式无效"
     if control == "measure" and (len(values) != 1 or not measure_valid(values[0]["name"], getattr(field, "measureTemplates", []))):
         return "格式无效"
     if control == "number":
@@ -168,5 +175,9 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
             continue
         _add_issue(result, "attribute_invalid" if problem != "未填写" else "attribute_missing",
                    f"{field.label}{problem}", "attributes", fieldId=field.id)
+    if unverified:
+        # This is our incomplete check, not a rejection reported by the platform.
+        # Keep the saved values untouched and do not claim a successful check.
+        result["issues"].append("属性预检未完成")
     result["status"] = "failed" if unverified else "needs_completion" if result["issues"] else "ready"
     return result

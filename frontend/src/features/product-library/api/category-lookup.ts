@@ -20,11 +20,18 @@ export interface CategoryAttribute {
   label: string
   required: boolean
   options: Array<{ label: string; value: string }>
-  control: 'single' | 'multi' | 'text' | 'number' | 'measure' | 'unknown'
+  control: 'single' | 'multi' | 'text' | 'number' | 'measure' | 'multi_measure' | 'unknown'
   allowCustom: boolean | null
   ruleStatus: 'confirmed' | 'unknown'
   maxValues?: number | null
   measureTemplates?: MeasureTemplate[]
+  multiMeasureRule?: {
+    units: Array<{ label: string; value: string }>
+    minimum: number | null
+    maximum: number | null
+    precision: number | null
+    dataType: 'float' | 'int'
+  } | null
 }
 export interface CategoryTreeItem { id: string; name: string; isLeaf: boolean; enabled: boolean }
 export interface PredictedCategory extends CategoryCandidate {

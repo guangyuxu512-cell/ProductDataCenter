@@ -1,4 +1,4 @@
-import type { MeasureTemplate } from '../api/category-lookup'
+import type { CategoryAttribute, MeasureTemplate } from '../api/category-lookup'
 
 export interface MeasurePart { value: string; unit: string }
 
@@ -43,4 +43,31 @@ export function validMeasure(template: MeasureTemplate, text: string): boolean {
       (module.minimum === null || number >= module.minimum) && (module.maximum === null || number <= module.maximum) &&
       (module.precision === null || decimals <= module.precision)
   })
+}
+
+export function validMultiMeasure(rule: CategoryAttribute['multiMeasureRule'], value: string,
+  options: CategoryAttribute['options'] = []): boolean | null {
+  if (!rule?.units.length) return false
+  const source = value.trim()
+  const unit = [...rule.units].sort((a, b) => b.label.length - a.label.length).find((item) => item.label && source.endsWith(item.label))
+  if (!unit) return false
+  const text = source.slice(0, -unit.label.length).trim()
+  const numeric = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/u
+  const validNumber = (raw: string) => {
+    const number = Number(raw)
+    const decimals = raw.includes('.') ? raw.split('.')[1].length : 0
+    return Number.isFinite(number) && (rule.dataType !== 'int' || Number.isInteger(number)) &&
+      (rule.minimum === null || number >= rule.minimum) && (rule.maximum === null || number <= rule.maximum) &&
+      (rule.precision === null || decimals <= rule.precision)
+  }
+  const known = new Set(options.filter((option) => option.label && text.startsWith(option.label))
+    .map((option) => text.slice(option.label.length).trim()).filter((number) => numeric.test(number)))
+  if (known.size === 1) return validNumber([...known][0])
+  if (known.size > 1) return null
+  const valid = new Set<string>()
+  for (let index = 1; index < text.length; index++) {
+    const name = text.slice(0, index).trim(), number = text.slice(index).trim()
+    if (name && numeric.test(number) && validNumber(number)) valid.add(JSON.stringify([name, number]))
+  }
+  return valid.size === 1 ? true : valid.size > 1 ? null : false
 }

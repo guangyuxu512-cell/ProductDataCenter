@@ -5,6 +5,27 @@ from pathlib import Path
 from app.modules.category_lookup.api import Attribute
 from app.modules.category_lookup.attribute_values import measure_valid, normalize_multi_values
 from app.modules.category_lookup.client import normalize_fields
+
+
+def test_real_worker_multi_measure_rule_validates_existing_and_multiple_values():
+    """The real device's sanitized metadata and one of 147 real options."""
+    from copy import deepcopy
+    from app.modules.category_lookup.attribute_values import multi_measure_valid
+    from app.modules.prechecks.service import _attribute_problem
+
+    raw = json.loads((Path(__file__).parent / "fixtures/douyin-worker-multi-measure-1000003443.json").read_text(encoding="utf-8"))
+    field = Attribute.model_validate(normalize_fields([raw])[0])
+    assert field.control == "multi_measure" and field.ruleStatus == "confirmed" and field.maxValues == 10
+    assert multi_measure_valid("聚酯纤维100%", field.multiMeasureRule, field.options)
+    assert _attribute_problem(field, [{"valueId": "0", "name": "聚酯纤维80%"},
+                                      {"valueId": "0", "name": "棉20%"}]) is None
+    for invalid in ("聚酯纤维", "100%", "聚酯纤维0%", "聚酯纤维100.01%", "聚酯纤维1.234%"):
+        assert not multi_measure_valid(invalid, field.multiMeasureRule, field.options)
+    assert multi_measure_valid("自定义99%", field.multiMeasureRule, field.options) is None
+    assert _attribute_problem(field, [{"valueId": "0", "name": "棉1%"}] * 11) == "最多选10项"
+    unsupported = deepcopy(raw)
+    unsupported["additions"]["measure_templates"][0]["value_modules"][0]["input_type"] = "enum"
+    assert normalize_fields([unsupported])[0]["ruleStatus"] == "unknown"
 from app.modules.prechecks.service import _attribute_problem
 
 
