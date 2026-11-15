@@ -131,7 +131,15 @@ def test_unknown_rule_cannot_report_success_or_invent_platform_message():
     service = Node(repository=Node(detail=lambda _: detail))
     with patch("app.modules.prechecks.service.schema_auto", return_value=Node(attributes=[field])):
         result = check_product("12345678", service, None, None)
-    assert result["status"] == "failed" and result["issues"] == [] and result["issueDetails"] == []
+    assert result["status"] == "failed" and result["issues"] == ["属性预检未完成"] and result["issueDetails"] == []
+
+
+def test_older_failed_result_without_reason_remains_failed_and_explains_incomplete_check():
+    from app.modules.prechecks.queue import present_result
+
+    original = {"status": "failed", "issues": [], "issueDetails": []}
+    assert present_result(original) == {"status": "failed", "issues": ["预检未完成，请重试"], "issueDetails": []}
+    assert original["issues"] == []
 
 
 def test_old_queued_rule_hint_is_removed_without_falsely_passing():

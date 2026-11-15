@@ -887,6 +887,72 @@ def test_group_crud_preserves_products_skus_uu_and_files(engine, tmp_path):
     assert "products_search_trgm_idx" in indexes and "products_captured_at_idx" in indexes
 
 
+def test_image_only_save_preserves_completed_precheck_but_relevant_edits_queue(engine):
+    from app.modules.products.schemas import ProductEdit
+
+    repo = ProductRepository(engine)
+    product_id = repo.create_manual("图片预检隔离商品")
+    try:
+        snapshot = repo.edit_snapshot(product_id)
+        repo.save_edit(product_id, ProductEdit(expectedVersion=snapshot["version"],
+            category=[{"id": "100", "name": "测试类目"}], mainImages=["https://fixture.invalid/old.png"]))
+        with engine.begin() as conn:
+            conn.execute(text("""UPDATE product_prechecks SET state='done', attempts=2,
+                result=CAST(:result AS jsonb), lease_until=NULL, last_error=NULL WHERE product_id=:id"""),
+                {"id": product_id, "result": json.dumps({"productId": product_id, "status": "ready",
+                    "issues": [], "issueDetails": [], "_worker_receipt": {"sha256": "test"}})})
+            before = dict(conn.execute(text("""SELECT revision,state,attempts,result,updated_at FROM product_prechecks
+                WHERE product_id=:id"""), {"id": product_id}).mappings().one())
+        snapshot = repo.edit_snapshot(product_id)
+        spec_id = snapshot["specImages"][0]["id"]
+        saved = repo.save_edit(product_id, ProductEdit(expectedVersion=snapshot["version"],
+            mainImages=["https://fixture.invalid/new.png"], detailImages=["https://fixture.invalid/detail.png"],
+            specImages=[{"specId": spec_id, "url": "https://fixture.invalid/sku.png"}]))
+        with engine.connect() as conn:
+            after = dict(conn.execute(text("""SELECT revision,state,attempts,result,updated_at FROM product_prechecks
+                WHERE product_id=:id"""), {"id": product_id}).mappings().one())
+        assert saved["precheckRevision"] == before["revision"] and after == before
+        exported = json.loads(repo.export_rows([product_id])[0]["uu_text"])
+        assert exported["goodsInfo"]["goodsImageList"] == ["https://fixture.invalid/new.png"]
+        assert repo.detail(product_id)["product"]["main_image_url"] == "https://fixture.invalid/new.png"
+
+        # Stock changes do not affect the current checks; prices do.
+        stock_save = repo.save_edit(product_id, ProductEdit(expectedVersion=saved["version"],
+            skus=[{"specIds": [spec_id], "stock": 17}]))
+        assert stock_save["precheckRevision"] == before["revision"]
+        assert json.loads(repo.export_rows([product_id])[0]["uu_text"])["goodsSkuInfo"]["spec_detail"]["value"][0]["stock_info"]["stock_num"] == 17
+        price_save = repo.save_edit(product_id, ProductEdit(expectedVersion=stock_save["version"],
+            skus=[{"specIds": [spec_id], "price": "9.90"}]))
+        assert price_save["precheckRevision"] == before["revision"] + 1
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT state FROM product_prechecks WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == "pending"
+            conn.execute(text("""UPDATE product_prechecks SET state='done', result=CAST(:result AS jsonb)
+                WHERE product_id=:id"""), {"id": product_id, "result": json.dumps({"status": "ready", "issues": []})})
+        # Title changes matter and must advance the revision exactly once.
+        title_save = repo.save_edit(product_id, ProductEdit(expectedVersion=price_save["version"], title="修改后的标题"))
+        assert title_save["precheckRevision"] == before["revision"] + 2
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE product_prechecks SET state='running', attempts=1 WHERE product_id=:id"),
+                         {"id": product_id})
+        # An in-flight check is never resurrected after a new save.
+        pending_save = repo.save_edit(product_id, ProductEdit(expectedVersion=title_save["version"],
+            detailImages=["https://fixture.invalid/detail2.png"]))
+        assert pending_save["precheckRevision"] == before["revision"] + 3
+        with engine.begin() as conn:
+            conn.execute(text("""UPDATE product_prechecks SET state='done', result=CAST(:result AS jsonb)
+                WHERE product_id=:id"""), {"id": product_id, "result": json.dumps({"status": "ready", "issues": []})})
+        # Removing the last main image affects a check and must be requeued.
+        removed = repo.save_edit(product_id, ProductEdit(expectedVersion=pending_save["version"], mainImages=[]))
+        assert removed["precheckRevision"] == before["revision"] + 4
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT state FROM product_prechecks WHERE product_id=:id"),
+                                {"id": product_id}).scalar_one() == "pending"
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=:id"), {"id": product_id})
+
+
 def test_edit_updates_same_database_package_rpa_reads_and_rejects_stale_version(engine, tmp_path):
     import hashlib
     from unittest.mock import patch

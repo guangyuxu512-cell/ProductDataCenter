@@ -55,6 +55,31 @@ def _spec_image_values(value_groups, sku_groups, index):
     return result
 
 
+def _is_precheck_neutral_edit(edit) -> bool:
+    """Recognize changes outside the current category, title and SKU checks."""
+    safe_skus = edit.skus is None or all(item.price is None and not item.delete for item in edit.skus)
+    return (any(value is not None for value in (edit.mainImages, edit.detailImages, edit.specImages, edit.skus))
+            and safe_skus and all(value is None for value in (edit.title, edit.category, edit.attributes,
+                                                               edit.specStructure, edit.specImageGroupIndex)))
+
+
+def _has_saved_category(platform: str, package: dict) -> bool:
+    if platform == "douyin":
+        goods = package.get("goodsInfo")
+        if not isinstance(goods, dict):
+            return False
+        return _original_category_id([str(goods.get(f"catId{level}") or "") for level in range(4, 0, -1)]) is not None
+    if platform == "pinduoduo":
+        target = package.get("douyinTarget")
+        parts = target.get("category") if isinstance(target, dict) else None
+        return (isinstance(parts, list) and 0 < len(parts) <= 4 and all(
+            isinstance(part, dict) and isinstance(part.get("id"), str)
+            and re.fullmatch(r"[0-9]{1,20}", part["id"]) and part["id"].strip("0")
+            and isinstance(part.get("name"), str) and 0 < len(part["name"]) <= 200
+            and bool(part["name"].strip()) for part in parts))
+    return False
+
+
 class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
@@ -319,6 +344,30 @@ class ProductRepository:
                 raise ProductEditConflict()
             original_package = json.loads(row["package"])
             package = apply_edit(original_package, row["source_platform"], edit)
+            preserved_precheck = None
+            queue_access = conn.execute(text("""SELECT CASE WHEN to_regclass('public.product_prechecks') IS NULL
+                THEN false ELSE has_table_privilege('public.product_prechecks','SELECT') END AS can_read,
+                CASE WHEN to_regclass('public.product_prechecks') IS NULL
+                THEN false ELSE has_table_privilege('public.product_prechecks','UPDATE') END AS can_write""")).mappings().one()
+            # The collector owns the trigger that queues every changed package.
+            # Preserve only an already-completed check when the edit exclusively
+            # changes images or non-price SKU fields, the category is fixed, and
+            # a main image remains.
+            # Product and queue locks match the trigger/completion lock order.
+            if (mark_modified and _is_precheck_neutral_edit(edit)
+                    and _has_saved_category(row["source_platform"], original_package)
+                    and queue_access["can_read"] and queue_access["can_write"]):
+                main_before = conn.execute(text("""SELECT EXISTS (SELECT 1 FROM product_images
+                    WHERE product_id=:id AND image_type='main' AND (source_url <> '' OR rel_path <> ''))"""),
+                    {"id": product_id}).scalar_one()
+                main_after = bool(edit.mainImages) if edit.mainImages is not None else main_before
+                if main_before and main_after:
+                    existing = conn.execute(text("""SELECT revision, state, attempts, available_at, lease_until,
+                        result, last_error, updated_at FROM product_prechecks WHERE product_id=:id FOR UPDATE"""),
+                        {"id": product_id}).mappings().first()
+                    if (existing and existing["state"] == "done" and isinstance(existing["result"], dict)
+                            and existing["result"].get("status") in {"ready", "needs_completion"}):
+                        preserved_precheck = dict(existing)
             if row["source_platform"] in {"pinduoduo", "pdd"} and edit.specImages is not None:
                 sku_map = package["goodsInfo"]["skuInfoMap"]
                 expected_ids = {_sku_key(source, key) for key, source in sku_map.items()}
@@ -496,7 +545,20 @@ class ProductRepository:
             saved_version = hashlib.sha256(saved.encode("utf-8")).hexdigest()
             conn.execute(text("UPDATE products SET uu_sha256=:version WHERE product_id=:id"),
                          {"id": product_id, "version": saved_version})
-            return {"version": saved_version}
+            if preserved_precheck is not None:
+                conn.execute(text("""UPDATE product_prechecks SET revision=:revision, state=:state,
+                    attempts=:attempts, available_at=:available_at, lease_until=:lease_until,
+                    result=CAST(:result AS jsonb), last_error=:last_error, updated_at=:updated_at
+                    WHERE product_id=:id AND revision=:next_revision AND state='pending'"""), {
+                        **preserved_precheck, "id": product_id,
+                        "result": json.dumps(preserved_precheck["result"], ensure_ascii=False),
+                        "next_revision": preserved_precheck["revision"] + 1,
+                    })
+            # Return the queue revision while still inside the save transaction.
+            # It lets the UI fence late responses without enqueueing again.
+            revision = (conn.execute(text("SELECT revision FROM product_prechecks WHERE product_id=:id"),
+                                     {"id": product_id}).scalar_one_or_none() if queue_access["can_read"] else None)
+            return {"version": saved_version, "precheckRevision": revision}
 
     def set_default_brand(self, product_id: str, selection: dict, *, force: bool = False,
                           mark_modified: bool = False, expected_precheck_claim: dict | None = None) -> str:

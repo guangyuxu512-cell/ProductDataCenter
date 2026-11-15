@@ -1,0 +1,28 @@
+{
+  "id": "785",
+  "label": "面料材质",
+  "options": [{"value_id": "5673", "value_name": "聚酯纤维"}],
+  "rules": [{"type": "max_input_num", "value": 10}],
+  "required": false,
+  "additions": {
+    "ui_type": "multi_value_measure",
+    "diy_type": 1,
+    "measure_templates": [{
+      "template_id": 1013,
+      "display_name": "面料材质",
+      "value_modules": [{
+        "prefix": "", "suffix": "", "module_id": 2038,
+        "input_type": "enum_diy", "unit_linkage": {}, "unit_options": [],
+        "required_tips": "该项为必填，请输入",
+        "validate_rule": {"max": null, "min": null, "data_type": "string", "precision": null, "unit_rules": []},
+        "value_required": true, "module_shading_words": "请输入"
+      }, {
+        "prefix": "", "suffix": "", "module_id": 2039,
+        "input_type": "input", "unit_linkage": null, "unit_options": [{"label": "%", "value": 15}],
+        "required_tips": "该项为必填，请输入",
+        "validate_rule": {"max": 100, "min": 0.01, "data_type": "float", "precision": 2, "unit_rules": []},
+        "value_required": true, "module_shading_words": "请输入"
+      }]
+    }]
+  }
+}

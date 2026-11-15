@@ -378,6 +378,37 @@ def normalize_measure_templates(raw) -> list[dict]:
     return templates
 
 
+def normalize_multi_measure(raw) -> dict | None:
+    """Recognize the platform's enum-with-custom-value plus numeric-unit form.
+
+    Other module structures remain unknown until their format is documented by
+    a real response; do not infer them from the attribute's label.
+    """
+    if not isinstance(raw, list) or len(raw) != 1 or not isinstance(raw[0], dict):
+        return None
+    modules = raw[0].get("value_modules")
+    if not isinstance(modules, list) or len(modules) != 2 or not all(isinstance(x, dict) for x in modules):
+        return None
+    enum, number = modules
+    enum_rule = enum.get("validate_rule")
+    if (enum.get("input_type") != "enum_diy" or not isinstance(enum_rule, dict)
+            or enum_rule.get("data_type") != "string" or enum.get("value_required") is not True
+            or enum.get("prefix") not in (None, "") or enum.get("suffix") not in (None, "")
+            or enum.get("unit_options") not in (None, []) or enum.get("unit_linkage") not in (None, {})
+            or enum_rule.get("unit_rules") not in (None, [])
+            or any(enum_rule.get(key) is not None for key in ("min", "max", "precision"))
+            or number.get("value_required") is not True or number.get("prefix") not in (None, "")
+            or number.get("suffix") not in (None, "")):
+        return None
+    normalized = normalize_measure_templates([{"template_id": raw[0].get("template_id"),
+        "display_name": raw[0].get("display_name"), "value_modules": [number]}])
+    if (not normalized or not normalized[0]["modules"][0]["units"]
+            or any(not unit["label"].strip() for unit in normalized[0]["modules"][0]["units"])):
+        return None
+    measure = normalized[0]["modules"][0]
+    return {key: measure[key] for key in ("units", "minimum", "maximum", "precision", "dataType")}
+
+
 def normalize_fields(items: list) -> list[dict]:
     fields = []
     # The platform response is already capped by MAX_BYTES. Do not silently
@@ -417,6 +448,7 @@ def normalize_fields(items: list) -> list[dict]:
         allow_custom = None
         rule_status = "unknown"
         measure_templates = []
+        multi_measure = None
         if ui_type in {"select", "search", "multi_select"}:
             control = "multi" if ui_type == "multi_select" else "single"
             if diy_type in (0, "0", False):
@@ -433,6 +465,10 @@ def normalize_fields(items: list) -> list[dict]:
             measure_templates = normalize_measure_templates(additions.get("measure_templates"))
             if measure_templates:
                 control, allow_custom, rule_status = "measure", False, "confirmed"
+        elif ui_type == "multi_value_measure" and diy_type in (1, "1", True):
+            multi_measure = normalize_multi_measure(additions.get("measure_templates"))
+            if multi_measure:
+                control, allow_custom, rule_status = "multi_measure", True, "confirmed"
         elif ui_type is None:
             field_type = item.get("type")
             if options and isinstance(item.get("multiple"), bool):
@@ -452,5 +488,7 @@ def normalize_fields(items: list) -> list[dict]:
             field["maxValues"] = min(limits)
         if measure_templates:
             field["measureTemplates"] = measure_templates
+        if multi_measure:
+            field["multiMeasureRule"] = multi_measure
         fields.append(field)
     return fields

@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onScopeDispose, reactive, ref, watch } from 'vue'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { fetchCapabilities, fetchDetail, fetchGroups, fetchProducts } from '../api/products'
 import type { ProductFilters } from './nas-contracts'
@@ -9,6 +9,7 @@ export function useProductLibrary() {
   const filters = reactive<ProductFilters>({ query: '', platform: '', groupId: '', capturedFrom: '', capturedTo: '', page: 1, pageSize: 20 })
   const selected = ref<string[]>([])
   const detailId = ref<string | null>(null)
+  const backgroundRefreshing = ref(false)
   const counts = reactive(new Map<string, number>())
   const filterKey = computed(() => JSON.stringify([filters.query.trim(), filters.platform, filters.groupId, filters.capturedFrom, filters.capturedTo]))
   const list = useQuery({
@@ -57,10 +58,31 @@ export function useProductLibrary() {
     await Promise.all([list.refetch(), groups.refetch()])
   }
 
+  // Refresh the current page and its count without blocking the table, resetting
+  // selections or reloading an open edit draft. Pause while rows are selected so
+  // arriving products cannot move selected rows out of view during a bulk action.
+  async function refreshInBackground() {
+    if (document.hidden || selected.value.length || list.isFetching.value || backgroundRefreshing.value) return
+    backgroundRefreshing.value = true
+    const current = filterKey.value
+    const previousCount = counts.get(current)
+    counts.delete(current)
+    try {
+      const [updated] = await Promise.all([list.refetch(), groups.refetch()])
+      if (updated.isError && current === filterKey.value && previousCount !== undefined && !counts.has(current)) {
+        counts.set(current, previousCount)
+      }
+    }
+    finally { backgroundRefreshing.value = false }
+  }
+  const refreshTimer = window.setInterval(() => { void refreshInBackground() }, 30_000)
+  onScopeDispose(() => window.clearInterval(refreshTimer))
+
   function reset() {
     Object.assign(filters, { query: '', platform: '', groupId: '', capturedFrom: '', capturedTo: '', page: 1 })
   }
 
-  return { filters, selected, detailId, list, groups, capabilities, detail,
-    total: computed(() => list.data.value?.total ?? counts.get(filterKey.value) ?? 0), refresh, refreshAfterAutoGroup, reset }
+  return { filters, selected, detailId, list, groups, capabilities, detail, backgroundRefreshing,
+    total: computed(() => list.data.value?.total ?? counts.get(filterKey.value) ?? 0), refresh, refreshAfterAutoGroup,
+    refreshInBackground, reset }
 }

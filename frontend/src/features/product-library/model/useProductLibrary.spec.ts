@@ -99,4 +99,32 @@ describe('商品查询缓存与竞态', () => {
     expect(api.fetchProducts).toHaveBeenCalledTimes(1)
     expect(api.fetchProducts).toHaveBeenLastCalledWith(expect.any(Object), true, expect.any(AbortSignal))
   })
+
+  it('后台刷新重新统计新商品，批量选择时暂停且不关闭编辑', async () => {
+    const state = setup(); await flushPromises()
+    state.selected.value = ['3760269504500859111']
+    vi.mocked(api.fetchProducts).mockClear()
+    await state.refreshInBackground()
+    expect(api.fetchProducts).not.toHaveBeenCalled()
+
+    state.selected.value = []
+    vi.mocked(api.fetchDetail).mockReturnValue(new Promise(() => {}))
+    state.detailId.value = '3760269504500859111'
+    vi.mocked(api.fetchProducts).mockResolvedValue(page(61, 'new-product'))
+    await state.refreshInBackground(); await flushPromises()
+    expect(state.detailId.value).toBe('3760269504500859111')
+    expect(state.total.value).toBe(61)
+    expect(state.list.data.value?.items[0]?.product_id).toBe('new-product')
+    expect(api.fetchProducts).toHaveBeenLastCalledWith(expect.any(Object), true, expect.any(AbortSignal))
+  })
+
+  it('后台请求失败时保留当前页和之前的总数', async () => {
+    const state = setup(); await flushPromises()
+    vi.mocked(api.fetchProducts).mockResolvedValue(page(null, 'page-two'))
+    state.filters.page = 2; await nextTick(); await flushPromises()
+    vi.mocked(api.fetchProducts).mockRejectedValueOnce(new Error('网络暂不可用'))
+    await state.refreshInBackground(); await flushPromises()
+    expect(state.list.data.value?.items[0]?.product_id).toBe('page-two')
+    expect(state.total.value).toBe(60)
+  })
 })
