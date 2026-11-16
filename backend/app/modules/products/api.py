@@ -43,7 +43,7 @@ def capabilities(principal: Annotated[Principal, Depends(require_api_access)]):
                         and settings.configured_precheck_group_rules() is not None
                         and all(can(p) for p in ("group.read", "group.assign", "precheck.run", "precheck.group_rules")),
                         productEdit=settings.enable_product_writes and all(can(p) for p in ("product.read", "product.create", "product.update", "product.delete", "image.upload")),
-                        export=can("product.export"), categoryLookup=settings.douyin_category_lookup_enabled and can("category.read"),
+                        export=can("product.export"), categoryLookup=settings.douyin_category_lookup_enabled and settings.worker_precheck_enabled and can("category.read"),
                         autoPrecheck=settings.auto_precheck_enabled and can("precheck.read") and can("precheck.run"),
                         sourceProductIdentity=True,
                         permissions=sorted(principal.permissions), groupIds=sorted(principal.groups) if principal.groups is not None else None)

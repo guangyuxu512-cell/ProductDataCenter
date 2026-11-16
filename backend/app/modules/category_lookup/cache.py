@@ -66,6 +66,36 @@ class CategoryCache:
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
 
+    def put_worker_result(self, task_id: str, value: dict) -> None:
+        """Retain only a short-lived, sanitized result for an interactive lookup."""
+        try:
+            payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+            with self._transaction() as db:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute("DELETE FROM category_cache WHERE kind='worker_result' "
+                           "AND updated_at < datetime('now', '-10 minutes')")
+                row = db.execute("SELECT payload FROM category_cache WHERE kind='worker_result' "
+                                 "AND shop_id='worker' AND cache_key=?", (task_id,)).fetchone()
+                if row is not None and row[0] != payload:
+                    raise ValueError("conflicting worker result")
+                db.execute("INSERT OR IGNORE INTO category_cache(kind,shop_id,cache_key,payload) "
+                           "VALUES ('worker_result','worker',?,?)", (task_id, payload))
+        except (sqlite3.Error, OSError, TypeError):
+            raise CacheUnavailable() from None
+
+    def take_worker_result(self, task_id: str):
+        try:
+            with self._transaction() as db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT payload FROM category_cache WHERE kind='worker_result' "
+                                 "AND shop_id='worker' AND cache_key=?", (task_id,)).fetchone()
+                if row is not None:
+                    db.execute("DELETE FROM category_cache WHERE kind='worker_result' "
+                               "AND shop_id='worker' AND cache_key=?", (task_id,))
+            return json.loads(row[0]) if row else None
+        except (sqlite3.Error, OSError, ValueError, TypeError):
+            raise CacheUnavailable() from None
+
     def tree_version(self) -> int:
         try:
             with self._transaction() as db:

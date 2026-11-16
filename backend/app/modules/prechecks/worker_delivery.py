@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -39,7 +40,7 @@ class WorkerDelivery(BaseModel):
 
 def _accept(task_id: UUID, device_id: UUID, token: str, body: bytes) -> dict:
     settings = get_settings()
-    if not settings.auto_precheck_enabled or not settings.worker_precheck_enabled:
+    if not settings.worker_precheck_enabled:
         raise HTTPException(503, "Worker 预检未启用")
     try:
         terminal = WorkerDelivery.model_validate_json(body)
@@ -61,6 +62,17 @@ def _accept(task_id: UUID, device_id: UUID, token: str, body: bytes) -> dict:
                 and context.receipt_sha256 == digest):
             return {"task_id": str(task_id), "accepted": True}
         raise HTTPException(409, "预检结果与任务不一致")
+    if re.fullmatch(r"lookup:[0-9a-f]{32}", getattr(context, "product_id", "")):
+        from app.modules.category_lookup.worker_lookup import receive_lookup_result
+        try:
+            receive_lookup_result(settings, context, terminal, digest)
+        except ValueError:
+            raise HTTPException(409, "类目结果与任务不一致") from None
+        except Exception:
+            raise HTTPException(503, "类目结果保存未完成") from None
+        return {"task_id": str(task_id), "accepted": True}
+    if not settings.auto_precheck_enabled:
+        raise HTTPException(503, "自动预检未启用")
     runner = PrecheckRunner(get_database_engine(), settings)
     try:
         accepted = runner.accept_worker_delivery(context, terminal, digest)

@@ -66,7 +66,7 @@ def test_central_checks_the_existing_worker_identity_and_task(tmp_path):
     def handler(request):
         assert request.headers["authorization"] == "Bearer " + worker_token
         assert request.headers["x-device-id"] == str(device_id)
-        assert request.headers["x-precheck-protocol"] == "2"
+        assert request.headers["x-precheck-protocol"] == "3"
         assert request.url.path == f"/api/v1/worker/tasks/{task_id}/precheck-delivery-context"
         return httpx.Response(200, headers={"Cache-Control": "no-store"}, json={
             "task_id": str(task_id), "client_id": "product-library", "product_id": "12345678", "revision": 1,

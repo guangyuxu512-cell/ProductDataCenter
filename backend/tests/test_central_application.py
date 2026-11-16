@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import httpx
@@ -33,71 +32,28 @@ def shop(shop_id, platform="douyin", status="valid"):
     return {"shop_id": str(shop_id), "display_name": "测试店铺", "platform": platform, "session_status": status}
 
 
-def session(shop_id, platform="douyin"):
-    return {"shop_id": str(shop_id), "platform": platform, "session_version": 2,
-            "cookies": [{"name": "sessionid", "value": COOKIE_VALUE, "domain": ".jinritemai.com",
-                         "httpOnly": True, "path": "/"}]}
 
 
 def mock_client(settings, handler):
     return CentralApplicationClient(settings, transport=httpx.MockTransport(handler))
 
 
-def test_contract_reads_shop_list_and_one_session_without_worker_or_secret_repr(configured):
+def test_shop_inventory_only_comes_from_authorized_worker_mappings(configured):
     shop_id = uuid4()
-    seen = []
-
     def handler(request):
-        seen.append(str(request.url))
+        assert request.url.path == "/internal/applications/v1/worker-prechecks/shops"
         assert request.headers["X-Application-ID"] == "product-library"
         assert request.headers["Authorization"] == "Bearer " + APPLICATION_TOKEN
-        assert request.headers["Cache-Control"] == "no-store"
-        if request.url.path.endswith("/session"):
-            return httpx.Response(200, json=session(shop_id), headers={"Cache-Control": "no-store"})
         return httpx.Response(200, json=[shop(shop_id)])
-
     client = mock_client(configured, handler)
     assert client.list_shops()[0].shop_id == shop_id
-    context = client.read_session(shop_id, "douyin")
-    assert context.shop_id == shop_id and context.session_version == 2
-    assert context.cookies[0].value.get_secret_value() == COOKIE_VALUE
-    assert context.cookies[0].http_only is True
-    assert COOKIE_VALUE not in repr(context)
-    assert COOKIE_VALUE not in context.model_dump_json()
-    assert APPLICATION_TOKEN not in repr(configured)
-    assert len(seen) == 2 and all("/internal/applications/v1/shops" in url for url in seen)
+    assert not hasattr(client, "read_session")
 
 
-def test_session_identity_platform_and_cache_policy_are_checked(configured):
-    shop_id = uuid4()
-    for payload, headers in [
-        (session(uuid4()), {"Cache-Control": "no-store"}),
-        (session(shop_id, "pdd"), {"Cache-Control": "no-store"}),
-        (session(shop_id), {}),
-        ({**session(shop_id), "cookies": []}, {"Cache-Control": "no-store"}),
-    ]:
-        client = mock_client(configured, lambda request: httpx.Response(200, json=payload, headers=headers))
-        with pytest.raises(CentralConnectionError, match="invalid_response"):
-            client.read_session(shop_id, "douyin")
 
 
-def test_concurrent_store_sessions_remain_separate(configured):
-    ids = [uuid4() for _ in range(5)]
 
-    def handler(request):
-        shop_id = request.url.path.split('/')[-2]
-        assert request.headers["Authorization"] == "Bearer " + APPLICATION_TOKEN
-        payload = session(shop_id)
-        payload["cookies"][0]["value"] = "synthetic-cookie-for-" + shop_id
-        return httpx.Response(200, json=payload, headers={"Cache-Control": "no-store"})
 
-    client = mock_client(configured, handler)
-    requested = [ids[i % len(ids)] for i in range(25)]
-    with ThreadPoolExecutor(max_workers=25) as executor:
-        results = list(executor.map(lambda item: client.read_session(item, "douyin"), requested))
-    for requested_shop, result in zip(requested, results, strict=True):
-        assert result.shop_id == requested_shop
-        assert result.cookies[0].value.get_secret_value() == "synthetic-cookie-for-" + str(requested_shop)
 
 
 def test_connection_failure_never_exposes_token_or_cookie(configured):

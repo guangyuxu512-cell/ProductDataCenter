@@ -26,7 +26,6 @@ def setup(tmp_path, monkeypatch):
                         douyin_category_lookup_enabled=True)
     shop = SimpleNamespace(shop_id=uuid4())
     monkeypatch.setattr(api, "_available", lambda central, lookup: [shop])
-    monkeypatch.setattr(api, "_session", lambda central, shop_id: object())
     monkeypatch.setattr(api, "_limit", lambda shop_id: nullcontext())
     calls = []
 

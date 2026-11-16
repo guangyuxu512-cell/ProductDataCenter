@@ -1,24 +1,49 @@
 """Run automatic prechecks in the product service; no separate worker to install."""
 import logging
+import hashlib
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Thread
 from types import SimpleNamespace
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import Response
 
-from app.modules.category_lookup.api import AutoSchemaBody, schema_auto
-from app.modules.category_lookup.client import DouyinCategoryClient
+from app.modules.category_lookup.api import AutoSchemaBody, PredictResponse, _usable_image_url, prediction_input, schema_auto
+from app.modules.category_lookup.client import DouyinCategoryClient, LookupError, normalize_predictions
 from app.modules.central.client import CentralApplicationClient, CentralConnectionError
 from app.modules.products.repository import ProductRepository
 from app.modules.products.brand_defaults import no_brand_selection
 from app.modules.products.service import ProductService
 from .queue import PrecheckQueue, SESSION_READ_INCOMPLETE_MESSAGE
 from .group_rules import GroupRuleStore
-from .service import check_product
+from .service import _main_image, check_product
 from .worker_schema import WorkerSchemaResultError, read_worker_schema
 
 log = logging.getLogger(__name__)
+
+
+def _worker_request(product_id: str, detail: dict, repository):
+    row = detail["product"]
+    platform = row["source_platform"]
+    title = (row.get("title") or "").strip()
+    prediction = not detail["targetCategory"] and (
+        platform == "pinduoduo" or (platform in {"douyin", "jushuitan"} and product_id.startswith("manual:")))
+    if prediction and not detail.get("sourceCategoryId"):
+        if platform == "pinduoduo":
+            rows = repository.export_rows([product_id])
+            if not rows:
+                return None
+            title, image_url, _ = prediction_input(rows[0])
+        else:
+            image_url = _usable_image_url(_main_image(detail))
+        return ("predict", "0", title, image_url) if title and image_url else None
+    category = (detail.get("sourceCategoryId") if platform in {"douyin", "jushuitan"} else
+                detail["targetCategory"][-1]["id"] if platform == "pinduoduo" and detail["targetCategory"] else None)
+    if category:
+        return "schema", str(category), title or "商品", None
+    return None
 
 
 class PrecheckRunner:
@@ -43,10 +68,11 @@ class PrecheckRunner:
         worker_mode = False
         try:
             detail = self.service.repository.detail(claim["product_id"])
-            if (getattr(self, "worker_precheck_enabled", False) and detail
-                    and detail["product"]["source_platform"] in {"douyin", "jushuitan"} and detail.get("sourceCategoryId")):
+            request = (_worker_request(claim["product_id"], detail, self.service.repository)
+                       if getattr(self, "worker_precheck_enabled", False) and detail else None)
+            if request:
                 worker_mode = True
-                self._process_worker(claim, detail)
+                self._process_worker(claim, *request)
                 return
             if detail and detail["product"]["source_platform"] == "douyin" and not claim["product_id"].startswith("manual:"):
                 category_id = detail.get("sourceCategoryId")
@@ -73,14 +99,14 @@ class PrecheckRunner:
             except Exception:
                 log.warning("无法保存自动预检状态；稍后将重新领取")
 
-    def _process_worker(self, claim, detail):
+    def _process_worker(self, claim, operation, category_id, title, image_url):
         """Submit once; the assigned Worker returns the result to this service."""
-        category_id = str(detail["sourceCategoryId"])
-        title = detail["product"].get("title") or "商品"
-        # Preserve the same validation as the existing synchronous schema API.
-        schema_body = AutoSchemaBody(categoryId=category_id, title=title)
+        if operation == "schema":
+            schema_body = AutoSchemaBody(categoryId=category_id, title=title)
+            category_id, title = schema_body.categoryId, schema_body.title
         try:
-            self.central.submit_worker_precheck(claim, schema_body.categoryId, schema_body.title, delivery="product")
+            self.central.submit_worker_precheck(claim, category_id, title, delivery="product",
+                                                operation=operation, image_url=image_url)
         except CentralConnectionError as error:
             if error.reason == "upstream_unavailable":
                 # An unavailable device or service is not an active check.
@@ -102,6 +128,8 @@ class PrecheckRunner:
         expected = {"kind": "douyin.category_schema", "category_id": context.category_id,
                     "device_id": str(context.device_id), "local_shop_id": context.local_shop_id,
                     "platform_shop_id": context.platform_shop_id}
+        if getattr(context, "operation", "schema") != "schema":
+            expected["operation"] = context.operation
         if result is not None and (not isinstance(result, dict) or any(result.get(k) != v for k, v in expected.items())):
             raise ValueError("worker identity mismatch")
         if terminal.status == "success" and result is None:
@@ -136,18 +164,47 @@ class PrecheckRunner:
                 raise RuntimeError("precheck changed while saving")
 
         detail = self.service.repository.detail(claim["product_id"])
-        if not detail or str(detail.get("sourceCategoryId") or "") != context.category_id:
+        current = _worker_request(claim["product_id"], detail, self.service.repository) if detail else None
+        operation = getattr(context, "operation", "schema")
+        if not current or current[0] != operation or current[1] != context.category_id:
             finish(_worker_failure(claim, "商品类目已变化，请重新预检"))
             return
         if terminal.status == "failed":
             finish(_worker_failure(claim, _worker_failure_message(SimpleNamespace(result=terminal.result))))
+            return
+        if operation == "predict":
+            try:
+                raw = terminal.result
+                if (set(raw) != {"kind", "category_id", "device_id", "local_shop_id", "platform_shop_id",
+                                "http_status", "platform_code", "operation", "data"}
+                        or type(raw["http_status"]) is not int or raw["http_status"] != 200
+                        or not ((type(raw["platform_code"]) is int and raw["platform_code"] == 0)
+                                or (type(raw["platform_code"]) is str and raw["platform_code"] == "0"))):
+                    raise ValueError()
+                data = normalize_predictions(raw["data"])
+                if detail["product"]["source_platform"] == "pinduoduo":
+                    rows = self.service.repository.export_rows([claim["product_id"]])
+                    _, _, version = prediction_input(rows[0])
+                else:
+                    version = hashlib.sha256(json.dumps([current[2], current[3]], ensure_ascii=False).encode("utf-8")).hexdigest()
+                status = ("recommended" if data["recommendedId"] else
+                          "needs_category_confirmation" if data["candidates"] else "no_recommendation")
+                prediction = PredictResponse(status=status, sourceVersion=version, missing=[],
+                    shopId=uuid5(NAMESPACE_URL, "ecommerce-worker:douyin:" + context.platform_shop_id), **data)
+                result = check_product(claim["product_id"], self.service, self.central, self.lookup,
+                                       prediction_override=prediction)
+            except (LookupError, ValueError, TypeError, KeyError, IndexError):
+                finish(_worker_failure(claim, "平台类目推荐结果无效"))
+                return
+            finish(result)
             return
         try:
             schema = read_worker_schema(terminal.result, expected_category_id=context.category_id)
         except WorkerSchemaResultError:
             finish(_worker_failure(claim, "平台预检结果无效或超过允许大小"))
             return
-        if not claim["product_id"].startswith("manual:"):
+        if (detail["product"]["source_platform"] in {"douyin", "jushuitan"}
+                and not claim["product_id"].startswith("manual:")):
             status = str(detail["product"].get("title_status") or "")
             if not status.endswith("商品库已修改"):
                 selection = no_brand_selection(schema.attributes)
