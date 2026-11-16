@@ -53,6 +53,23 @@ def test_wrong_worker_or_unknown_result_field_is_rejected(tmp_path):
             SimpleNamespace(status="success", result=result), "a" * 64)
 
 
+@pytest.mark.parametrize(("operation", "data"), [
+    ("tree", [{"id": 1, "name": "", "is_leaf": False}]),
+    ("predict", {"candidate_category_details": [{"first_cid": "1"}]}),
+])
+def test_invalid_platform_category_result_ends_lookup_without_redelivery(tmp_path, operation, data):
+    settings = Settings(_env_file=None, category_cache_file=tmp_path / "categories.sqlite3")
+    context = SimpleNamespace(task_id=uuid4(), device_id=uuid4(), category_id="0", operation=operation,
+                              local_shop_id="local", platform_shop_id="shop")
+    result = {"kind": "douyin.category_schema", "category_id": "0", "device_id": str(context.device_id),
+              "local_shop_id": "local", "platform_shop_id": "shop", "operation": operation,
+              "http_status": 200, "platform_code": 0, "data": data}
+    worker_lookup.receive_lookup_result(settings, context, SimpleNamespace(status="success", result=result), "a" * 64)
+    stored = CategoryCache(settings.category_cache_file).take_worker_result(str(context.task_id))
+    assert stored == {"digest": "a" * 64, "status": "failed", "stage": "result",
+                      "error": "PLATFORM_CATEGORY_INVALID", "code": 0}
+
+
 def test_product_category_routes_all_use_direct_worker_results(tmp_path, monkeypatch):
     token = "synthetic-product-token-0123456789"
     monkeypatch.setenv("BACKEND_API_TOKEN", token)

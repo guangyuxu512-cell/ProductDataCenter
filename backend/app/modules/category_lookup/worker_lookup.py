@@ -54,10 +54,18 @@ def receive_lookup_result(settings, context, terminal, digest: str) -> None:
         if operation == "schema":
             schema = read_worker_schema(result, expected_category_id=context.category_id)
             data = [field.model_dump(mode="json") for field in schema.attributes]
-        elif operation == "tree":
-            data = normalize_category_options(result["data"], context.category_id)
-        elif operation == "predict":
-            data = normalize_predictions(result["data"])
+        elif operation in {"tree", "predict"}:
+            try:
+                data = (normalize_category_options(result["data"], context.category_id)
+                        if operation == "tree" else normalize_predictions(result["data"]))
+            except LookupError:
+                # The task and device were already authenticated.  A platform
+                # response we cannot interpret is a terminal lookup failure,
+                # not a reason to redeliver the same result indefinitely.
+                CategoryCache(settings.category_cache_file).put_worker_result(
+                    str(context.task_id), {"digest": digest, "status": "failed", "stage": "result",
+                                           "error": "PLATFORM_CATEGORY_INVALID", "code": code})
+                return
         elif operation == "search":
             data = result["data"]
             if (not isinstance(data, list) or len(data) > 200
