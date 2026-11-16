@@ -279,17 +279,44 @@ def test_pdd_selected_category_uses_the_same_worker_schema_path(settings):
     assert requests[0]["delivery"] == "product"
 
 
-def test_jushuitan_source_identity_still_uses_original_category(settings):
+def test_jushuitan_source_category_never_becomes_douyin_schema_id(settings):
     product = detail()
     product["product"]["source_platform"] = "jushuitan"
+    product["sourceCategoryId"] = "50003449"
     requests = []
     def handler(request):
         requests.append(json.loads(request.content))
         return httpx.Response(202, json={"task_id": str(TASK_ID), "status": "pending"})
     runner = make_runner(settings, handler, product)
-    runner.process({"product_id": "jst:12345678", "revision": 1, "attempts": 1})
-    assert requests[0]["input"]["category_id"] == "1000001535"
+    runner.process({"product_id": "manual:12345678", "revision": 1, "attempts": 1})
+    assert requests[0]["input"]["operation"] == "predict"
+    assert requests[0]["input"]["category_id"] == "0"
     assert requests[0]["delivery"] == "product"
+    product["targetCategory"] = [{"id": "1000001535", "name": "抖店类目"}]
+    runner.process({"product_id": "manual:12345678", "revision": 2, "attempts": 1})
+    assert requests[1]["input"].get("operation", "schema") == "schema"
+    assert requests[1]["input"]["category_id"] == "1000001535"
+
+
+def test_jushuitan_prediction_is_bound_to_saved_product_version(settings):
+    product = detail()
+    product["product"]["source_platform"] = "jushuitan"
+    product["sourceCategoryId"] = "50003449"
+    runner = make_runner(settings, lambda _: pytest.fail("must use returned worker result"), product)
+    runner.service.repository.edit_snapshot.return_value = {"version": "b" * 64}
+    claim = {"product_id": "manual:12345678", "revision": 7, "attempts": 1}
+    runner.queue.claim_worker_result.return_value = ("claimed", claim)
+    context = delivery_context(7)
+    context.product_id, context.category_id, context.operation = claim["product_id"], "0", "predict"
+    result = {**{key: value for key, value in success_result().items() if key != "items"},
+              "category_id": "0", "operation": "predict", "data": {"predict_cid": "1",
+              "candidate_category_details": [{"first_cid": "1", "first_cname": "居家日用",
+                                               "deleted": False, "forbidden_status": 0}]}}
+    with patch("app.modules.prechecks.service.predict_manual", side_effect=AssertionError("unexpected platform request")):
+        assert runner.accept_worker_delivery(context, SimpleNamespace(status="success", result=result), "a" * 64)
+    saved = runner.queue.complete.call_args.args[1]
+    assert saved["status"] == "needs_category"
+    assert saved["prediction"]["sourceVersion"] == "b" * 64
 
 
 def test_pdd_without_target_category_uses_worker_prediction(settings):

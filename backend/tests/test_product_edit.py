@@ -97,6 +97,18 @@ def test_pdd_target_category_and_attributes_save_without_losing_source_data():
     assert changed["douyinTarget"]["attributes"] == {} and changed["product"] == original["product"]
 
 
+def test_jushuitan_target_category_preserves_source_category_and_sku(douyin):
+    original = deepcopy(douyin)
+    original["goodsInfo"]["catId1"] = "50003449"
+    edit = ProductEdit(expectedVersion=VERSION, category=[{"id": "1000005069", "name": "居家日用"}],
+        attributes=[{"id": "12", "name": "材质", "values": [{"valueId": "13", "name": "塑料"}]}])
+    saved = apply_edit(original, "jushuitan", edit)
+    assert saved["goodsInfo"] == original["goodsInfo"]
+    assert saved["goodsSkuInfo"] == original["goodsSkuInfo"]
+    assert saved["douyinTarget"]["category"] == [{"id": "1000005069", "name": "居家日用"}]
+    assert saved["douyinTarget"]["attributes"]["12"]["values"][0]["valueId"] == "13"
+
+
 def test_pdd_shared_package_edits_preserve_source_category_and_skus():
     package = {"goodsInfo": {"goodsName": "拼多多商品", "goodsImageList": ["https://example.test/a"],
                              "catId1": "77", "skuInfoMap": {"1": {"sku_id": "100"}}},

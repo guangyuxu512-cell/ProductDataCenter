@@ -73,5 +73,10 @@ describe('采集字段适配', () => {
     expect(detailView(detail).attributes).toEqual([{ id: '501', name: '材质', value: '棉、麻' }])
     expect(detailView(detail).targetCategory).toEqual(detail.targetCategory)
     expect(detailView(detail).targetAttributes).toEqual(detail.targetAttributes)
+    detail.product.source_platform = 'jushuitan'
+    detail.sourceCategoryId = '50003449'
+    expect(detailView(detail).sourceCategoryId).toBe('50003449')
+    expect(detailView(detail).targetCategory).toEqual(detail.targetCategory)
+    expect(detailView(detail).targetAttributes).toEqual(detail.targetAttributes)
   })
 })

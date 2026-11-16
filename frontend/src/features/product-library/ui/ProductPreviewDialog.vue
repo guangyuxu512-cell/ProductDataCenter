@@ -230,11 +230,11 @@ function applyLegacyMultiNormalization() {
   for (const field of categoryAttributes.value) {
     if (field.control !== 'multi' || field.ruleStatus !== 'confirmed' || touchedAttributes.value.includes(field.id)) continue
     let raw: ProductAttributeValue[] = []
-    if (['douyin', 'jushuitan'].includes(product.platform) && product.sourceCategoryId === selectedCategory.value) {
+    if (product.platform === 'douyin' && product.sourceCategoryId === selectedCategory.value) {
       const matches = product.attributes.filter((attribute) => attribute.id === field.id)
       if (matches.length === 1) raw = matches[0].valueItems?.length
         ? matches[0].valueItems.map((value) => ({ ...value })) : [{ valueId: '0', name: matches[0].value }]
-    } else if (product.platform === 'pdd' && product.targetCategory?.at(-1)?.id === selectedCategory.value) {
+    } else if (['pdd', 'jushuitan'].includes(product.platform) && product.targetCategory?.at(-1)?.id === selectedCategory.value) {
       const saved = product.targetAttributes?.find((attribute) => attribute.id === field.id)
       raw = saved?.valueItems?.length ? saved.valueItems.map((value) => ({ ...value }))
         : (saved?.values ?? []).map((name) => ({ valueId: '0', name }))
@@ -249,7 +249,7 @@ function applyLegacyMultiNormalization() {
 function attributeValues(item: CategoryAttribute): ProductAttributeValue[] {
   if (item.id in attributeInputs.value) return attributeInputs.value[item.id]
   const product = props.product
-  if (product?.platform === 'pdd') {
+  if (product && ['pdd', 'jushuitan'].includes(product.platform)) {
     const current = product.targetCategory?.at(-1)?.id
     if (current && current === selectedCategory.value && !selectedParts.value) {
       const saved = product.targetAttributes?.find((attribute) => attribute.id === item.id)
@@ -664,20 +664,20 @@ watch([() => props.show, () => props.loading, () => props.categoryLookupEnabled,
   categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryBusy.value = false; categoryError.value = false
   const product = props.product
   if (!props.show || props.loading || !props.categoryLookupEnabled || !product) return
-  if (['douyin', 'jushuitan'].includes(product.platform) && product.sourceCategoryId) {
+  if (product.platform === 'douyin' && product.sourceCategoryId) {
     selectedCategory.value = product.sourceCategoryId
     categoryLabel.value = product.category || '类目解析中'
-  } else if (product.platform === 'pdd' && product.targetCategory?.length) {
+  } else if (['pdd', 'jushuitan'].includes(product.platform) && product.targetCategory?.length) {
     selectedCategory.value = product.targetCategory.at(-1)?.id ?? null
     categoryLabel.value = product.targetCategory.map((part) => part.name).join(' → ')
   } else return
   // The source Douyin category is already known, so show missing fields without
   // requiring the user to discover the attributes tab first.
-  if (['douyin', 'jushuitan'].includes(product.platform) || tab.value === 'attributes') void loadAttributes()
+  if (product.platform === 'douyin' || tab.value === 'attributes') void loadAttributes()
 }, { immediate: true })
 watch(() => props.product?.category, (value) => {
   const product = props.product
-  if (props.show && product && ['douyin', 'jushuitan'].includes(product.platform) && product.sourceCategoryId &&
+  if (props.show && product && product.platform === 'douyin' && product.sourceCategoryId &&
       selectedCategory.value === product.sourceCategoryId && !selectedParts.value) {
     categoryLabel.value = value || '类目待确认'
   }
@@ -741,7 +741,8 @@ function selectCategory(value: { id: string; path: string; shopId: string; level
   selectedCategory.value = value.id; categoryLabel.value = value.path; categoryShop.value = value.shopId
   categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryError.value = false; categoryBusy.value = false
   if (props.editable && canEdit.value) {
-    const original = props.product?.platform === 'pdd' ? props.product.targetCategory?.at(-1)?.id : props.product?.sourceCategoryId
+    const original = props.product && ['pdd', 'jushuitan'].includes(props.product.platform)
+      ? props.product.targetCategory?.at(-1)?.id : props.product?.sourceCategoryId
     selectedParts.value = value.id === original ? null : value.levels
     attributeInputs.value = {}; touchedAttributes.value = []
   }
@@ -762,7 +763,7 @@ watch(() => [props.show, props.product?.id, props.batchPrediction, editVersion.v
   const prediction = props.batchPrediction
   const product = props.product
   if (!props.show) { appliedBatchPrediction = undefined; return }
-  if (!prediction || prediction === appliedBatchPrediction || !product || product.platform !== 'pdd' ||
+  if (!prediction || prediction === appliedBatchPrediction || !product || !['pdd', 'jushuitan'].includes(product.platform) ||
       product.targetCategory?.length || !canEdit.value) return
   if (prediction.sourceVersion !== editVersion.value) {
     appliedBatchPrediction = prediction

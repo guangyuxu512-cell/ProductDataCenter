@@ -78,12 +78,12 @@ def _is_precheck_neutral_edit(edit) -> bool:
 
 
 def _has_saved_category(platform: str, package: dict) -> bool:
-    if platform in {"douyin", "jushuitan"}:
+    if platform == "douyin":
         goods = package.get("goodsInfo")
         if not isinstance(goods, dict):
             return False
         return _original_category_id([str(goods.get(f"catId{level}") or "") for level in range(4, 0, -1)]) is not None
-    if platform == "pinduoduo":
+    if platform in {"pinduoduo", "jushuitan"}:
         target = package.get("douyinTarget")
         parts = target.get("category") if isinstance(target, dict) else None
         return (isinstance(parts, list) and 0 < len(parts) <= 4 and all(
@@ -94,6 +94,32 @@ def _has_saved_category(platform: str, package: dict) -> bool:
     return False
 
 
+def _target_fields(target):
+    category, attributes = [], []
+    if not isinstance(target, dict):
+        return category, attributes
+    parts = target.get("category")
+    if isinstance(parts, list) and 0 < len(parts) <= 4 and all(
+        isinstance(item, dict) and isinstance(item.get("id"), str)
+        and re.fullmatch(r"[0-9]{1,20}", item["id"]) and item["id"].strip("0")
+        and isinstance(item.get("name"), str) and 0 < len(item["name"]) <= 200
+        and item["name"].strip() for item in parts
+    ):
+        category = [{"id": item["id"], "name": item["name"]} for item in parts]
+    stored = target.get("attributes")
+    if category and isinstance(stored, dict):
+        for identity, item in list(stored.items())[:300]:
+            if not isinstance(identity, str) or not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                continue
+            values = item.get("values")
+            if isinstance(values, list):
+                value_items = [{"valueId": str(value.get("valueId") or "0"), "name": value["name"]}
+                               for value in values if isinstance(value, dict) and isinstance(value.get("name"), str)]
+                attributes.append({"id": identity, "name": item["name"],
+                                   "values": [value["name"] for value in value_items], "valueItems": value_items})
+    return category, attributes
+
+
 class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
@@ -102,6 +128,10 @@ class ProductRepository:
                       source_platform: str = "douyin", source_product_id: str | None = None) -> str:
         product_id = "manual:" + str(uuid4().int)
         package, sku_id = manual_package(title, draft_seed, source_product_id if source_platform == "douyin" else None)
+        if source_platform == "jushuitan" and edit is not None and edit.category:
+            package["_productDataCenterJushuitanSource"] = {
+                "category": [item.model_dump() for item in edit.category],
+            }
         try:
             with self.engine.begin() as conn:
                 _require_unused_source(conn, source_platform, source_product_id)
@@ -197,39 +227,25 @@ class ProductRepository:
                 levels = conn.execute(text("""SELECT uu_json #>> '{goodsInfo,catId4}',
                     uu_json #>> '{goodsInfo,catId3}', uu_json #>> '{goodsInfo,catId2}',
                     uu_json #>> '{goodsInfo,catId1}', uu_json #> '{category_properties_value,value}',
-                    uu_json #> '{goodsDetailInfo,product_format}' FROM products WHERE product_id=:id"""),
+                    uu_json #> '{goodsDetailInfo,product_format}', uu_json #> '{douyinTarget}',
+                    uu_json #> '{_productDataCenterJushuitanSource}'
+                    FROM products WHERE product_id=:id"""),
                     {"id": product_id}).one()
                 source_category_id = _original_category_id(levels[:4])
                 attributes = source_attributes(levels[4], levels[5])
+                if product["source_platform"] == "jushuitan":
+                    target_category, target_attributes = _target_fields(levels[6])
+                    source_parts, _ = _target_fields(levels[7])
+                    if source_parts:
+                        source_category_id = source_parts[-1]["id"]
+                        product["category_path"] = " → ".join(part["name"] for part in source_parts)
             elif product["source_platform"] == "pinduoduo":
                 target, pdd_values, pdd_formats, pdd_properties = conn.execute(text("""SELECT
                     uu_json #> '{douyinTarget}', uu_json #> '{category_properties_value,value}',
                     uu_json #> '{goodsDetailInfo,product_format}', uu_json #> '{product,properties}'
                     FROM products WHERE product_id=:id"""), {"id": product_id}).one()
                 attributes = source_attributes(pdd_values, pdd_formats, pdd_properties)
-                if isinstance(target, dict):
-                    parts = target.get("category")
-                    if isinstance(parts, list) and 0 < len(parts) <= 4 and all(
-                        isinstance(item, dict) and isinstance(item.get("id"), str)
-                        and re.fullmatch(r"[0-9]{1,20}", item["id"]) and item["id"].strip("0")
-                        and isinstance(item.get("name"), str) and 0 < len(item["name"]) <= 200 for item in parts
-                    ):
-                        target_category = [{"id": item["id"], "name": item["name"]} for item in parts]
-                    stored = target.get("attributes")
-                    if target_category and isinstance(stored, dict):
-                        for identity, item in list(stored.items())[:300]:
-                            if not isinstance(identity, str) or not isinstance(item, dict) or not isinstance(item.get("name"), str):
-                                continue
-                            values = item.get("values")
-                            if isinstance(values, list):
-                                value_items = [{"valueId": str(value.get("valueId") or "0"), "name": value["name"]}
-                                               for value in values
-                                               if isinstance(value, dict) and isinstance(value.get("name"), str)]
-                                names = [value["name"] for value in value_items]
-                                # An explicitly cleared value must remain distinguishable
-                                # from a value that has never been mapped.
-                                target_attributes.append({"id": identity, "name": item["name"],
-                                                          "values": names, "valueItems": value_items})
+                target_category, target_attributes = _target_fields(target)
             skus = conn.execute(text("""SELECT sku_id, sku_name, current_price, image_rel_path, sort_order
                 FROM product_skus WHERE product_id=:id ORDER BY sort_order, sku_id"""), {"id": product_id}).mappings().all()
             images = conn.execute(text("""SELECT image_type, sort_order, rel_path, source_url
@@ -401,7 +417,10 @@ class ProductRepository:
             if version != edit.expectedVersion:
                 raise ProductEditConflict()
             original_package = json.loads(row["package"])
-            package = apply_edit(original_package, row["source_platform"], edit)
+            # The collector's initial category is the Jushuitan source category.
+            # Later user edits choose a Douyin target and must not overwrite it.
+            edit_platform = "douyin" if row["source_platform"] == "jushuitan" and not mark_modified else row["source_platform"]
+            package = apply_edit(original_package, edit_platform, edit)
             preserved_precheck = None
             queue_access = conn.execute(text("""SELECT CASE WHEN to_regclass('public.product_prechecks') IS NULL
                 THEN false ELSE has_table_privilege('public.product_prechecks','SELECT') END AS can_read,
@@ -457,7 +476,8 @@ class ProductRepository:
             sql = "UPDATE products SET uu_json=CAST(:package AS jsonb), title_status=:status"
             if edit.title is not None:
                 sql += ", title=:title"
-            if edit.category is not None and row["source_platform"] in {"douyin", "jushuitan"}:
+            if edit.category is not None and (row["source_platform"] == "douyin" or
+                                               (row["source_platform"] == "jushuitan" and not mark_modified)):
                 for index in range(1, 5):
                     params[f"level{index}"] = edit.category[index - 1].name if index <= len(edit.category) else ""
                     sql += f", category_level_{index}=:level{index}"

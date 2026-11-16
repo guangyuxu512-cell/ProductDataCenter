@@ -452,6 +452,32 @@ def _validate_pdd_spec_images(data: dict) -> None:
         raise ProductRequestError("拼多多 SKU 来源映射不唯一，无法安全更换图片")
 
 
+def _edit_douyin_target(data: dict, edit: ProductEdit) -> None:
+    if edit.category is None and edit.attributes is None:
+        return
+    target = _mapping(data.setdefault("douyinTarget", {}), "抖店类目数据格式无效")
+    if edit.category is not None:
+        levels = [{"id": item.id, "name": item.name.strip()} for item in edit.category]
+        if any(not level["name"] or not int(level["id"]) for level in levels):
+            raise ProductRequestError("抖店类目无效")
+        old_parts = target.get("category")
+        old_ids = [item.get("id") for item in old_parts if isinstance(item, dict)] if isinstance(old_parts, list) else []
+        if old_ids != [level["id"] for level in levels]:
+            target["attributes"] = {}
+        target["category"] = levels
+    if edit.attributes is not None:
+        parts = target.get("category")
+        if (not isinstance(parts, list) or not 1 <= len(parts) <= 4 or any(
+            not isinstance(part, dict) or not isinstance(part.get("id"), str)
+            or not re.fullmatch(r"[0-9]{1,20}", part["id"]) or not part["id"].strip("0")
+            or not isinstance(part.get("name"), str) or not part["name"].strip() for part in parts
+        )):
+            raise ProductRequestError("请先选择抖店类目")
+        values = _mapping(target.setdefault("attributes", {}), "抖店属性数据格式无效")
+        for item in edit.attributes:
+            values[item.id] = {"name": item.name, "values": [value.model_dump() for value in item.values]}
+
+
 def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
     """Return a modified copy; reject shapes we cannot faithfully translate."""
     data = deepcopy(_mapping(source, "商品数据包格式无效"))
@@ -466,7 +492,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
         _edit_shared_text_images(data, goods, edit)
         if edit.specImages is not None:
             _edit_spec_images(data, edit.specImages)
-        if edit.category is not None:
+        if edit.category is not None and platform == "douyin":
             previous_id = next((str(goods.get(f"catId{level}")) for level in range(4, 0, -1)
                                 if goods.get(f"catId{level}") not in (None, "", "0", 0)), "")
             for level in range(1, 5):
@@ -477,7 +503,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                 details = data.get("goodsDetailInfo")
                 if isinstance(details, dict):
                     details["product_format"] = []
-        if edit.attributes is not None:
+        if edit.attributes is not None and platform == "douyin":
             block = data.setdefault("category_properties_value", {"value": {}})
             values = _mapping(_mapping(block, "商品属性格式无效").setdefault("value", {}), "商品属性格式无效")
             edited_ids = {item.id for item in edit.attributes}
@@ -493,6 +519,8 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                     if isinstance(group, dict) and isinstance(group.get("format"), list):
                         group["format"] = [item for item in group["format"] if not isinstance(item, dict)
                                            or str(item.get("property_id", "")) not in edited_ids]
+        if platform == "jushuitan":
+            _edit_douyin_target(data, edit)
     elif platform in {"pinduoduo", "pdd"}:
         product = data.get("product")
         goods = data.get("goodsInfo")
@@ -505,28 +533,7 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
                 raise ProductRequestError("该拼多多数据包暂不支持更换规格图片")
             _validate_pdd_spec_images(data)
             _edit_spec_images(data, edit.specImages)
-        if edit.category is not None or edit.attributes is not None:
-            target = _mapping(data.setdefault("douyinTarget", {}), "抖店类目数据格式无效")
-            if edit.category is not None:
-                levels = [{"id": item.id, "name": item.name.strip()} for item in edit.category]
-                if any(not level["name"] or not int(level["id"]) for level in levels):
-                    raise ProductRequestError("抖店类目无效")
-                old_parts = target.get("category")
-                old_ids = [item.get("id") for item in old_parts if isinstance(item, dict)] if isinstance(old_parts, list) else []
-                if old_ids != [level["id"] for level in levels]:
-                    target["attributes"] = {}
-                target["category"] = levels
-            if edit.attributes is not None:
-                parts = target.get("category")
-                if (not isinstance(parts, list) or not 1 <= len(parts) <= 4 or any(
-                    not isinstance(part, dict) or not isinstance(part.get("id"), str)
-                    or not re.fullmatch(r"[0-9]{1,20}", part["id"]) or not part["id"].strip("0")
-                    or not isinstance(part.get("name"), str) or not part["name"].strip() for part in parts
-                )):
-                    raise ProductRequestError("请先选择抖店类目")
-                values = _mapping(target.setdefault("attributes", {}), "抖店属性数据格式无效")
-                for item in edit.attributes:
-                    values[item.id] = {"name": item.name, "values": [value.model_dump() for value in item.values]}
+        _edit_douyin_target(data, edit)
         if isinstance(product, dict):
             if edit.title is not None:
                 product["title"] = edit.title

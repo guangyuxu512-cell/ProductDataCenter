@@ -21,6 +21,7 @@ def test_source_identity_create_backfill_and_concurrent_deduplication(engine):
     from app.modules.products.errors import ProductNotFound, ProductRequestError, ProductSourceConflict
     from app.modules.products.export import current_uu_bytes
     from app.modules.products.schemas import ProductEdit
+    from app.modules.prechecks.runner import _worker_request
 
     repo = ProductRepository(engine)
     created = []
@@ -40,19 +41,31 @@ def test_source_identity_create_backfill_and_concurrent_deduplication(engine):
 
         seed = "a" * 32
         edit = ProductEdit(expectedVersion="0" * 64, title="聚水潭测试",
-                           category=[{"id": "1000005069", "name": "居家日用"},
-                                     {"id": "1000005072", "name": "收纳整理工具"}])
+                           category=[{"id": "50003449", "name": "砧板/菜板"}],
+                           mainImages=["https://fixture.invalid/main.png"])
         jst = repo.create_manual("聚水潭测试", seed, edit, source_platform="jushuitan", source_product_id=source_id)
         created.append(jst)
         detail = repo.detail(jst)
         assert detail["product"]["source_platform"] == "jushuitan"
-        assert detail["product"]["category_path"] == "居家日用 → 收纳整理工具"
-        assert detail["sourceCategoryId"] == "1000005072"
+        assert detail["product"]["category_path"] == "砧板/菜板"
+        assert detail["sourceCategoryId"] == "50003449" and detail["targetCategory"] == []
+        assert _worker_request(jst, detail, repo)[:2] == ("predict", "0")
         assert repo.list(parse_product_list_options({"sourceProductId": source_id, "platform": "jushuitan"}))["items"][0]["product_id"] == jst
         with engine.connect() as conn:
             package = conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"), {"id": jst}).scalar_one()
-        assert package["goodsInfo"]["catId1"] == "1000005069"
-        assert package["goodsInfo"]["catId2"] == "1000005072"
+        assert package["goodsInfo"]["catId1"] == "50003449"
+        repo.save_edit(jst, ProductEdit(expectedVersion=repo.edit_snapshot(jst)["version"],
+            category=[{"id": "1000005069", "name": "居家日用"}, {"id": "1000005072", "name": "收纳整理工具"}],
+            attributes=[{"id": "12", "name": "材质", "values": [{"valueId": "13", "name": "塑料"}]}]))
+        detail = repo.detail(jst)
+        assert detail["sourceCategoryId"] == "50003449" and detail["product"]["category_path"] == "砧板/菜板"
+        assert detail["targetCategory"][-1]["id"] == "1000005072"
+        assert detail["targetAttributes"][0]["valueItems"][0]["name"] == "塑料"
+        assert _worker_request(jst, detail, repo)[:2] == ("schema", "1000005072")
+        with engine.connect() as conn:
+            saved = conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"), {"id": jst}).scalar_one()
+        assert saved["goodsInfo"]["catId1"] == "50003449"
+        assert saved["goodsSkuInfo"] == package["goodsSkuInfo"]
 
         old = repo.create_manual("历史手动商品")
         created.append(old)
