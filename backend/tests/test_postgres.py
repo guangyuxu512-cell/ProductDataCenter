@@ -640,7 +640,7 @@ def test_unavailable_worker_dispatch_uses_bounded_backoff_and_can_resume(engine)
 
 def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engine, tmp_path):
     from uuid import uuid4
-    from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession
+    from types import SimpleNamespace
     from app.modules.prechecks.queue import PrecheckQueue
     from app.modules.prechecks.runner import PrecheckRunner
 
@@ -649,19 +649,15 @@ def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engin
     title = "完整拼多多标题" * 4
     image = "https://fixture.invalid/main.png"
     package = {"product": {"title": title}, "images": {"main": [{"url": image}]}}
-    settings = Settings(data_root=tmp_path, douyin_category_lookup_enabled=True)
+    settings = Settings(data_root=tmp_path, douyin_category_lookup_enabled=True, worker_precheck_enabled=True)
+    task_id, device_id = uuid4(), uuid4()
     class Central:
-        def list_shops(self):
-            return [CentralShop(shop_id=shop_id, display_name="隔离店铺", platform="douyin", session_status="valid")]
-        def read_session(self, requested, expected_platform):
-            return CentralShopSession(shop_id=requested, platform=expected_platform, session_version=1,
-                cookies=(CentralCookie(name="sessionid", value="synthetic", domain=".jinritemai.com"),))
+        def submit_worker_precheck(self, claim, category_id, actual_title, **options):
+            assert category_id == "0" and actual_title == title and options["image_url"] == image
+            assert options["operation"] == "predict" and options["delivery"] == "product"
+            return SimpleNamespace(task_id=task_id)
     class Lookup:
         def __init__(self): self.settings = settings
-        def predict(self, session, actual_title, image_url):
-            assert actual_title == title and image_url == image
-            return {"recommendedId": "102", "candidates": [{"id": "102", "name": "收纳架", "path": "居家 > 收纳架",
-                "selectable": True, "levels": [{"id": "100", "name": "居家"}, {"id": "102", "name": "收纳架"}]}]}
     try:
         with engine.begin() as conn:
             conn.execute(text("""INSERT INTO products(product_id, source_platform, title, captured_at, uu_json)
@@ -676,6 +672,15 @@ def test_collected_pdd_auto_precheck_keeps_recommendation_for_confirmation(engin
         runner = PrecheckRunner(engine, settings)
         runner.central, runner.lookup = Central(), Lookup()
         runner.process(claim)
+        context = SimpleNamespace(task_id=task_id, device_id=device_id, category_id="0", operation="predict",
+                                  local_shop_id="local", platform_shop_id=str(shop_id), product_id=product_id,
+                                  revision=claim["revision"])
+        result = {"kind": "douyin.category_schema", "category_id": "0", "device_id": str(device_id),
+                  "local_shop_id": "local", "platform_shop_id": str(shop_id), "operation": "predict",
+                  "http_status": 200, "platform_code": 0, "data": {"predict_cid": "102",
+                  "candidate_category_details": [{"first_cid": "100", "first_cname": "居家",
+                    "second_cid": "102", "second_cname": "收纳架", "deleted": False, "forbidden_status": 0}]}}
+        assert runner.accept_worker_delivery(context, SimpleNamespace(status="success", result=result), "a" * 64)
         record = queue.results([product_id])[0]
         assert record["state"] == "done" and record["result"]["status"] == "needs_category"
         assert record["result"]["prediction"]["recommendedId"] == "102"
@@ -717,7 +722,7 @@ def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, 
     from app.core.config import get_settings
     from app.main import create_application
     from app.modules.category_lookup.api import get_central, get_lookup
-    from app.modules.central.client import CentralCookie, CentralShop, CentralShopSession
+    from app.modules.central.client import CentralShop
     from app.modules.products.api import get_service
 
     product_id = "pdd:3760269504500859111"
@@ -731,14 +736,11 @@ def test_prediction_reads_pdd_package_from_postgres_without_changing_it(engine, 
                      {"id": product_id, "package": json.dumps(package, ensure_ascii=False)})
         before = conn.execute(text("SELECT uu_json::text FROM products WHERE product_id=:id"), {"id": product_id}).scalar_one()
     settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test",
-                        douyin_category_lookup_enabled=True)
+                        douyin_category_lookup_enabled=True, worker_precheck_enabled=True)
     shop_id = uuid4()
     class Central:
         def list_shops(self):
             return [CentralShop(shop_id=shop_id, display_name="测试店", platform="douyin", session_status="valid")]
-        def read_session(self, requested, expected_platform):
-            return CentralShopSession(shop_id=requested, platform=expected_platform, session_version=1,
-                cookies=(CentralCookie(name="sessionid", value="synthetic", domain=".jinritemai.com"),))
     class Lookup:
         def __init__(self): self.settings = settings
         def predict(self, session, actual_title, image_url):

@@ -1,8 +1,4 @@
-"""Consume the control center's versioned application Session contract.
-
-This client never exposes a Session through a product API. Cookies and the
-application token exist only in the backend process during the request.
-"""
+"""Dispatch product work and verify direct Worker results with the control center."""
 
 import json
 import re
@@ -12,7 +8,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from app.core.config import Settings
 
@@ -40,28 +36,6 @@ class CentralShop(BaseModel):
     session_status: str | None
 
 
-class CentralCookie(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
-
-    name: str = Field(min_length=1)
-    value: SecretStr = Field(repr=False)
-    domain: str | None = None
-    path: str = "/"
-    secure: bool = False
-    http_only: bool = Field(default=False, alias="httpOnly")
-    same_site: str | None = Field(default=None, alias="sameSite")
-    expiration_date: float | None = Field(default=None, alias="expirationDate")
-
-
-class CentralShopSession(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    shop_id: UUID
-    platform: str
-    session_version: int = Field(gt=0)
-    cookies: tuple[CentralCookie, ...] = Field(min_length=1, repr=False)
-
-
 class CentralWorkerPrecheckTicket(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -84,6 +58,7 @@ class CentralWorkerDeliveryContext(BaseModel):
     revision: int = Field(gt=0)
     device_id: UUID
     category_id: str = Field(pattern=r"^[0-9]{1,32}$")
+    operation: Literal["schema", "tree", "search", "predict"] = "schema"
     local_shop_id: str = Field(min_length=1, max_length=160)
     platform_shop_id: str = Field(min_length=1, max_length=160)
     session_retry_supported: bool = False
@@ -97,28 +72,26 @@ class CentralApplicationClient:
         self._transport = transport
 
     def list_shops(self) -> list[CentralShop]:
-        payload = self._get(f"{_PREFIX}/shops")
+        payload = self._get(f"{_WORKER_PRECHECKS}/shops")
         try:
             return TypeAdapter(list[CentralShop]).validate_python(payload)
         except ValidationError:
             raise CentralConnectionError("invalid_response") from None
 
-    def read_session(self, shop_id: UUID, expected_platform: str) -> CentralShopSession:
-        payload = self._get(f"{_PREFIX}/shops/{shop_id}/session", require_no_store=True)
-        try:
-            session = CentralShopSession.model_validate(payload)
-        except ValidationError:
-            raise CentralConnectionError("invalid_response") from None
-        if session.shop_id != shop_id or session.platform != expected_platform:
-            raise CentralConnectionError("invalid_response")
-        return session
-
     def submit_worker_precheck(self, claim: dict, category_id: str, title: str, *,
-                               delivery: Literal["central", "product"] = "central") -> CentralWorkerPrecheckTicket:
+                               delivery: Literal["central", "product"] = "central",
+                               operation: Literal["schema", "tree", "search", "predict"] = "schema",
+                               image_url: str | None = None, shop_id: UUID | None = None) -> CentralWorkerPrecheckTicket:
         body = {"kind": "douyin.category_schema",
                 "context": {"product_id": claim["product_id"], "revision": claim["revision"],
                             "attempt": claim["attempts"]},
                 "input": {"category_id": category_id, "title": title}}
+        if operation != "schema":
+            body["input"]["operation"] = operation
+        if image_url is not None:
+            body["input"]["image_url"] = image_url
+        if shop_id is not None:
+            body["input"]["shop_id"] = str(shop_id)
         if delivery == "product":
             body["delivery"] = delivery
         payload = self._request("POST", _WORKER_PRECHECKS, body=body, success_status=202)
@@ -141,7 +114,7 @@ class CentralApplicationClient:
     def worker_delivery_context(self, task_id: UUID, device_id: UUID, worker_token: str) -> CentralWorkerDeliveryContext:
         payload = self._request("GET", f"/api/v1/worker/tasks/{task_id}/precheck-delivery-context",
                                 require_no_store=True, worker_credentials=(device_id, worker_token),
-                                protocol_v2=True)
+                                protocol_v2=True, protocol_v3=True)
         try:
             context = CentralWorkerDeliveryContext.model_validate(payload)
         except ValidationError:
@@ -203,7 +176,8 @@ class CentralApplicationClient:
     def _request(self, method: str, path: str, *, body: dict | None = None,
                  require_no_store: bool = False, success_status: int = 200,
                  max_response_bytes: int = _MAX_RESPONSE_BYTES, timeout: float = 8.0,
-                 worker_credentials: tuple[UUID, str] | None = None, protocol_v2: bool = False):
+                 worker_credentials: tuple[UUID, str] | None = None, protocol_v2: bool = False,
+                 protocol_v3: bool = False):
         base_url, client_id, token = self._connection()
         try:
             with httpx.Client(
@@ -218,8 +192,8 @@ class CentralApplicationClient:
                     options["headers"] = {"X-Device-ID": str(device_id),
                                           "Authorization": f"Bearer {worker_token}",
                                           "Cache-Control": "no-store"}
-                if protocol_v2:
-                    options["headers"]["X-Precheck-Protocol"] = "2"
+                if protocol_v2 or protocol_v3:
+                    options["headers"]["X-Precheck-Protocol"] = "3" if protocol_v3 else "2"
                 if body is not None:
                     options["json"] = body
                 with client.stream(method, path, **options) as response:

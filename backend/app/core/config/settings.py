@@ -46,12 +46,8 @@ class Settings(BaseSettings):
     douyin_category_lookup_enabled: bool = False
     # Enable only after collector migration 0009 and the queue grants are installed.
     auto_precheck_enabled: bool = False
-    # Isolated rollout: only automatic Douyin schema prechecks use a device.
+    # Category lookup and automatic prechecks use authorized Workers.
     worker_precheck_enabled: bool = False
-    # The existing service can still be selected explicitly for rollback.
-    douyin_signer_mode: str = "pure"
-    douyin_signer_url: str = "http://product-cloud-signer-v1-product-signer-1:8787"
-    douyin_signer_key_file: Path | None = Field(default=None, repr=False)
     # A separate persistent NAS cache; never stores Sessions or product data.
     category_cache_file: Path | None = None
 

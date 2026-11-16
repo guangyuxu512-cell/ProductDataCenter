@@ -95,7 +95,7 @@ class CategoryResolver:
 
     def _fetch(self, ids: list[str]) -> list[dict]:
         # Imported lazily to avoid coupling the product service to API startup.
-        from .api import _available, _limit, _session
+        from .api import _available, _limit
 
         try:
             shops = _available(self.central, self.lookup)
@@ -103,7 +103,6 @@ class CategoryResolver:
             raise CategoryResolutionError() from None
         for shop in shops:
             shop_id = str(shop.shop_id)
-            session = None
             parent = "0"
             levels = []
             try:
@@ -122,10 +121,8 @@ class CategoryResolver:
                                           and 0 <= time.time() - probe["checkedAt"] < _PROBE_TTL_SECONDS)
                                 if recent:
                                     break
-                                if session is None:
-                                    session = _session(self.central, shop.shop_id)
                                 with _limit(shop.shop_id):
-                                    items = self.lookup.category_options(session, parent)
+                                    items = self.lookup.category_options(shop.shop_id, parent)
                                 self.cache.put("tree", shop_id, parent, items, tree_version=version)
                                 self.cache.put("tree_probe", shop_id, parent,
                                                {"treeVersion": version, "checkedAt": time.time()})

@@ -6,7 +6,7 @@ from threading import Lock
 from fastapi import Response
 
 from app.modules.category_lookup.api import (
-    AutoSchemaBody, PredictBody, PredictManualBody, SchemaResponse, predict, predict_manual, schema_auto,
+    AutoSchemaBody, PredictBody, PredictManualBody, PredictResponse, SchemaResponse, predict, predict_manual, schema_auto,
 )
 from app.modules.category_lookup.client import DouyinCategoryClient
 from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, multi_measure_valid, normalize_multi_values
@@ -108,7 +108,8 @@ def _main_image(detail: dict) -> str:
 
 
 def check_product(product_id: str, service: ProductService, central: CentralApplicationClient,
-                  lookup: DouyinCategoryClient, *, schema_override: SchemaResponse | None = None) -> dict:
+                  lookup: DouyinCategoryClient, *, schema_override: SchemaResponse | None = None,
+                  prediction_override: PredictResponse | None = None) -> dict:
     detail = service.repository.detail(product_id)
     if not detail:
         raise ValueError("商品不存在")
@@ -141,9 +142,10 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
         platform == "pinduoduo" or (platform == "douyin" and product_id.startswith("manual:"))
     )
     if needs_prediction and not detail["sourceCategoryId"]:
-        prediction = (predict(PredictBody(productId=product_id), Response(), central, lookup, service)
-                      if platform == "pinduoduo" else
-                      predict_manual(PredictManualBody(title=title, imageUrl=image_url), Response(), central, lookup))
+        prediction = prediction_override or (
+            predict(PredictBody(productId=product_id), Response(), central, lookup, service)
+            if platform == "pinduoduo" else
+            predict_manual(PredictManualBody(title=title, imageUrl=image_url), Response(), central, lookup))
         result["prediction"] = prediction.model_dump(mode="json")
         if not prediction.missing:
             message = "待选择类目" if prediction.candidates else "未找到推荐类目，请手动选择"
