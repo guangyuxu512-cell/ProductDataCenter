@@ -52,13 +52,18 @@ class ProductService:
                                             self.settings.image_legacy_base_urls)
         return type(edit).model_validate(normalized) if normalized != payload else edit
 
-    def create_manual(self, title: str, draft_seed=None, edit=None, group_id=None):
+    def create_manual(self, title: str, draft_seed=None, edit=None, group_id=None,
+                      source_platform="douyin", source_product_id=None):
         edit = self._normalize_edit_images(edit)
-        if group_id is None:
+        if group_id is None and source_platform == "douyin" and source_product_id is None:
             return {"productId": self.repository.create_manual(title, draft_seed, edit)}
-        if not self.repository.group_exists(group_id):
+        if group_id is not None and not self.repository.group_exists(group_id):
             raise GroupNotFound()
-        return {"productId": self.repository.create_manual(title, draft_seed, edit, group_id=group_id)}
+        return {"productId": self.repository.create_manual(title, draft_seed, edit, group_id=group_id,
+                    source_platform=source_platform, source_product_id=source_product_id)}
+
+    def update_source_identity(self, product_id: str, source_product_id, source_platform, allowed_groups=None):
+        return self.repository.update_source_identity(product_id, source_product_id, source_platform, allowed_groups)
 
     def save_edit(self, product_id: str, edit, allowed_groups=None):
         edit = self._normalize_edit_images(edit)

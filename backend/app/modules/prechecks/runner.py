@@ -44,7 +44,7 @@ class PrecheckRunner:
         try:
             detail = self.service.repository.detail(claim["product_id"])
             if (getattr(self, "worker_precheck_enabled", False) and detail
-                    and detail["product"]["source_platform"] == "douyin" and detail.get("sourceCategoryId")):
+                    and detail["product"]["source_platform"] in {"douyin", "jushuitan"} and detail.get("sourceCategoryId")):
                 worker_mode = True
                 self._process_worker(claim, detail)
                 return

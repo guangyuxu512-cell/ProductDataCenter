@@ -63,6 +63,7 @@ class ProductListOptions:
     include_total: bool = True
     # None means unrestricted; an empty tuple deliberately matches no products.
     allowed_groups: tuple[str, ...] | None = None
+    source_product_id: str = ""
 
 
 def group_scope_sql(allowed_groups, alias: str = "") -> tuple[str, dict]:
@@ -85,9 +86,12 @@ def parse_product_list_options(params: Mapping[str, str]) -> ProductListOptions:
         prefix, suffix = product_id.split(":", 1)
         product_id = f"{prefix.lower()}:{suffix}"
     platform, group_id = value("platform", 64).lower(), value("groupId", 64)
+    source_product_id = params.get("sourceProductId", "").strip()
+    if len(source_product_id) > 128 or any(ord(char) < 32 or ord(char) == 127 for char in source_product_id):
+        raise ProductRequestError("来源商品 ID 精确检索值无效")
     if product_id and not EXACT_PRODUCT_ID_PATTERN.fullmatch(product_id):
         raise ProductRequestError("商品 ID 精确检索值无效")
-    if platform and platform not in {"douyin", "pinduoduo"}:
+    if platform and platform not in {"douyin", "pinduoduo", "jushuitan"}:
         raise ProductRequestError("商品平台筛选无效")
     if group_id and group_id != "ungrouped" and not UUID_PATTERN.fullmatch(group_id):
         raise ProductRequestError("商品分组筛选无效")
@@ -106,6 +110,7 @@ def parse_product_list_options(params: Mapping[str, str]) -> ProductListOptions:
         query=value("q"), product_id=product_id, source_platform=platform, group_id=group_id,
         captured_from=start, captured_to=end, captured_from_time=start_time, captured_to_time=end_time,
         include_total=value("includeTotal").lower() not in {"0", "false", "no"},
+        source_product_id=source_product_id,
     )
 
 
@@ -140,6 +145,8 @@ def build_product_list_queries(options: ProductListOptions) -> tuple[Query, Quer
       OR p.shop_name ILIKE {p}
       OR p.category_path ILIKE {p}
     ))""")
+    if options.source_product_id:
+        where.append(f"p.source_product_id = {bind(options.source_product_id)}")
     if options.source_platform:
         where.append(f"p.source_platform = {bind(options.source_platform)}")
     if options.group_id == "ungrouped":

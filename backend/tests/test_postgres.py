@@ -16,6 +16,79 @@ from app.modules.products.service import ProductService
 pytestmark = pytest.mark.integration
 
 
+def test_source_identity_create_backfill_and_concurrent_deduplication(engine):
+    from concurrent.futures import ThreadPoolExecutor
+    from app.modules.products.errors import ProductNotFound, ProductRequestError, ProductSourceConflict
+    from app.modules.products.export import current_uu_bytes
+    from app.modules.products.schemas import ProductEdit
+
+    repo = ProductRepository(engine)
+    created = []
+    source_id, historical_id, race_id = "9876543210123456789", "9876543210123456788", "9876543210123456787"
+    try:
+        douyin = repo.create_manual("抖音采集测试", source_product_id=source_id)
+        created.append(douyin)
+        assert repo.detail(douyin)["product"]["source_product_id"] == source_id
+        assert repo.detail(douyin)["product"]["title_status"] == "采集完成"
+        package = json.loads(current_uu_bytes(repo.export_rows([douyin])[0], 100_000)[0])
+        assert package["goodsId"] == source_id
+        assert repo.list(parse_product_list_options({"productId": source_id, "platform": "douyin"}))["items"][0]["product_id"] == douyin
+        with pytest.raises(ProductSourceConflict):
+            repo.create_manual("重复采集", source_product_id=source_id)
+        with pytest.raises(ProductSourceConflict):
+            repo.create_manual("已有原生商品", source_product_id="3760269504500859111")
+
+        seed = "a" * 32
+        edit = ProductEdit(expectedVersion="0" * 64, title="聚水潭测试",
+                           category=[{"id": "1000005069", "name": "居家日用"},
+                                     {"id": "1000005072", "name": "收纳整理工具"}])
+        jst = repo.create_manual("聚水潭测试", seed, edit, source_platform="jushuitan", source_product_id=source_id)
+        created.append(jst)
+        detail = repo.detail(jst)
+        assert detail["product"]["source_platform"] == "jushuitan"
+        assert detail["product"]["category_path"] == "居家日用 → 收纳整理工具"
+        assert detail["sourceCategoryId"] == "1000005072"
+        assert repo.list(parse_product_list_options({"sourceProductId": source_id, "platform": "jushuitan"}))["items"][0]["product_id"] == jst
+        with engine.connect() as conn:
+            package = conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"), {"id": jst}).scalar_one()
+        assert package["goodsInfo"]["catId1"] == "1000005069"
+        assert package["goodsInfo"]["catId2"] == "1000005072"
+
+        old = repo.create_manual("历史手动商品")
+        created.append(old)
+        with engine.connect() as conn:
+            before = conn.execute(text("""SELECT p.uu_json::text, p.group_id, q.revision, q.state
+                FROM products p JOIN product_prechecks q USING(product_id) WHERE p.product_id=:id"""), {"id": old}).one()
+        with pytest.raises(ProductNotFound):
+            repo.update_source_identity(old, historical_id, None, allowed_groups=[])
+        assert repo.update_source_identity(old, historical_id, None)["sourceProductId"] == historical_id
+        assert repo.update_source_identity(old, historical_id, None)["sourceProductId"] == historical_id
+        with pytest.raises(ProductSourceConflict):
+            repo.update_source_identity(old, source_id, None)
+        with pytest.raises(ProductSourceConflict):
+            repo.update_source_identity(old, None, "jushuitan")
+        with pytest.raises(ProductRequestError):
+            repo.update_source_identity("3760269504500859111", historical_id, None)
+        with engine.connect() as conn:
+            after = conn.execute(text("""SELECT p.uu_json::text, p.group_id, q.revision, q.state
+                FROM products p JOIN product_prechecks q USING(product_id) WHERE p.product_id=:id"""), {"id": old}).one()
+        assert after == before
+        assert json.loads(current_uu_bytes(repo.export_rows([old])[0], 100_000)[0])["goodsId"] == historical_id
+
+        def create_one():
+            try:
+                return repo.create_manual("并发采集", source_product_id=race_id)
+            except ProductSourceConflict:
+                return None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: create_one(), range(2)))
+        created.extend(value for value in results if value)
+        assert sum(value is not None for value in results) == 1
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=ANY(CAST(:ids AS text[]))"), {"ids": created})
+
+
 @pytest.fixture(scope="module")
 def engine():
     value = os.environ.get("BACKEND_DATABASE_URL")
@@ -128,10 +201,21 @@ def test_scoped_tokens_enforce_group_boundaries_across_real_database_operations(
             assert c.post("/api/v1/category-lookup/predict", headers=auth,
                           json={"productId": b}).status_code == 404
             assert [row["product_id"] for row in repo.category_paths([a, b], allowed_groups={str(group_a)})] == [a]
+            source_id = "9876543210987654321"
+            assert c.patch(f"/api/v1/products/{b}/source-identity", headers=auth,
+                           json={"sourceProductId": source_id}).status_code == 404
+            updated = c.patch(f"/api/v1/products/{a}/source-identity", headers=auth,
+                              json={"sourceProductId": source_id})
+            assert updated.status_code == 200 and updated.json()["sourceProductId"] == source_id
+            assert c.get("/api/v1/products", headers=auth,
+                         params={"sourceProductId": source_id, "platform": "douyin"}).json()["items"][0]["product_id"] == a
+            assert c.post("/api/v1/products", headers=auth, json={"title": "重复采集",
+                          "sourceProductId": source_id, "groupId": str(group_a)}).status_code == 409
             created_response = c.post("/api/v1/products", headers=auth,
-                                      json={"title": "限定分组新建", "groupId": str(group_a)})
+                                      json={"title": "限定分组新建", "groupId": str(group_a), "sourcePlatform": "jushuitan"})
             assert created_response.status_code == 200, created_response.text
             created.append(created_response.json()["productId"])
+            assert c.get(f"/api/v1/products/{created[-1]}", headers=auth).json()["product"]["source_platform"] == "jushuitan"
             assert c.post("/api/v1/products", headers=auth,
                           json={"title": "不允许新建", "groupId": str(group_b)}).status_code == 403
             deleted = c.post("/api/v1/products/delete", headers=auth, json={"productIds": [a, b]})

@@ -150,6 +150,7 @@ class Capabilities(BaseModel):
     importProducts: bool = False
     categoryLookup: bool = False
     autoPrecheck: bool = False
+    sourceProductIdentity: bool = False
     permissions: list[str] = Field(default_factory=list)
     groupIds: list[str] | None = None
 
@@ -318,11 +319,29 @@ class ProductEdit(BaseModel):
         return self
 
 
+def _source_product_id(value):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("来源商品 ID 必须是字符串")
+    value = value.strip()
+    if not value or len(value) > 128 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise ValueError("来源商品 ID 无效")
+    return value
+
+
 class ManualProductCreate(BaseModel):
     title: str = Field(min_length=1, max_length=10000)
     draftSeed: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     edit: ProductEdit | None = None
     groupId: UUID | None = None
+    sourcePlatform: Literal["douyin", "jushuitan"] = "douyin"
+    sourceProductId: str | None = None
+
+    @field_validator("sourceProductId", mode="before")
+    @classmethod
+    def valid_source_product_id(cls, value):
+        return _source_product_id(value)
 
     @field_validator("title")
     @classmethod
@@ -335,4 +354,20 @@ class ManualProductCreate(BaseModel):
             raise ValueError("新建商品缺少草稿标识")
         if self.edit is not None and self.edit.title != self.title:
             raise ValueError("商品标题不一致")
+        return self
+
+
+class ProductSourceIdentityUpdate(BaseModel):
+    sourcePlatform: Literal["douyin", "jushuitan"] | None = None
+    sourceProductId: str | None = None
+
+    @field_validator("sourceProductId", mode="before")
+    @classmethod
+    def valid_source_product_id(cls, value):
+        return _source_product_id(value)
+
+    @model_validator(mode="after")
+    def has_identity_change(self):
+        if self.sourcePlatform is None and self.sourceProductId is None:
+            raise ValueError("没有需要补充的来源信息")
         return self
