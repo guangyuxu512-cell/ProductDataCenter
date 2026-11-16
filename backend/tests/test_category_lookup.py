@@ -1,25 +1,22 @@
 """Contract tests for the two read-only platform calls and authorization."""
 import json
-import logging
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from time import sleep
 from uuid import uuid4
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings, get_settings
 from app.main import create_application
 from app.modules.category_lookup.api import get_central, get_lookup
-from app.modules.category_lookup.client import DouyinCategoryClient, LookupError, normalize_fields
+from app.modules.category_lookup.client import LookupError, normalize_fields
 from app.modules.central.client import CentralShop
 
 PRODUCT_KEY = "synthetic-product-token-1234567890"
 RPA_KEY = "synthetic-rpa-token-1234567890"
-SIGNER_KEY = "synthetic-signer-token-1234567890"
 COOKIE = "synthetic-session-value-never-expose"
 
 

@@ -7,9 +7,8 @@ from .worker_lookup import LookupError, lookup
 
 
 class DouyinCategoryClient:
-    def __init__(self, settings: Settings, *, transport=None):
+    def __init__(self, settings: Settings):
         self.settings = settings
-        self.transport = transport
 
     def search(self, shop_id: UUID, keyword: str) -> list[dict]:
         return lookup(self.settings, operation="search", category_id="0", title=keyword, shop_id=shop_id)
