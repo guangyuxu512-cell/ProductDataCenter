@@ -16,6 +16,47 @@ from app.modules.products.service import ProductService
 pytestmark = pytest.mark.integration
 
 
+def test_jushuitan_collector_chinese_id_verified_target_and_queue(engine, tmp_path):
+    from app.modules.category_lookup.cache import CategoryCache
+    from app.modules.prechecks.runner import _worker_request
+    from app.modules.products.errors import ProductSourceConflict
+    from app.modules.products.schemas import ProductEdit
+
+    settings = Settings(category_cache_file=tmp_path / "verified-tree.sqlite")
+    cache = CategoryCache(settings.category_cache_file)
+    category = [{"id": "1000009092", "name": "餐饮厨具"}, {"id": "1000009147", "name": "砧板/菜板"}]
+    cache.put("tree", "shop", "0", [{**category[0], "isLeaf": False}])
+    cache.put("tree", "shop", category[0]["id"], [{**category[1], "isLeaf": True}])
+    repo = ProductRepository(engine)
+    service = ProductService(repo, settings)
+    source = "聚水潭资料-中文-A01"
+    edit = ProductEdit(expectedVersion="0" * 64, title="隔离商品", category=category,
+                       mainImages=["https://fixture.invalid/main.png"],
+                       attributes=[{"id": "1687", "name": "品牌", "values": [
+                           {"valueId": "596120136", "name": "无品牌"}]}])
+    created = []
+    try:
+        product = service.create_manual("隔离商品", "b" * 32, edit, source_platform="jushuitan",
+                                        source_product_id=source)["productId"]
+        created.append(product)
+        detail = repo.detail(product)
+        assert detail["product"]["source_product_id"] == source
+        assert detail["sourceCategoryId"] == category[-1]["id"]
+        assert detail["targetCategory"] == category
+        assert detail["targetAttributes"][0]["values"] == ["无品牌"]
+        assert _worker_request(product, detail, repo)[:2] == ("schema", category[-1]["id"])
+        assert repo.list(parse_product_list_options({"sourceProductId": source, "platform": "jushuitan"}))["items"][0]["product_id"] == product
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT state FROM product_prechecks WHERE product_id=:id"), {"id": product}).scalar_one() == "pending"
+        with pytest.raises(ProductSourceConflict):
+            service.create_manual("重复商品", "b" * 32, edit, source_platform="jushuitan", source_product_id=source)
+        douyin = repo.create_manual("另一来源", source_platform="douyin", source_product_id=source)
+        created.append(douyin)
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM products WHERE product_id=ANY(CAST(:ids AS text[]))"), {"ids": created})
+
+
 def test_source_identity_create_backfill_and_concurrent_deduplication(engine):
     from concurrent.futures import ThreadPoolExecutor
     from app.modules.products.errors import ProductNotFound, ProductRequestError, ProductSourceConflict

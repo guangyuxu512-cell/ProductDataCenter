@@ -59,6 +59,13 @@ class ProductService:
             return {"productId": self.repository.create_manual(title, draft_seed, edit)}
         if group_id is not None and not self.repository.group_exists(group_id):
             raise GroupNotFound()
+        if source_platform == "jushuitan" and edit is not None and edit.category:
+            from app.modules.category_lookup.resolver import CategoryResolver
+            levels = [{"id": part.id, "name": part.name.strip()} for part in edit.category]
+            if CategoryResolver(self.settings).cached_confirmed_leaf(levels):
+                return {"productId": self.repository.create_manual(title, draft_seed, edit, group_id=group_id,
+                            source_platform=source_platform, source_product_id=source_product_id,
+                            verified_douyin_target=levels)}
         return {"productId": self.repository.create_manual(title, draft_seed, edit, group_id=group_id,
                     source_platform=source_platform, source_product_id=source_product_id)}
 
