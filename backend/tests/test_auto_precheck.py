@@ -61,6 +61,7 @@ def test_required_values_match_original_id_or_unambiguous_pdd_name():
     invalid = _attribute_problems(fields, [{"id": "99", "name": "材质", "values": ["木材"]}], [], "pinduoduo")
     assert [(field.label, problem) for field, problem in invalid] == [("材质", "包含无效选项"), ("品牌", "未填写")]
     assert _missing_required(fields, source, [{"id": "1", "name": "材质", "values": []}], "pinduoduo") == ["材质", "品牌"]
+    assert _missing_required(fields, source, [], "jushuitan") == ["材质", "品牌"]
 
 
 def test_douyin_auto_check_uses_original_category_and_lists_missing_names():

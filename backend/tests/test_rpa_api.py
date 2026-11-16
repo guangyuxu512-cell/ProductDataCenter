@@ -170,6 +170,30 @@ def test_rpa_required_names_fails_closed_when_unresolved_and_leaves_pdd_unchange
     assert client.get(path, headers=AUTH, params={"category_names": "required"}).json() == {"goodsInfo": {"catId1": "1"}}
 
 
+def test_jushuitan_rpa_requires_confirmed_target_not_source_category(client, monkeypatch):
+    import json
+    from app.modules.category_lookup.resolver import CategoryResolver
+
+    package = {"goodsInfo": {"catId1": "50003449", "catId2": "0"}}
+    row = {"product_id": PRODUCT, "source_platform": "jushuitan", "uu_text": json.dumps(package)}
+    monkeypatch.setattr(FakeRepository, "export_rows", lambda self, ids: [row])
+    seen = []
+    def resolve(self, ids):
+        seen.append(ids)
+        return [{"id": value, "name": name} for value, name in zip(ids, ["居家日用", "厨房"])]
+    monkeypatch.setattr(CategoryResolver, "resolve", resolve)
+    path = f"/rpa/v1/products/{PRODUCT}/uu"
+    assert client.get(path, headers=AUTH, params={"category_names": "required"}).status_code == 503
+    assert seen == []
+    package["douyinTarget"] = {"category": [{"id": "1000005069", "name": "居家日用"},
+                                            {"id": "1000005070", "name": "厨房"}]}
+    row["uu_text"] = json.dumps(package)
+    response = client.get(path, headers=AUTH, params={"category_names": "required"})
+    assert response.status_code == 200 and seen == [["1000005069", "1000005070"]]
+    assert response.json()["goodsInfo"]["catId1"] == "1000005069"
+    assert client.get(path, headers=AUTH).json()["goodsInfo"]["catId1"] == "50003449"
+
+
 def test_management_category_resolution_does_not_expand_rpa_permissions(client, monkeypatch):
     from app.modules.category_lookup.resolver import CategoryResolver
 

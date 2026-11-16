@@ -1,6 +1,7 @@
 """供 RPA 只读查询商品；不暴露任何商品或分组写接口。"""
 
 import hashlib
+import json
 import re
 from typing import Annotated, Literal
 from uuid import UUID
@@ -84,8 +85,21 @@ def product_uu(product_id: str, service: Service, principal: Actor,
     if category_names == "required" and rows[0].get("source_platform") in {"douyin", "jushuitan"}:
         from app.modules.category_lookup.resolver import CategoryResolutionError, CategoryResolver, enrich_uu
         try:
+            if rows[0].get("source_platform") == "jushuitan":
+                # Source category IDs are not Douyin IDs. Only a separately
+                # confirmed target may be projected into an RPA listing packet.
+                from .repository import _target_fields
+                package = json.loads(content)
+                if not isinstance(package, dict) or not isinstance(package.get("goodsInfo"), dict):
+                    raise CategoryResolutionError()
+                target, _ = _target_fields(package.get("douyinTarget"))
+                if not target:
+                    raise CategoryResolutionError()
+                for level in range(1, 5):
+                    package["goodsInfo"][f"catId{level}"] = target[level - 1]["id"] if level <= len(target) else "0"
+                content = json.dumps(package, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             content = enrich_uu(content, CategoryResolver(service.settings))
-        except CategoryResolutionError:
+        except (CategoryResolutionError, ValueError, TypeError, UnicodeError):
             raise CategoryUnavailable() from None
         if len(content) > service.settings.export_max_bytes:
             from .errors import ExportUnavailable

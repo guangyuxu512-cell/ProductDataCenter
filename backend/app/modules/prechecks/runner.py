@@ -28,8 +28,16 @@ def _worker_request(product_id: str, detail: dict, repository):
     row = detail["product"]
     platform = row["source_platform"]
     title = (row.get("title") or "").strip()
+    if platform == "jushuitan":
+        # A Jushuitan category ID belongs to the source platform; only a
+        # separately confirmed Douyin target may be sent as a schema ID.
+        target = detail.get("targetCategory") or []
+        if target:
+            return "schema", str(target[-1]["id"]), title or "商品", None
+        image_url = _usable_image_url(_main_image(detail))
+        return ("predict", "0", title, image_url) if title and image_url else None
     prediction = not detail["targetCategory"] and (
-        platform == "pinduoduo" or (platform in {"douyin", "jushuitan"} and product_id.startswith("manual:")))
+        platform == "pinduoduo" or (platform == "douyin" and product_id.startswith("manual:")))
     if prediction and not detail.get("sourceCategoryId"):
         if platform == "pinduoduo":
             rows = repository.export_rows([product_id])
@@ -39,7 +47,7 @@ def _worker_request(product_id: str, detail: dict, repository):
         else:
             image_url = _usable_image_url(_main_image(detail))
         return ("predict", "0", title, image_url) if title and image_url else None
-    category = (detail.get("sourceCategoryId") if platform in {"douyin", "jushuitan"} else
+    category = (detail.get("sourceCategoryId") if platform == "douyin" else
                 detail["targetCategory"][-1]["id"] if platform == "pinduoduo" and detail["targetCategory"] else None)
     if category:
         return "schema", str(category), title or "商品", None
@@ -185,6 +193,8 @@ class PrecheckRunner:
                 if detail["product"]["source_platform"] == "pinduoduo":
                     rows = self.service.repository.export_rows([claim["product_id"]])
                     _, _, version = prediction_input(rows[0])
+                elif detail["product"]["source_platform"] == "jushuitan":
+                    version = self.service.repository.edit_snapshot(claim["product_id"])["version"]
                 else:
                     version = hashlib.sha256(json.dumps([current[2], current[3]], ensure_ascii=False).encode("utf-8")).hexdigest()
                 status = ("recommended" if data["recommendedId"] else

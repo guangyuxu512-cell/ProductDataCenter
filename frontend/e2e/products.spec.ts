@@ -95,6 +95,66 @@ test('采集商品优先显示来源 ID，聚水潭来源可筛选和打开', as
   await expect(dialog).not.toContainText('手动创建')
 })
 
+test('聚水潭来源类目与抖店目标类目分开显示和保存', async ({ page }) => {
+  await fixtures(page)
+  const id = 'manual:12345678901234567890'
+  const item = { ...product(id, 'jushuitan'), source_product_id: '3811680774151864442',
+    title: '聚水潭砧板', category_path: '砧板/菜板' }
+  const shop = '00000000-0000-4000-8000-000000000111'
+  let target: Array<{ id: string; name: string }> = []
+  let version = 'a'.repeat(64)
+  const schemaIds: string[] = []
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, productEdit: true, categoryLookup: true, autoPrecheck: false,
+  } }))
+  await page.route('**/api/v1/products?*', (route) => route.fulfill({ json: {
+    items: [item], total: 1, totalIncluded: true, limit: 20, offset: 0,
+  } }))
+  await page.route('**/api/v1/products/**', (route) => {
+    const path = decodeURIComponent(new URL(route.request().url()).pathname)
+    if (path === `/api/v1/products/${id}/edit`) return route.fulfill({ json: {
+      version, specImageGroup: '', specImages: [], specGroups: [], skus: [],
+    } })
+    if (path !== `/api/v1/products/${id}`) return route.fallback()
+    if (route.request().method() === 'PATCH') {
+      target = route.request().postDataJSON().category
+      version = 'b'.repeat(64)
+      return route.fulfill({ json: { version } })
+    }
+    return route.fulfill({ json: { product: item, sourceCategoryId: '50003449',
+      targetCategory: target, targetAttributes: [], sourceAttributes: [], skus: [], images: [] } })
+  })
+  await page.route('**/api/v1/category-lookup/tree', (route) => {
+    const body = route.request().postDataJSON() as { parentId: string }
+    const option = body.parentId === '0' ? { id: '1000005069', name: '居家日用', isLeaf: false, enabled: true }
+      : { id: '1000005072', name: '收纳整理工具', isLeaf: true, enabled: true }
+    return route.fulfill({ json: { shopId: shop, parentId: body.parentId, items: [option], fromCache: true } })
+  })
+  await page.route('**/api/v1/category-lookup/schema**', (route) => {
+    const body = route.request().postDataJSON() as { categoryId: string }
+    schemaIds.push(body.categoryId)
+    return route.fulfill({ json: { shopId: shop, categoryId: body.categoryId, attributes: [] } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  let dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('来源类目：砧板/菜板')).toBeVisible()
+  await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('')
+  expect(schemaIds).not.toContain('50003449')
+  await dialog.getByRole('textbox', { name: '抖店类目' }).click()
+  await page.getByRole('button', { name: '居家日用', exact: true }).click()
+  await page.getByRole('button', { name: '收纳整理工具', exact: true }).click()
+  await page.getByRole('dialog', { name: '选择抖店类目' }).getByRole('button', { name: '确认' }).click()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => target.map((part) => part.id)).toEqual(['1000005069', '1000005072'])
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('来源类目：砧板/菜板')).toBeVisible()
+  await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('居家日用 → 收纳整理工具')
+  expect(schemaIds).not.toContain('50003449')
+})
+
 test('后台刷新显示新采集商品，不遮罩表格或丢失编辑草稿', async ({ page }) => {
   await page.clock.install()
   await fixtures(page)

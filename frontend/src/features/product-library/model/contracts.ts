@@ -64,7 +64,7 @@ export interface LibraryProduct {
   groupId: string | null
   groupName: string | null
   category: string | null
-  /** Original Douyin category from the source package; absent for other platforms. */
+  /** Original category ID from the source package, not necessarily a Douyin category. */
   sourceCategoryId?: string | null
   targetCategory?: Array<{ id: string; name: string }>
   targetAttributes?: Array<{ id: string | null; name: string; values: string[]; valueItems?: ProductAttributeValue[] }>

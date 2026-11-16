@@ -20,17 +20,17 @@ _schema_locks = [Lock() for _ in range(64)]
 def _field_values(field, fields: list, source: list, target: list, platform: str):
     names = Counter(str(field.label).strip() for field in fields)
     value = None
-    if platform == "pinduoduo":
+    if platform in {"pinduoduo", "jushuitan"}:
         saved = [item for item in target if item["id"] == field.id]
         if saved:
             value = saved[0].get("valueItems") or saved[0]["values"]
-    elif platform in {"douyin", "jushuitan"}:
+    elif platform == "douyin":
         exact = [item for item in source if item["id"] and item["id"] == field.id]
         if len(exact) == 1:
             value = exact[0].get("valueItems") or exact[0]["values"]
         elif len(exact) > 1:
             value = []
-    if value is None:
+    if value is None and platform != "jushuitan":
         same_name = [item for item in source if item["name"].strip() == field.label.strip()]
         if names[field.label.strip()] == 1 and len(same_name) == 1:
             value = same_name[0].get("valueItems") or same_name[0]["values"]
@@ -139,9 +139,9 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
                 _add_issue(result, "sku_price_invalid", f"第 {index + 1} 个 SKU 价格无效", "sku",
                            fieldId="price", skuIndex=index, skuId=str(sku.get("sku_id") or ""))
     needs_prediction = not detail["targetCategory"] and (
-        platform == "pinduoduo" or (platform in {"douyin", "jushuitan"} and product_id.startswith("manual:"))
+        platform in {"pinduoduo", "jushuitan"} or (platform == "douyin" and product_id.startswith("manual:"))
     )
-    if needs_prediction and not detail["sourceCategoryId"]:
+    if needs_prediction and (platform in {"pinduoduo", "jushuitan"} or not detail["sourceCategoryId"]):
         prediction = prediction_override or (
             predict(PredictBody(productId=product_id), Response(), central, lookup, service)
             if platform == "pinduoduo" else
@@ -154,8 +154,8 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
                         if item["code"] != "category_confirmation_required"]
         result["status"] = "needs_completion" if prediction.missing or non_category else "needs_category"
         return result
-    category_id = (detail["sourceCategoryId"] if platform in {"douyin", "jushuitan"} else
-                   detail["targetCategory"][-1]["id"] if platform == "pinduoduo" and detail["targetCategory"] else None)
+    category_id = (detail["sourceCategoryId"] if platform == "douyin" else
+                   detail["targetCategory"][-1]["id"] if platform in {"pinduoduo", "jushuitan"} and detail["targetCategory"] else None)
     if not category_id:
         _add_issue(result, "category_missing", "类目未选择", "base", fieldId="category")
         result["status"] = "needs_category"
