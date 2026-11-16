@@ -43,6 +43,10 @@ def test_schema_keeps_options_beyond_previous_500_item_limit():
     assert fields[0]["options"][-1] == {"label": "选项500", "value": "500"}
 
 
+def test_integer_required_flag_remains_supported():
+    assert normalize_fields([{"id": 12, "label": "材质", "required": 1}])[0]["required"] is True
+
+
 def test_schema_uses_platform_control_metadata_instead_of_guessing_labels():
     fields = normalize_fields([
         {"id": 1, "label": "适用场景", "additions": {"ui_type": "multi_select", "diy_type": 1},

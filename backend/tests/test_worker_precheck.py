@@ -277,3 +277,33 @@ def test_pdd_selected_category_uses_the_same_worker_schema_path(settings):
     runner.process({"product_id": "pdd:12345678", "revision": 1, "attempts": 1})
     assert requests[0]["input"]["category_id"] == "1000001535"
     assert requests[0]["delivery"] == "product"
+
+
+def test_jushuitan_source_identity_still_uses_original_category(settings):
+    product = detail()
+    product["product"]["source_platform"] = "jushuitan"
+    requests = []
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(202, json={"task_id": str(TASK_ID), "status": "pending"})
+    runner = make_runner(settings, handler, product)
+    runner.process({"product_id": "jst:12345678", "revision": 1, "attempts": 1})
+    assert requests[0]["input"]["category_id"] == "1000001535"
+    assert requests[0]["delivery"] == "product"
+
+
+def test_pdd_without_target_category_uses_worker_prediction(settings):
+    product = detail()
+    product["product"]["source_platform"] = "pinduoduo"
+    product["sourceCategoryId"] = None
+    requests = []
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(202, json={"task_id": str(TASK_ID), "status": "pending"})
+    runner = make_runner(settings, handler, product)
+    runner.service.repository.export_rows.return_value = [{"source_platform": "pinduoduo", "uu_text": json.dumps({
+        "product": {"title": "拼多多商品"}, "images": {"main": [{"url": "https://example.invalid/pdd.jpg"}]}})}]
+    runner.process({"product_id": "pdd:12345678", "revision": 1, "attempts": 1})
+    assert requests[0]["input"]["operation"] == "predict"
+    assert requests[0]["input"]["title"] == "拼多多商品"
+    assert requests[0]["input"]["image_url"] == "https://example.invalid/pdd.jpg"
