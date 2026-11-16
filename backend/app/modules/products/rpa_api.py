@@ -81,7 +81,7 @@ def product_uu(product_id: str, service: Service, principal: Actor,
     content, _ = current_uu_bytes(rows[0], service.settings.export_max_bytes,
                                   service.settings.image_public_base_url,
                                   service.settings.image_legacy_base_urls)
-    if category_names == "required" and rows[0].get("source_platform") == "douyin":
+    if category_names == "required" and rows[0].get("source_platform") in {"douyin", "jushuitan"}:
         from app.modules.category_lookup.resolver import CategoryResolutionError, CategoryResolver, enrich_uu
         try:
             content = enrich_uu(content, CategoryResolver(service.settings))

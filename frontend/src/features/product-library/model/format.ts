@@ -1,8 +1,7 @@
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 import timezone from 'dayjs/plugin/timezone'
-import type { PlatformCode } from '@/entities/platform'
-import type { LibraryProduct } from './contracts'
+import type { LibraryProduct, ProductSourcePlatform } from './contracts'
 import type { NasDetail, ProductRow } from './nas-contracts'
 
 dayjs.extend(utc)
@@ -12,9 +11,9 @@ export function capturedTime(value: string | null): string {
   return value ? dayjs(value).tz('Asia/Shanghai').format('YYYY-MM-DD HH:mm:ss') : '—'
 }
 
-export function platformCode(value: string): PlatformCode | null {
+export function platformCode(value: string): ProductSourcePlatform | null {
   if (value === 'pinduoduo') return 'pdd'
-  if (value === 'douyin' || value === 'pdd' || value === 'taobao') return value
+  if (value === 'douyin' || value === 'pdd' || value === 'taobao' || value === 'jushuitan') return value
   return null
 }
 
@@ -37,7 +36,7 @@ export function detailView(detail: NasDetail): LibraryProduct {
     platform, title: row.title, shopName: row.shop_name, skuCount: row.sku_count,
     mainImageCount: row.main_image_count, detailImageCount: row.detail_image_count, skuImageCount: row.sku_image_count,
     groupId: row.group_id, groupName: row.group_name, category: row.category_path || null,
-    sourceCategoryId: platform === 'douyin' ? detail.sourceCategoryId ?? null : null,
+    sourceCategoryId: platform === 'douyin' || platform === 'jushuitan' ? detail.sourceCategoryId ?? null : null,
     targetCategory: platform === 'pdd' ? detail.targetCategory ?? [] : [],
     targetAttributes: platform === 'pdd' ? detail.targetAttributes ?? [] : [],
     currentPrice: row.current_price_min === null && row.current_price_max === null ? null : priceRange(row),

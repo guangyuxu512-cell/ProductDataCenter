@@ -455,7 +455,7 @@ def _validate_pdd_spec_images(data: dict) -> None:
 def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
     """Return a modified copy; reject shapes we cannot faithfully translate."""
     data = deepcopy(_mapping(source, "商品数据包格式无效"))
-    if platform == "douyin":
+    if platform in {"douyin", "jushuitan"}:
         goods = _mapping(data.get("goodsInfo"), "抖音商品数据包缺少商品信息")
         if edit.specStructure is not None:
             _edit_spec_structure(data, edit.specStructure)

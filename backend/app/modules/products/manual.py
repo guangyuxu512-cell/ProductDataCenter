@@ -3,7 +3,7 @@
 from uuid import uuid4
 
 
-def manual_package(title: str, draft_seed: str | None = None) -> tuple[dict, str]:
+def manual_package(title: str, draft_seed: str | None = None, source_id: str | None = None) -> tuple[dict, str]:
     spec_id = "local-" + (draft_seed + "-spec" if draft_seed else uuid4().hex)
     sku_id = "local-" + (draft_seed + "-sku" if draft_seed else uuid4().hex)
     package = {
@@ -20,4 +20,6 @@ def manual_package(title: str, draft_seed: str | None = None) -> tuple[dict, str
         ]}], "spec_detail": {"value": [{"spec_detail_ids": [spec_id], "price": "",
                                         "stock_info": {"stock_num": None}, "sku_status": False}]}},
     }
+    if source_id:
+        package["goodsId"] = source_id
     return package, sku_id

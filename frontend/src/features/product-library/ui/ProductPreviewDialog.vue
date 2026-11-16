@@ -230,7 +230,7 @@ function applyLegacyMultiNormalization() {
   for (const field of categoryAttributes.value) {
     if (field.control !== 'multi' || field.ruleStatus !== 'confirmed' || touchedAttributes.value.includes(field.id)) continue
     let raw: ProductAttributeValue[] = []
-    if (product.platform === 'douyin' && product.sourceCategoryId === selectedCategory.value) {
+    if (['douyin', 'jushuitan'].includes(product.platform) && product.sourceCategoryId === selectedCategory.value) {
       const matches = product.attributes.filter((attribute) => attribute.id === field.id)
       if (matches.length === 1) raw = matches[0].valueItems?.length
         ? matches[0].valueItems.map((value) => ({ ...value })) : [{ valueId: '0', name: matches[0].value }]
@@ -344,7 +344,7 @@ function deleteSku(row: ProductSku) {
   if (canEdit.value && draft && window.confirm('确定删除这个 SKU 组合吗？保存后会同步修改商品数据包。')) draft.deleted = true
 }
 function restoreDeletedSkus() { for (const [index, sku] of skuDrafts.value.entries()) if (!initialSkuDrafts.value[index]?.deleted) sku.deleted = false }
-const canStructure = computed(() => canEdit.value && props.product?.platform === 'douyin' &&
+const canStructure = computed(() => canEdit.value && !!props.product && ['douyin', 'jushuitan'].includes(props.product.platform) &&
   specGroups.value.length > 0 && specGroups.value.every((group) => group.values.length > 0) &&
   skuDrafts.value.length > 0 && skuDrafts.value.every((row) => row.deleted || (row.specIds.length === specGroups.value.length &&
     row.specIds.every((id, index) => specGroups.value[index].values.some((value) => value.id === id)))))
@@ -664,7 +664,7 @@ watch([() => props.show, () => props.loading, () => props.categoryLookupEnabled,
   categoryAttributes.value = []; categorySchemaLoaded.value = false; categoryBusy.value = false; categoryError.value = false
   const product = props.product
   if (!props.show || props.loading || !props.categoryLookupEnabled || !product) return
-  if (product.platform === 'douyin' && product.sourceCategoryId) {
+  if (['douyin', 'jushuitan'].includes(product.platform) && product.sourceCategoryId) {
     selectedCategory.value = product.sourceCategoryId
     categoryLabel.value = product.category || '类目解析中'
   } else if (product.platform === 'pdd' && product.targetCategory?.length) {
@@ -673,11 +673,11 @@ watch([() => props.show, () => props.loading, () => props.categoryLookupEnabled,
   } else return
   // The source Douyin category is already known, so show missing fields without
   // requiring the user to discover the attributes tab first.
-  if (product.platform === 'douyin' || tab.value === 'attributes') void loadAttributes()
+  if (['douyin', 'jushuitan'].includes(product.platform) || tab.value === 'attributes') void loadAttributes()
 }, { immediate: true })
 watch(() => props.product?.category, (value) => {
   const product = props.product
-  if (props.show && product?.platform === 'douyin' && product.sourceCategoryId &&
+  if (props.show && product && ['douyin', 'jushuitan'].includes(product.platform) && product.sourceCategoryId &&
       selectedCategory.value === product.sourceCategoryId && !selectedParts.value) {
     categoryLabel.value = value || '类目待确认'
   }
@@ -1018,8 +1018,9 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
       <section class="product-preview__main" :inert="loading || undefined">
         <header class="product-preview__header">
           <div class="product-preview__meta">
-            <PlatformDisplay :code="product.platform" />
-            <span v-if="creating || product.id.startsWith('manual:')">手动创建</span>
+            <PlatformDisplay v-if="product.platform !== 'jushuitan'" :code="product.platform" />
+            <span v-else>聚水潭</span>
+            <span v-if="creating || (product.id.startsWith('manual:') && product.productId === product.id && product.platform !== 'jushuitan')">手动创建</span>
             <span v-if="!creating">商品 ID {{ product.productId }}</span>
             <span v-if="product.shopName">来源店铺 {{ product.shopName }}</span>
             <span>分组 {{ product.groupName ?? '未分组' }}</span>
@@ -1057,7 +1058,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <NFormItem label="抖店类目" required data-precheck-field="category">
               <template v-if="categoryLookupEnabled">
                 <CategoryPicker :key="product.id" :label="categoryLabel"
-                  :disabled="categoryBusy || (editable && (!canEdit || !['douyin', 'pdd'].includes(product.platform)))" @select="selectCategory" />
+                  :disabled="categoryBusy || (editable && (!canEdit || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)))" @select="selectCategory" />
                 <AppButton v-if="(product.platform === 'pdd' || isManualProduct) && editable" size="small" :loading="predictionBusy"
                   :disabled="!canEdit || categoryBusy" @click="runPrediction">预检类目</AppButton>
               </template>
@@ -1114,7 +1115,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                 :data-precheck-field="item.id">
                 <ProductMeasureInput v-if="item.control === 'measure' && item.measureTemplates?.length"
                   :model-value="attributeTextValue(item)" :templates="item.measureTemplates" :label="item.label"
-                  :disabled="!canEdit || !['douyin', 'pdd'].includes(product.platform)"
+                  :disabled="!canEdit || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)"
                   @update:model-value="setAttribute(item, $event)" />
                 <div v-else-if="editable && ['single', 'multi', 'multi_measure'].includes(item.control)" class="product-preview__attribute-input">
                   <AppSelect :model-value="attributeModelValue(item)"
@@ -1123,14 +1124,14 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                     :tag="item.allowCustom === true && (!item.maxValues || attributeValues(item).length < item.maxValues)"
                     :on-create="item.allowCustom === true ? createAttributeOption : undefined"
                     :render-label="renderAttributeLabel"
-                    :disabled="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd'].includes(product.platform)"
+                    :disabled="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)"
                     :placeholder="item.allowCustom === true ? '请选择、搜索或添加自定义值' : '请选择或搜索平台选项'"
                     @update:model-value="setAttribute(item, $event)" @update:values="setAttribute(item, $event)" />
                   <NText v-if="attributeProblem(item) === '包含无效选项'" type="error">该值不是平台允许的选项</NText>
                 </div>
                 <AppInput v-else :model-value="attributeTextValue(item)" :aria-label="item.label"
                   :inputmode="attributeControl(item) === 'number' ? 'decimal' : undefined"
-                  :readonly="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
+                  :readonly="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
               </NFormItem>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
