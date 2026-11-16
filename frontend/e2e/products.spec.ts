@@ -67,6 +67,34 @@ async function confirmImageLink(page: Page, value: string) {
   await page.getByRole('dialog').last().getByRole('button', { name: '确定', exact: true }).click()
 }
 
+test('采集商品优先显示来源 ID，聚水潭来源可筛选和打开', async ({ page }) => {
+  await fixtures(page)
+  const internalId = 'manual:12345678901234567890', sourceId = '3811680774151864442'
+  const item = { ...product(internalId, 'jushuitan'), source_product_id: sourceId,
+    title: '聚水潭来源测试商品', title_status: '采集完成', category_path: '' }
+  let selectedPlatform = ''
+  await page.route('**/api/v1/products?*', (route) => {
+    selectedPlatform = new URL(route.request().url()).searchParams.get('platform') || ''
+    return route.fulfill({ json: { items: [item], total: 1, totalIncluded: true, limit: 20, offset: 0 } })
+  })
+  await page.route(`**/api/v1/products/${internalId}`, (route) => route.fulfill({ json: {
+    product: item, skus: [], images: [], sourceCategoryId: null,
+  } }))
+  await page.goto('/#/products')
+  const row = page.locator('.n-data-table-tr').filter({ hasText: '聚水潭来源测试商品' })
+  await expect(row).toContainText(sourceId)
+  await expect(row).toContainText('聚水潭')
+  await expect(row).not.toContainText(internalId)
+  await page.getByLabel('来源平台').click()
+  await page.locator('.n-base-select-option:visible').filter({ hasText: '聚水潭' }).click()
+  await expect.poll(() => selectedPlatform).toBe('jushuitan')
+  await row.getByRole('button', { name: '编辑', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText(sourceId)
+  await expect(dialog).toContainText('聚水潭')
+  await expect(dialog).not.toContainText('手动创建')
+})
+
 test('后台刷新显示新采集商品，不遮罩表格或丢失编辑草稿', async ({ page }) => {
   await page.clock.install()
   await fixtures(page)

@@ -50,7 +50,7 @@ export interface ProductGroup {
 
 export interface ProductFilters {
   query: string
-  platform: '' | 'douyin' | 'pinduoduo'
+  platform: '' | 'douyin' | 'pinduoduo' | 'jushuitan'
   groupId: string
   capturedFrom: string
   capturedTo: string

@@ -29,7 +29,7 @@ def _worker_request(product_id: str, detail: dict, repository):
     platform = row["source_platform"]
     title = (row.get("title") or "").strip()
     prediction = not detail["targetCategory"] and (
-        platform == "pinduoduo" or (platform == "douyin" and product_id.startswith("manual:")))
+        platform == "pinduoduo" or (platform in {"douyin", "jushuitan"} and product_id.startswith("manual:")))
     if prediction and not detail.get("sourceCategoryId"):
         if platform == "pinduoduo":
             rows = repository.export_rows([product_id])
@@ -39,7 +39,7 @@ def _worker_request(product_id: str, detail: dict, repository):
         else:
             image_url = _usable_image_url(_main_image(detail))
         return ("predict", "0", title, image_url) if title and image_url else None
-    category = (detail.get("sourceCategoryId") if platform == "douyin" else
+    category = (detail.get("sourceCategoryId") if platform in {"douyin", "jushuitan"} else
                 detail["targetCategory"][-1]["id"] if platform == "pinduoduo" and detail["targetCategory"] else None)
     if category:
         return "schema", str(category), title or "商品", None
@@ -203,7 +203,7 @@ class PrecheckRunner:
         except WorkerSchemaResultError:
             finish(_worker_failure(claim, "平台预检结果无效或超过允许大小"))
             return
-        if (detail["product"]["source_platform"] == "douyin"
+        if (detail["product"]["source_platform"] in {"douyin", "jushuitan"}
                 and not claim["product_id"].startswith("manual:")):
             status = str(detail["product"].get("title_status") or "")
             if not status.endswith("商品库已修改"):

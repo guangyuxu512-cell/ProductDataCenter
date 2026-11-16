@@ -45,6 +45,7 @@ const categories = useQuery({
 })
 const categoryById = computed(() => new Map((categories.data.value ?? []).map((item) => [item.productId, item])))
 function categoryPath(row: ProductRow) {
+  if (row.source_platform === 'jushuitan') return row.category_path || '类目待确认'
   if (row.source_platform !== 'douyin') return row.category_path || '—'
   if (hasCategoryName(row.category_path)) return row.category_path
   const mapping = categoryById.value.get(row.product_id)
@@ -103,7 +104,8 @@ const groupOptions = computed(() => [
   { label: '全部分组', value: '' }, { label: '未分组', value: 'ungrouped' },
   ...groupItems.value.map((group) => ({ label: `${group.name}（${group.productCount}）`, value: group.groupId })),
 ])
-const platformOptions = [{ label: '全部平台', value: '' }, { label: '抖音/抖店', value: 'douyin' }, { label: '拼多多', value: 'pinduoduo' }]
+const platformOptions = [{ label: '全部平台', value: '' }, { label: '抖音/抖店', value: 'douyin' },
+  { label: '拼多多', value: 'pinduoduo' }, { label: '聚水潭', value: 'jushuitan' }]
 const viewItems = [{ key: 'all', label: '全部商品' }, { key: 'ungrouped', label: '未分组' }]
 const errorText = (error: unknown) => error instanceof Error ? error.message : '操作失败'
 
@@ -334,6 +336,7 @@ const columns = computed<DataTableColumns<ProductRow>>(() => [
   }, capabilities.data.value?.autoPrecheck ? { 'id-after': () => renderPrecheckStatus(row.product_id) } : undefined) },
   { title: '来源平台', key: 'source_platform', width: 110, align: 'center', render: (row) => {
     const code = platformCode(row.source_platform)
+    if (code === 'jushuitan') return '聚水潭'
     return code ? h(PlatformDisplay, { code }) : (row.source_platform || '—')
   } },
   { title: '分组', key: 'group_name', width: 130, align: 'center', render: (row) => row.group_name || '未分组' },

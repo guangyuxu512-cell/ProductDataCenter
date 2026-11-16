@@ -9,13 +9,27 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from sqlalchemy import Connection, Engine, text
+from sqlalchemy.exc import IntegrityError
 
 from .queries import ProductListOptions, build_product_list_queries, group_scope_sql
 from .pdd_categories import source_category_path
 from .source_attributes import source_attributes
 from .manual import manual_package
 from .editing import _sku_key, _validate_pdd_spec_images, apply_edit, move_spec_image_group
-from .errors import ProductEditConflict, ProductNotFound, ProductRequestError
+from .errors import ProductEditConflict, ProductNotFound, ProductRequestError, ProductSourceConflict
+
+
+def _source_identity_conflict(error: IntegrityError) -> bool:
+    original = error.orig
+    return (getattr(original, "sqlstate", None) == "23505" and
+            getattr(getattr(original, "diag", None), "constraint_name", None) == "products_source_identity_idx")
+
+
+def _require_unused_source(conn: Connection, platform: str, source_id: str | None, exclude_id: str = "") -> None:
+    if source_id and conn.execute(text("""SELECT 1 FROM products WHERE source_platform=:platform
+            AND (source_product_id=:source_id OR product_id=:source_id) AND product_id<>:exclude_id LIMIT 1"""),
+            {"platform": platform, "source_id": source_id, "exclude_id": exclude_id}).first():
+        raise ProductSourceConflict()
 
 
 def _original_category_id(levels) -> str | None:
@@ -64,7 +78,7 @@ def _is_precheck_neutral_edit(edit) -> bool:
 
 
 def _has_saved_category(platform: str, package: dict) -> bool:
-    if platform == "douyin":
+    if platform in {"douyin", "jushuitan"}:
         goods = package.get("goodsInfo")
         if not isinstance(goods, dict):
             return False
@@ -84,21 +98,65 @@ class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def create_manual(self, title: str, draft_seed: str | None = None, edit=None, group_id=None) -> str:
+    def create_manual(self, title: str, draft_seed: str | None = None, edit=None, group_id=None,
+                      source_platform: str = "douyin", source_product_id: str | None = None) -> str:
         product_id = "manual:" + str(uuid4().int)
-        package, sku_id = manual_package(title, draft_seed)
-        with self.engine.begin() as conn:
-            saved = conn.execute(text("""INSERT INTO products
-                (product_id, source_platform, source_product_id, title, title_status, sku_count, captured_at, uu_json, group_id)
-                VALUES (:id, 'douyin', NULL, :title, '手动创建', 1, now(), CAST(:package AS jsonb), :group_id)
-                RETURNING uu_json::text"""),
-                {"id": product_id, "title": title, "package": json.dumps(package, ensure_ascii=False), "group_id": group_id}).scalar_one()
-            conn.execute(text("""INSERT INTO product_skus(product_id, sku_id, sku_name, sort_order)
-                VALUES (:id, :sku, '规格: 默认', 0)"""), {"id": product_id, "sku": sku_id})
-            if edit is not None:
-                version = hashlib.sha256(saved.encode("utf-8")).hexdigest()
-                self.save_edit(product_id, edit.model_copy(update={"expectedVersion": version}), conn=conn, mark_modified=False)
+        package, sku_id = manual_package(title, draft_seed, source_product_id if source_platform == "douyin" else None)
+        try:
+            with self.engine.begin() as conn:
+                _require_unused_source(conn, source_platform, source_product_id)
+                saved = conn.execute(text("""INSERT INTO products
+                    (product_id, source_platform, source_product_id, title, title_status, sku_count, captured_at, uu_json, group_id)
+                    VALUES (:id, :platform, :source_id, :title, :status, 1, now(), CAST(:package AS jsonb), :group_id)
+                    RETURNING uu_json::text"""),
+                    {"id": product_id, "platform": source_platform, "source_id": source_product_id,
+                     "status": "采集完成" if source_product_id or source_platform == "jushuitan" else "手动创建",
+                     "title": title, "package": json.dumps(package, ensure_ascii=False), "group_id": group_id}).scalar_one()
+                conn.execute(text("""INSERT INTO product_skus(product_id, sku_id, sku_name, sort_order)
+                    VALUES (:id, :sku, '规格: 默认', 0)"""), {"id": product_id, "sku": sku_id})
+                if edit is not None:
+                    version = hashlib.sha256(saved.encode("utf-8")).hexdigest()
+                    self.save_edit(product_id, edit.model_copy(update={"expectedVersion": version}), conn=conn, mark_modified=False)
+        except IntegrityError as error:
+            if _source_identity_conflict(error):
+                raise ProductSourceConflict() from None
+            raise
         return product_id
+
+    def update_source_identity(self, product_id: str, source_product_id: str | None,
+                               source_platform: str | None, allowed_groups=None) -> dict:
+        if not re.fullmatch(r"manual:\d+", product_id):
+            raise ProductRequestError("仅支持为手动主键的商品补充来源信息")
+        try:
+            with self.engine.begin() as conn:
+                scope, params = group_scope_sql(allowed_groups)
+                row = conn.execute(text("""SELECT source_platform, source_product_id, uu_json AS package FROM products
+                    WHERE product_id=:id""" + scope + " FOR UPDATE"),
+                    {"id": product_id, **params}).mappings().first()
+                if row is None:
+                    raise ProductNotFound()
+                platform = source_platform or row["source_platform"]
+                current = row["source_product_id"]
+                if (current and source_product_id and current != source_product_id) or (
+                        current and platform != row["source_platform"]):
+                    raise ProductSourceConflict()
+                identity = current or source_product_id
+                package = row["package"] if isinstance(row["package"], dict) else {}
+                goods = package.get("goodsInfo") if isinstance(package.get("goodsInfo"), dict) else {}
+                package_ids = [value for value in (package.get("goodsId"), goods.get("goodsId"))
+                               if value is not None and value != ""]
+                if (platform != row["source_platform"] and package_ids) or (
+                        platform == "douyin" and identity and any(str(value) != identity for value in package_ids)):
+                    raise ProductSourceConflict()
+                _require_unused_source(conn, platform, identity, exclude_id=product_id)
+                if platform != row["source_platform"] or identity != current:
+                    conn.execute(text("""UPDATE products SET source_platform=:platform, source_product_id=:source_id
+                        WHERE product_id=:id"""), {"platform": platform, "source_id": identity, "id": product_id})
+                return {"productId": product_id, "sourcePlatform": platform, "sourceProductId": identity}
+        except IntegrityError as error:
+            if _source_identity_conflict(error):
+                raise ProductSourceConflict() from None
+            raise
 
     def list(self, options: ProductListOptions) -> dict:
         listing, count = build_product_list_queries(options)
@@ -133,7 +191,7 @@ class ProductRepository:
             source_category_id = None
             attributes = []
             target_category, target_attributes = [], []
-            if product["source_platform"] == "douyin":
+            if product["source_platform"] in {"douyin", "jushuitan"}:
                 # Read only the original category and attribute fields for this exact product;
                 # the paginated product list must not load package JSON.
                 levels = conn.execute(text("""SELECT uu_json #>> '{goodsInfo,catId4}',
@@ -399,7 +457,7 @@ class ProductRepository:
             sql = "UPDATE products SET uu_json=CAST(:package AS jsonb), title_status=:status"
             if edit.title is not None:
                 sql += ", title=:title"
-            if edit.category is not None and row["source_platform"] == "douyin":
+            if edit.category is not None and row["source_platform"] in {"douyin", "jushuitan"}:
                 for index in range(1, 5):
                     params[f"level{index}"] = edit.category[index - 1].name if index <= len(edit.category) else ""
                     sql += f", category_level_{index}=:level{index}"

@@ -27,7 +27,7 @@ export function normalizeMultiValues(target: CategoryAttribute, values: ProductA
 export function originalAttributeValues(
   target: CategoryAttribute, definitions: CategoryAttribute[], product: LibraryProduct, categoryId: string | null,
 ): ProductAttributeValue[] {
-  if (product.platform !== 'douyin' || !categoryId || categoryId !== product.sourceCategoryId) return []
+  if (!['douyin', 'jushuitan'].includes(product.platform) || !categoryId || categoryId !== product.sourceCategoryId) return []
   const byId = product.attributes.filter((item) => item.id && item.id === target.id)
   if (byId.length === 1) return normalizeMultiValues(target, valuesOf(byId[0]))
   if (byId.length > 1) return []

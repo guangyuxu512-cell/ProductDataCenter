@@ -16,10 +16,23 @@ describe('采集字段适配', () => {
     expect(capturedTime('2026-10-26T00:18:34.999999Z')).toBe('2026-10-26 08:18:34')
     expect(capturedTime(null)).toBe('—')
     expect(platformCode('pinduoduo')).toBe('pdd')
+    expect(platformCode('jushuitan')).toBe('jushuitan')
     expect(platformCode('unknown')).toBeNull()
   })
   it('不把未知平台伪装成抖音', () => {
     expect(() => detailView({ product: { source_platform: 'unknown' } } as NasDetail)).toThrow('暂不支持')
+  })
+  it('优先显示来源 ID，内部主键保留给编辑和 RPA', () => {
+    const detail = { product: { product_id: 'manual:12345678', source_platform: 'douyin',
+      source_product_id: '9876543210123456789', title: '商品', group_id: null, group_name: null,
+      category_path: '', current_price_min: null, current_price_max: null, main_image_url: null,
+      captured_at: null, updated_at: null, title_status: '', shop_name: '', category_level_4: '',
+      sku_count: 0, main_image_count: 0, detail_image_count: 0, sku_image_count: 0,
+      asset_rel_path: '', workbook_rel_path: '', raw_rel_path: '' }, skus: [], images: [] } as NasDetail
+    expect(detailView(detail)).toMatchObject({ id: 'manual:12345678', productId: '9876543210123456789' })
+    detail.product.source_platform = 'jushuitan'
+    detail.product.source_product_id = null
+    expect(detailView(detail)).toMatchObject({ platform: 'jushuitan', id: 'manual:12345678', productId: 'manual:12345678' })
   })
   it('规格图独立展示，不按顺序猜测 SKU 图归属', () => {
     const detail = {

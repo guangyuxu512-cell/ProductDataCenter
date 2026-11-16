@@ -49,10 +49,12 @@ export interface ProductHistory {
 
 export interface ProductAttributeValue { valueId: string; name: string }
 
+export type ProductSourcePlatform = PlatformCode | 'jushuitan'
+
 export interface LibraryProduct {
   id: string
   productId: string
-  platform: PlatformCode
+  platform: ProductSourcePlatform
   title: string
   shopName?: string
   skuCount?: number

@@ -33,3 +33,9 @@ class ProductEditConflict(AppError):
     code = "PRODUCT_EDIT_CONFLICT"
     message = "商品已被修改或重新采集，请刷新后重试"
     status_code = 409
+
+
+class ProductSourceConflict(AppError):
+    code = "PRODUCT_SOURCE_CONFLICT"
+    message = "来源商品已存在或来源信息与现有记录冲突"
+    status_code = 409

@@ -29,6 +29,24 @@ def current_uu_bytes(row: dict, remaining: int, public_base: str | None = None,
         value = canonical_package_text(value, public_base, legacy_bases)
     except (ValueError, TypeError):
         raise ExportUnavailable("UU 数据格式异常，无法导出") from None
+    # Older manually keyed imports have no goodsId in their saved UU.  The
+    # explicitly confirmed source ID is stored in PostgreSQL; expose it to
+    # export and RPA without rewriting the package or requeueing a precheck.
+    if (str(row.get("product_id") or "").startswith("manual:") and row.get("source_platform") == "douyin"
+            and row.get("source_product_id")):
+        try:
+            package = json.loads(value)
+            goods = package.get("goodsInfo") if isinstance(package, dict) else None
+            if not isinstance(goods, dict):
+                raise ValueError()
+            ids = [item for item in (package.get("goodsId"), goods.get("goodsId")) if item is not None and item != ""]
+            if any(isinstance(item, bool) or str(item) != row["source_product_id"] for item in ids):
+                raise ExportUnavailable("商品包来源 ID 与商品信息不一致")
+            if not ids:
+                package["goodsId"] = row["source_product_id"]
+                value = json.dumps(package, ensure_ascii=False, separators=(",", ":"))
+        except (ValueError, TypeError):
+            raise ExportUnavailable("UU 数据格式异常，无法导出") from None
     content = value.encode("utf-8")
     if len(content) > remaining:
         raise ExportUnavailable("导出资料过大，请减少商品数量")

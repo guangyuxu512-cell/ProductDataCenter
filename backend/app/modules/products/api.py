@@ -14,7 +14,8 @@ from .service import ProductService
 from .errors import ProductNotFound
 from .queries import parse_product_list_options
 from .schemas import (AssignGroup, AssignGroupResponse, Capabilities, DeleteGroupResponse,
-                      GroupName, GroupResponse, GroupsRead, ManualProductCreate, ProductDetail, ProductEdit, ProductIds, ProductPage)
+                      GroupName, GroupResponse, GroupsRead, ManualProductCreate, ProductDetail, ProductEdit, ProductIds,
+                      ProductPage, ProductSourceIdentityUpdate)
 
 router = APIRouter(prefix="/api/v1", tags=["product-library"], dependencies=[Depends(require_api_access)])
 
@@ -44,6 +45,7 @@ def capabilities(principal: Annotated[Principal, Depends(require_api_access)]):
                         productEdit=settings.enable_product_writes and all(can(p) for p in ("product.read", "product.create", "product.update", "product.delete", "image.upload")),
                         export=can("product.export"), categoryLookup=settings.douyin_category_lookup_enabled and settings.worker_precheck_enabled and can("category.read"),
                         autoPrecheck=settings.auto_precheck_enabled and can("precheck.read") and can("precheck.run"),
+                        sourceProductIdentity=True,
                         permissions=sorted(principal.permissions), groupIds=sorted(principal.groups) if principal.groups is not None else None)
 
 
@@ -58,9 +60,18 @@ def products(request: Request, service: Service, principal: Actor):
 @router.post("/products", dependencies=[Depends(require_permission("product.create")), Depends(require_product_writes)])
 def create_manual_product(body: ManualProductCreate, service: Service, principal: Actor):
     require_group(principal, body.groupId)
+    if body.sourcePlatform != "douyin" or body.sourceProductId is not None:
+        return service.create_manual(body.title, body.draftSeed, body.edit, group_id=body.groupId,
+                                     source_platform=body.sourcePlatform, source_product_id=body.sourceProductId)
     if body.groupId is None:
         return service.create_manual(body.title, body.draftSeed, body.edit)
     return service.create_manual(body.title, body.draftSeed, body.edit, group_id=body.groupId)
+
+
+@router.patch("/products/{product_id}/source-identity",
+              dependencies=[Depends(require_permission("product.update")), Depends(require_product_writes)])
+def update_source_identity(product_id: str, body: ProductSourceIdentityUpdate, service: Service, principal: Actor):
+    return service.update_source_identity(product_id, body.sourceProductId, body.sourcePlatform, principal.groups)
 
 
 @router.get("/product-groups", response_model=GroupsRead, dependencies=[Depends(require_permission("group.read"))])
