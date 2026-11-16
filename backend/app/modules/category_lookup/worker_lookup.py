@@ -83,7 +83,7 @@ def receive_lookup_result(settings, context, terminal, digest: str) -> None:
 
 def lookup(settings, *, operation: str, category_id: str, title: str,
            shop_id: UUID | None, image_url: str | None = None, timeout: float = 35.0):
-    """Wait only for the direct Worker response; no Session leaves that computer."""
+    """Wait for the direct Worker response; the product service never receives a Session."""
     if not settings.worker_precheck_enabled:
         raise LookupError("not_configured")
     central = CentralApplicationClient(settings)
