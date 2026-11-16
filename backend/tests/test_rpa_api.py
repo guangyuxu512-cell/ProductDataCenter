@@ -186,12 +186,20 @@ def test_jushuitan_rpa_requires_confirmed_target_not_source_category(client, mon
     assert client.get(path, headers=AUTH, params={"category_names": "required"}).status_code == 503
     assert seen == []
     package["douyinTarget"] = {"category": [{"id": "1000005069", "name": "居家日用"},
-                                            {"id": "1000005070", "name": "厨房"}]}
+                                            {"id": "1000005070", "name": "厨房"}],
+                               "attributes": {"1687": {"name": "品牌", "values": [
+                                   {"valueId": "596120136", "name": "无品牌"}]}}}
+    row["source_product_id"] = "资料编码-中文"
     row["uu_text"] = json.dumps(package)
     response = client.get(path, headers=AUTH, params={"category_names": "required"})
     assert response.status_code == 200 and seen == [["1000005069", "1000005070"]]
     assert response.json()["goodsInfo"]["catId1"] == "1000005069"
+    assert response.json()["goodsId"] == "资料编码-中文"
+    assert response.json()["category_properties_value"]["value"]["1687"][0]["value_name"] == "无品牌"
     assert client.get(path, headers=AUTH).json()["goodsInfo"]["catId1"] == "50003449"
+    package["goodsId"] = "另一个商品"
+    row["uu_text"] = json.dumps(package)
+    assert client.get(path, headers=AUTH, params={"category_names": "required"}).status_code == 503
 
 
 def test_management_category_resolution_does_not_expand_rpa_permissions(client, monkeypatch):

@@ -83,6 +83,31 @@ class CategoryResolver:
         except CacheUnavailable:
             raise CategoryResolutionError() from None
 
+    def cached_confirmed_leaf(self, levels: list[dict]) -> bool:
+        """Accept a collected target only if one cached shop tree confirms its full path."""
+        if not levels or len(levels) > 4:
+            return False
+        ids = [item.get("id") for item in levels]
+        if any(not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,20}", value)
+               or not value.strip("0") for value in ids):
+            return False
+        try:
+            branches = self.cache.tree_branches(["0", *ids[:-1]])
+        except CacheUnavailable:
+            return False
+        for tree in branches.values():
+            parent = "0"
+            for index, expected in enumerate(levels):
+                nodes = tree.get(parent)
+                matches = [node for node in nodes if isinstance(node, dict) and str(node.get("id")) == ids[index]] if isinstance(nodes, list) else []
+                if (len(matches) != 1 or _match(nodes, ids[index]) != expected
+                        or matches[0].get("isLeaf") is not (index == len(levels) - 1)):
+                    break
+                parent = ids[index]
+            else:
+                return True
+        return False
+
     def resolve(self, ids: list[str]) -> list[dict]:
         if not ids or len(ids) > 4 or any(not re.fullmatch(r"[0-9]{1,20}", item) or not item.strip("0") for item in ids):
             raise CategoryResolutionError()

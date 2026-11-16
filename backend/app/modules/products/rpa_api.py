@@ -51,6 +51,51 @@ class CategoryUnavailable(AppError):
     status_code = 503
 
 
+def _jushuitan_listing_package(package: dict, row: dict) -> dict:
+    """Project the confirmed target into a listing copy; never change saved UU."""
+    from .repository import _target_fields
+
+    goods = package.get("goodsInfo")
+    target = package.get("douyinTarget")
+    levels, _ = _target_fields(target)
+    if not isinstance(goods, dict) or not levels:
+        raise ValueError("missing target")
+    source_id = row.get("source_product_id")
+    ids = [value for value in (package.get("goodsId"), goods.get("goodsId")) if value not in (None, "")]
+    if any(isinstance(value, bool) or not isinstance(value, (str, int)) for value in ids):
+        raise ValueError("invalid identity")
+    if ids and (len({str(value) for value in ids}) != 1 or (source_id and str(ids[0]) != source_id)):
+        raise ValueError("conflicting identity")
+    if not ids:
+        package["goodsId"] = source_id or row["product_id"]
+    for level in range(1, 5):
+        goods[f"catId{level}"] = levels[level - 1]["id"] if level <= len(levels) else "0"
+    attrs = target.get("attributes", {})
+    if not isinstance(attrs, dict):
+        raise ValueError("invalid target attributes")
+    projected = {}
+    for identity, item in attrs.items():
+        if (not isinstance(identity, str) or not isinstance(item, dict)
+                or not isinstance(item.get("name"), str) or not item["name"].strip()
+                or not isinstance(item.get("values"), list)):
+            raise ValueError("invalid target attribute")
+        values = []
+        for value in item["values"]:
+            if (not isinstance(value, dict) or not isinstance(value.get("name"), str)
+                    or not value["name"].strip() or not isinstance(value.get("valueId"), str)):
+                raise ValueError("invalid target value")
+            values.append({"k": item["name"], "value_id": value["valueId"],
+                           "value_name": value["name"], "diy_type": 1 if value["valueId"] == "0" else 0})
+        if values:
+            projected[identity] = values
+    block = package.get("category_properties_value")
+    if not isinstance(block, dict):
+        block = {}
+        package["category_properties_value"] = block
+    block["value"] = projected
+    return package
+
+
 @router.get("/product-groups", response_model=GroupsRead)
 def groups(service: Service, principal: Actor):
     return service.groups() if principal.groups is None else service.groups(allowed_groups=principal.groups)
@@ -88,15 +133,10 @@ def product_uu(product_id: str, service: Service, principal: Actor,
             if rows[0].get("source_platform") == "jushuitan":
                 # Source category IDs are not Douyin IDs. Only a separately
                 # confirmed target may be projected into an RPA listing packet.
-                from .repository import _target_fields
                 package = json.loads(content)
-                if not isinstance(package, dict) or not isinstance(package.get("goodsInfo"), dict):
-                    raise CategoryResolutionError()
-                target, _ = _target_fields(package.get("douyinTarget"))
-                if not target:
-                    raise CategoryResolutionError()
-                for level in range(1, 5):
-                    package["goodsInfo"][f"catId{level}"] = target[level - 1]["id"] if level <= len(target) else "0"
+                if not isinstance(package, dict):
+                    raise ValueError("invalid package")
+                _jushuitan_listing_package(package, rows[0])
                 content = json.dumps(package, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             content = enrich_uu(content, CategoryResolver(service.settings))
         except (CategoryResolutionError, ValueError, TypeError, UnicodeError):

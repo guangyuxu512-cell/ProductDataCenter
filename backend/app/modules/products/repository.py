@@ -125,13 +125,18 @@ class ProductRepository:
         self.engine = engine
 
     def create_manual(self, title: str, draft_seed: str | None = None, edit=None, group_id=None,
-                      source_platform: str = "douyin", source_product_id: str | None = None) -> str:
+                      source_platform: str = "douyin", source_product_id: str | None = None,
+                      verified_douyin_target: list[dict] | None = None) -> str:
         product_id = "manual:" + str(uuid4().int)
         package, sku_id = manual_package(title, draft_seed, source_product_id if source_platform == "douyin" else None)
         if source_platform == "jushuitan" and edit is not None and edit.category:
             package["_productDataCenterJushuitanSource"] = {
                 "category": [item.model_dump() for item in edit.category],
             }
+            if verified_douyin_target:
+                attributes = {item.id: {"name": item.name, "values": [value.model_dump() for value in item.values]}
+                              for item in edit.attributes or []}
+                package["douyinTarget"] = {"category": deepcopy(verified_douyin_target), "attributes": attributes}
         try:
             with self.engine.begin() as conn:
                 _require_unused_source(conn, source_platform, source_product_id)
