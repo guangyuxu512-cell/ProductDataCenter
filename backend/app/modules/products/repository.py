@@ -120,6 +120,51 @@ def _target_fields(target):
     return category, attributes
 
 
+def _snapshot_category_attributes(package: dict, platform: str, row) -> dict:
+    """Build PATCH-compatible fields from the same package as the version."""
+    from app.modules.category_lookup.resolver import CategoryResolutionError, category_ids
+
+    goods = package.get("goodsInfo")
+    goods = goods if isinstance(goods, dict) else {}
+    source_id = _original_category_id([str(goods.get(f"catId{level}") or "") for level in range(4, 0, -1)])
+    category, attributes, unresolved_ids = [], [], []
+    if platform == "douyin":
+        try:
+            ids = category_ids(goods)
+        except CategoryResolutionError:
+            ids = []
+        meta = package.get("_productDataCenterCategory")
+        meta = meta if isinstance(meta, dict) and meta.get("platform") == "douyin" else {}
+        parts, _ = _target_fields({"category": meta.get("levels")})
+        if ids and [part["id"] for part in parts] == ids:
+            category = parts
+        elif ids:
+            names = [row.get(f"category_level_{index}") or "" for index in range(1, len(ids) + 1)]
+            path = row.get("category_path") or ""
+            if all(isinstance(name, str) and name.strip() and not name.strip().isdecimal() for name in names) and \
+                    path == " → ".join(names):
+                category = [{"id": identity, "name": name} for identity, name in zip(ids, names)]
+            else:
+                unresolved_ids = ids
+        block = package.get("category_properties_value")
+        details = package.get("goodsDetailInfo")
+        attributes = source_attributes(block.get("value") if isinstance(block, dict) else None,
+                                       details.get("product_format") if isinstance(details, dict) else None)
+    elif platform in {"pinduoduo", "pdd", "jushuitan"}:
+        category, attributes = _target_fields(package.get("douyinTarget"))
+        if platform == "jushuitan":
+            source, _ = _target_fields(package.get("_productDataCenterJushuitanSource"))
+            if source:
+                source_id = source[-1]["id"]
+        else:
+            source_id = None
+    return {"category": category, "sourceCategoryId": source_id,
+            "attributes": [{"id": item["id"], "name": item["name"],
+                            "values": [{"id": value["valueId"], "name": value["name"]}
+                                       for value in item["valueItems"]]} for item in attributes],
+            "_unresolvedCategoryIds": unresolved_ids}
+
+
 class ProductRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
@@ -200,7 +245,20 @@ class ProductRepository:
         ) as conn, conn.begin():
             items = conn.exec_driver_sql(*listing.dbapi()).mappings().all()
             total = conn.exec_driver_sql(*count.dbapi()).scalar_one() if count else None
-        return {"items": [self._display_source_category(item) for item in items],
+            # Only inspect packages belonging to this already filtered page. Keep
+            # the source category separate from the confirmed Douyin target.
+            target_ids = [item["product_id"] for item in items
+                          if item["source_platform"] in {"jushuitan", "pinduoduo", "pdd"}]
+            targets = {}
+            if target_ids:
+                rows = conn.execute(text("""SELECT product_id, uu_json #> '{douyinTarget,category}' AS category
+                    FROM products WHERE product_id=ANY(CAST(:ids AS text[]))"""), {"ids": target_ids}).mappings()
+                for row in rows:
+                    parts, _ = _target_fields({"category": row["category"]})
+                    targets[row["product_id"]] = " → ".join(part["name"] for part in parts)
+            result = [{**self._display_source_category(item),
+                       "target_category_path": targets.get(item["product_id"], "")} for item in items]
+        return {"items": result,
                 "total": total, "totalIncluded": count is not None,
                 "limit": options.limit, "offset": options.offset}
 
@@ -255,6 +313,7 @@ class ProductRepository:
                 FROM product_skus WHERE product_id=:id ORDER BY sort_order, sku_id"""), {"id": product_id}).mappings().all()
             images = conn.execute(text("""SELECT image_type, sort_order, rel_path, source_url
                 FROM product_images WHERE product_id=:id ORDER BY image_type, sort_order"""), {"id": product_id}).mappings().all()
+            product["target_category_path"] = " → ".join(part["name"] for part in target_category)
             return {"product": product, "skus": skus, "images": images,
                     "sourceCategoryId": source_category_id, "sourceAttributes": attributes,
                     "targetCategory": target_category, "targetAttributes": target_attributes}
@@ -338,7 +397,9 @@ class ProductRepository:
     def edit_snapshot(self, product_id: str, allowed_groups=None) -> dict:
         with self.engine.connect().execution_options(isolation_level="REPEATABLE READ", postgresql_readonly=True) as conn, conn.begin():
             scope, params = group_scope_sql(allowed_groups)
-            row = conn.execute(text("SELECT uu_json::text AS package, source_platform FROM products WHERE product_id=:id" + scope),
+            row = conn.execute(text("""SELECT uu_json::text AS package, source_platform, category_path,
+                category_level_1, category_level_2, category_level_3, category_level_4
+                FROM products WHERE product_id=:id""" + scope),
                                {"id": product_id, **params}).mappings().first()
             projection_ids = None
             if row is not None and row["source_platform"] in {"pinduoduo", "pdd"}:
@@ -406,6 +467,7 @@ class ProductRepository:
             except ProductRequestError:
                 spec_images_editable = False
         return {"version": hashlib.sha256(row["package"].encode("utf-8")).hexdigest(),
+                **_snapshot_category_attributes(package, row["source_platform"], row),
                 "specImageGroup": str(first.get("name") or ""), "specImages": spec_images,
                 "specGroups": spec_groups, "specImagesEditable": spec_images_editable, "skus": sku_rows}
 

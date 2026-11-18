@@ -10,6 +10,7 @@ export interface ProductRow {
   shop_name: string
   category_level_4: string
   category_path: string
+  target_category_path?: string
   current_price_min: string | null
   current_price_max: string | null
   sku_count: number

@@ -19,6 +19,7 @@ class ProductRead(BaseModel):
     shop_name: str = ""
     category_level_4: str = ""
     category_path: str = ""
+    target_category_path: str = ""
     current_price_min: Decimal | None = None
     current_price_max: Decimal | None = None
     sku_count: int = 0
@@ -163,6 +164,15 @@ class CategoryPart(BaseModel):
 class AttributeValueEdit(BaseModel):
     valueId: str = Field(default="0", max_length=200)
     name: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_id_alias(cls, value):
+        if isinstance(value, dict) and "id" in value:
+            if "valueId" in value and value["valueId"] != value["id"]:
+                raise ValueError("属性选项 id 与 valueId 不一致")
+            return {**value, "valueId": value["id"]}
+        return value
 
 
 class AttributeEdit(BaseModel):

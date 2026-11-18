@@ -13,7 +13,17 @@ const EXACT_PRODUCT_ID = /^(?:\d{8,}|[a-z][a-z0-9_-]{1,63}:\d{8,})$/i
 export interface SpecImage { id: string; name: string; url: string }
 export interface SpecGroup { index: number; name: string; values: SpecImage[]; movable: boolean; sourceIndex?: number | null }
 export interface EditableSku { skuId: string; specIds: string[]; price: string; stock: number | null; enabled: boolean | null; merchantCode: string }
-export interface EditSnapshot { version: string; specImageGroup: string; specImages: SpecImage[]; specGroups?: SpecGroup[]; specImagesEditable?: boolean; skus: EditableSku[] }
+export interface EditSnapshot {
+  version: string
+  category?: Array<{ id: string; name: string }>
+  sourceCategoryId?: string | null
+  attributes?: Array<{ id: string | null; name: string; values: Array<{ id: string; name: string }> }>
+  specImageGroup: string
+  specImages: SpecImage[]
+  specGroups?: SpecGroup[]
+  specImagesEditable?: boolean
+  skus: EditableSku[]
+}
 export interface ProductPatch {
   expectedVersion: string
   title?: string

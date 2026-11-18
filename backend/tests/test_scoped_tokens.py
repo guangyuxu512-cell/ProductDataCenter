@@ -112,6 +112,14 @@ def test_create_modify_and_revoke_applies_immediately_without_exposing_secret(cl
     assert c.get("/rpa/v1/product-groups", headers=RPA).status_code == 200
 
 
+def test_edit_snapshot_still_only_requires_product_update(client):
+    c, _ = client
+    issued = issue(c, permissions=["product.update"], groups=[GROUP_A])
+    scoped = bearer(issued["token"])
+    assert c.get(f"/api/v1/products/{PRODUCT}/edit", headers=scoped).status_code == 200
+    assert c.get(f"/api/v1/products/{PRODUCT}", headers=scoped).status_code == 403
+
+
 def test_delegation_never_grants_more_and_parent_revoke_disables_child(client):
     c, _ = client
     expiry = int(time.time()) + 3600

@@ -41,6 +41,13 @@ class ProductService:
     def edit_snapshot(self, product_id: str, allowed_groups=None):
         snapshot = (self.repository.edit_snapshot(product_id) if allowed_groups is None else
                     self.repository.edit_snapshot(product_id, allowed_groups=allowed_groups))
+        ids = snapshot.pop("_unresolvedCategoryIds", [])
+        if ids and not snapshot.get("category"):
+            from app.modules.category_lookup.resolver import CategoryResolutionError, CategoryResolver
+            try:
+                snapshot["category"] = CategoryResolver(self.settings).cached(ids) or []
+            except CategoryResolutionError:
+                pass
         return canonical_image_values(snapshot, self.settings.image_public_base_url,
                                       self.settings.image_legacy_base_urls)
 

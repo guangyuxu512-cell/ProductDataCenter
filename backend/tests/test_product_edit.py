@@ -5,11 +5,40 @@ from pydantic import ValidationError
 
 from app.modules.products.editing import apply_edit
 from app.modules.products.errors import ProductRequestError
-from app.modules.products.repository import _spec_image_values
+from app.modules.products.repository import _snapshot_category_attributes, _spec_image_values
 from app.modules.products.schemas import ProductEdit
 
 
 VERSION = "a" * 64
+
+
+def test_attribute_value_id_alias_round_trips_without_changing_existing_value_id():
+    edit = ProductEdit(expectedVersion=VERSION, attributes=[{"id": "1687", "name": "品牌", "values": [
+        {"id": "596120136", "name": "无品牌"}, {"valueId": "0", "name": "自定义"}]}])
+    assert [item.valueId for item in edit.attributes[0].values] == ["596120136", "0"]
+    with pytest.raises(ValidationError):
+        ProductEdit(expectedVersion=VERSION, attributes=[{"id": "1687", "name": "品牌", "values": [
+            {"id": "1", "valueId": "2", "name": "冲突"}]}])
+
+
+def test_edit_snapshot_returns_confirmed_target_and_preserves_unknown_source_ids():
+    package = {"goodsInfo": {"catId1": "1", "catId2": "2"},
+               "category_properties_value": {"value": {"1687": [
+                   {"k": "品牌", "value_id": "596120136", "value_name": "无品牌"}]}}}
+    row = {"category_level_1": "个人护理", "category_level_2": "化妆镜",
+           "category_path": "个人护理 → 化妆镜"}
+    saved = _snapshot_category_attributes(package, "douyin", row)
+    assert saved["category"] == [{"id": "1", "name": "个人护理"}, {"id": "2", "name": "化妆镜"}]
+    assert saved["attributes"] == [{"id": "1687", "name": "品牌", "values": [
+        {"id": "596120136", "name": "无品牌"}]}]
+    row["category_path"] = "来源名称不匹配"
+    unresolved = _snapshot_category_attributes(package, "douyin", row)
+    assert unresolved["category"] == [] and unresolved["_unresolvedCategoryIds"] == ["1", "2"]
+    package["douyinTarget"] = {"category": [{"id": "3", "name": "卫浴"}], "attributes": {
+        "12": {"name": "材质", "values": [{"valueId": "13", "name": "塑料"}]}}}
+    jst = _snapshot_category_attributes(package, "jushuitan", row)
+    assert jst["sourceCategoryId"] == "2" and jst["category"] == [{"id": "3", "name": "卫浴"}]
+    assert jst["attributes"] == [{"id": "12", "name": "材质", "values": [{"id": "13", "name": "塑料"}]}]
 
 
 def test_spec_image_falls_back_only_to_the_matching_unambiguous_id():
