@@ -45,7 +45,9 @@ def test_jushuitan_collector_chinese_id_verified_target_and_queue(engine, tmp_pa
         assert detail["targetCategory"] == category
         assert detail["targetAttributes"][0]["values"] == ["无品牌"]
         assert _worker_request(product, detail, repo)[:2] == ("schema", category[-1]["id"])
-        assert repo.list(parse_product_list_options({"sourceProductId": source, "platform": "jushuitan"}))["items"][0]["product_id"] == product
+        listed = repo.list(parse_product_list_options({"sourceProductId": source, "platform": "jushuitan"}))["items"][0]
+        assert listed["product_id"] == product
+        assert listed["target_category_path"] == "餐饮厨具 → 砧板/菜板"
         with engine.connect() as conn:
             assert conn.execute(text("SELECT state FROM product_prechecks WHERE product_id=:id"), {"id": product}).scalar_one() == "pending"
         with pytest.raises(ProductSourceConflict):
@@ -91,7 +93,9 @@ def test_source_identity_create_backfill_and_concurrent_deduplication(engine):
         assert detail["product"]["category_path"] == "砧板/菜板"
         assert detail["sourceCategoryId"] == "50003449" and detail["targetCategory"] == []
         assert _worker_request(jst, detail, repo)[:2] == ("predict", "0")
-        assert repo.list(parse_product_list_options({"sourceProductId": source_id, "platform": "jushuitan"}))["items"][0]["product_id"] == jst
+        listed = repo.list(parse_product_list_options({"sourceProductId": source_id, "platform": "jushuitan"}))["items"][0]
+        assert listed["product_id"] == jst
+        assert listed["target_category_path"] == ""
         with engine.connect() as conn:
             package = conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"), {"id": jst}).scalar_one()
         assert package["goodsInfo"]["catId1"] == "50003449"
@@ -103,6 +107,12 @@ def test_source_identity_create_backfill_and_concurrent_deduplication(engine):
         assert detail["targetCategory"][-1]["id"] == "1000005072"
         assert detail["targetAttributes"][0]["valueItems"][0]["name"] == "塑料"
         assert _worker_request(jst, detail, repo)[:2] == ("schema", "1000005072")
+        snapshot = repo.edit_snapshot(jst)
+        assert snapshot["sourceCategoryId"] == "50003449"
+        assert snapshot["category"] == detail["targetCategory"]
+        assert snapshot["attributes"] == [{"id": "12", "name": "材质", "values": [{"id": "13", "name": "塑料"}]}]
+        listed = repo.list(parse_product_list_options({"sourceProductId": source_id, "platform": "jushuitan"}))["items"][0]
+        assert listed["target_category_path"] == "居家日用 → 收纳整理工具"
         with engine.connect() as conn:
             saved = conn.execute(text("SELECT uu_json FROM products WHERE product_id=:id"), {"id": jst}).scalar_one()
         assert saved["goodsInfo"]["catId1"] == "50003449"
@@ -479,6 +489,18 @@ def test_real_schema_attribute_values_roundtrip_to_export_and_rpa(engine, tmp_pa
         actual = {item["id"]: [(value["valueId"], value["name"]) for value in item["valueItems"]]
                   for item in repo.detail(product_id)["sourceAttributes"]}
         assert actual == expected
+        snapshot = repo.edit_snapshot(product_id)
+        assert snapshot["category"][-1] == {"id": "1000001535", "name": "智力思维训练"}
+        assert snapshot["sourceCategoryId"] == "1000001535"
+        assert {item["id"]: [(value["id"], value["name"]) for value in item["values"]]
+                for item in snapshot["attributes"]} == expected
+        repo.save_edit(product_id, ProductEdit(expectedVersion=snapshot["version"], attributes=[
+            {"id": "2685", "name": "生产企业名称", "values": [{"id": "0", "name": "隔离测试企业"}]}]))
+        reread = repo.edit_snapshot(product_id)
+        assert next(item for item in reread["attributes"] if item["id"] == "2685")["values"] == [
+            {"id": "0", "name": "隔离测试企业"}]
+        assert {item["id"]: [(value["id"], value["name"]) for value in item["values"]]
+                for item in reread["attributes"] if item["id"] in expected} == expected
         settings = Settings(data_root=tmp_path, api_token="admin-test", rpa_api_token="rpa-test")
         app = create_application()
         app.dependency_overrides[get_settings] = lambda: settings
@@ -931,6 +953,11 @@ def test_pdd_target_category_and_attributes_round_trip_without_changing_source(e
         repo.save_edit(product_id, edit)
         detail = repo.detail(product_id)
         assert detail["targetCategory"] == [{"id": "10", "name": "家居"}, {"id": "11", "name": "收纳"}]
+        snapshot = repo.edit_snapshot(product_id)
+        assert snapshot["category"] == detail["targetCategory"]
+        assert snapshot["attributes"] == [{"id": "12", "name": "材质", "values": [{"id": "13", "name": "塑料"}]}]
+        listed = repo.list(parse_product_list_options({"productId": product_id}))["items"][0]
+        assert listed["target_category_path"] == "家居 → 收纳"
         assert detail["sourceAttributes"] == [{"id": "482", "name": "产地", "values": ["中国大陆"],
                                                 "valueItems": [{"valueId": "0", "name": "中国大陆"}]}]
         assert detail["targetAttributes"] == [{"id": "12", "name": "材质", "values": ["塑料"],

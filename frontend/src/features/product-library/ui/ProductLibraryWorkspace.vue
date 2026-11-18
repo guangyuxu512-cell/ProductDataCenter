@@ -45,7 +45,9 @@ const categories = useQuery({
 })
 const categoryById = computed(() => new Map((categories.data.value ?? []).map((item) => [item.productId, item])))
 function categoryPath(row: ProductRow) {
-  if (row.source_platform === 'jushuitan') return row.category_path || '类目待确认'
+  if (['jushuitan', 'pinduoduo', 'pdd'].includes(row.source_platform)) {
+    return row.target_category_path || '类目待确认'
+  }
   if (row.source_platform !== 'douyin') return row.category_path || '—'
   if (hasCategoryName(row.category_path)) return row.category_path
   const mapping = categoryById.value.get(row.product_id)

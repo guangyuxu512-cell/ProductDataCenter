@@ -108,7 +108,8 @@ test('聚水潭来源类目与抖店目标类目分开显示和保存', async ({
     groupWrites: true, productEdit: true, categoryLookup: true, autoPrecheck: false,
   } }))
   await page.route('**/api/v1/products?*', (route) => route.fulfill({ json: {
-    items: [item], total: 1, totalIncluded: true, limit: 20, offset: 0,
+    items: [{ ...item, target_category_path: target.map((part) => part.name).join(' → ') }],
+    total: 1, totalIncluded: true, limit: 20, offset: 0,
   } }))
   await page.route('**/api/v1/products/**', (route) => {
     const path = decodeURIComponent(new URL(route.request().url()).pathname)
@@ -136,6 +137,8 @@ test('聚水潭来源类目与抖店目标类目分开显示和保存', async ({
     return route.fulfill({ json: { shopId: shop, categoryId: body.categoryId, attributes: [] } })
   })
   await page.goto('/#/products')
+  const row = page.locator('.n-data-table-tbody tr').filter({ hasText: '聚水潭砧板' })
+  await expect(row).toContainText('类目待确认')
   await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
   await expect(dialog.getByText('来源类目：砧板/菜板')).toBeVisible()
@@ -148,11 +151,33 @@ test('聚水潭来源类目与抖店目标类目分开显示和保存', async ({
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => target.map((part) => part.id)).toEqual(['1000005069', '1000005072'])
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(row).toContainText('居家日用 → 收纳整理工具')
   await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await expect(dialog.getByText('来源类目：砧板/菜板')).toBeVisible()
   await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('居家日用 → 收纳整理工具')
   expect(schemaIds).not.toContain('50003449')
+})
+
+test('已确认的聚水潭和拼多多商品在列表显示抖店目标类目', async ({ page }) => {
+  await fixtures(page)
+  const items = [
+    { ...product('manual:10000000000000001', 'jushuitan'), title: '聚水潭弹跳芯',
+      category_path: '', target_category_path: '家装建材 → 卫浴配件 → 弹跳芯' },
+    { ...product('pdd:10000000000000002', 'pinduoduo'), title: '拼多多已确认',
+      category_path: '来源类目', target_category_path: '居家日用 → 收纳整理工具' },
+    { ...product('manual:10000000000000003', 'jushuitan'), title: '聚水潭未确认',
+      category_path: '来源类目', target_category_path: '' },
+  ]
+  await page.route('**/api/v1/products?*', (route) => route.fulfill({ json: {
+    items, total: items.length, totalIncluded: true, limit: 20, offset: 0,
+  } }))
+  await page.goto('/#/products')
+  const row = (title: string) => page.locator('.n-data-table-tbody tr').filter({ hasText: title })
+  await expect(row('聚水潭弹跳芯')).toContainText('家装建材 → 卫浴配件 → 弹跳芯')
+  await expect(row('拼多多已确认')).toContainText('居家日用 → 收纳整理工具')
+  await expect(row('聚水潭未确认')).toContainText('类目待确认')
+  await expect(row('聚水潭未确认')).not.toContainText('来源类目')
 })
 
 test('后台刷新显示新采集商品，不遮罩表格或丢失编辑草稿', async ({ page }) => {
