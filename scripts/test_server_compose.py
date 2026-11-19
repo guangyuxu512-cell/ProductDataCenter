@@ -62,6 +62,19 @@ def main():
             k: v for k, v in enabled.items() if k != "BACKEND_WORKER_PRECHECK_ENABLED"}
         env.pop("BACKEND_WORKER_PRECHECK_ENABLED")
 
+        # Recovery is opt-in and adds only a protected file reference.
+        env["PDC_TOKEN_RECOVERY_KEY_FILE"] = str(fake)
+        rendered = subprocess.run(
+            ["docker", "compose", "-f", str(root / "deploy/compose.server-preparation.yaml"),
+             "-f", str(root / "deploy/compose.central.yaml"),
+             "-f", str(root / "deploy/compose.token-recovery.yaml"), "config", "--format", "json"],
+            env=env, check=True, capture_output=True, text=True,
+        )
+        recovery = json.loads(rendered.stdout)["services"]["product-api"]
+        assert recovery["environment"]["BACKEND_TOKEN_RECOVERY_KEY_FILE"] == "/run/secrets/product_token_recovery_key"
+        assert {k: v for k, v in recovery["environment"].items() if k != "BACKEND_TOKEN_RECOVERY_KEY_FILE"} == default
+        assert any(item["source"] == "product_token_recovery_key" for item in recovery["secrets"])
+
         # `compose config` escapes dollar signs so its output can be reused as
         # Compose input; a container receives their single-dollar form.
         command = db["command"][0].replace("$$", "$")
