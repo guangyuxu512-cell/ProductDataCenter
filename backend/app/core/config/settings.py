@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     database_url_file: Path | None = None
     api_token: SecretStr | None = None
     api_token_file: Path | None = None
+    token_recovery_key: SecretStr | None = None
+    token_recovery_key_file: Path | None = None
     rpa_api_token: SecretStr | None = None
     rpa_api_token_file: Path | None = None
     # Separate credential registry on the existing persistent private mount.
@@ -88,6 +90,16 @@ class Settings(BaseSettings):
         if self.rpa_api_token_file:
             return self.rpa_api_token_file.read_text(encoding="utf-8").strip()
         return self.rpa_api_token.get_secret_value() if self.rpa_api_token else ""
+
+    def configured_token_recovery_key(self) -> str:
+        if self.token_recovery_key and self.token_recovery_key_file:
+            return ""
+        if self.token_recovery_key_file:
+            try:
+                return self.token_recovery_key_file.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeError):
+                return ""
+        return self.token_recovery_key.get_secret_value() if self.token_recovery_key else ""
 
     def configured_scoped_token_store(self) -> Path | None:
         if self.scoped_token_store_file:
