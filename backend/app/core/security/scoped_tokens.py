@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import base64
 import hashlib
 import hmac
 import json
@@ -37,6 +38,7 @@ PERMISSIONS = {
     "token.create": "发放不超过自身权限的 Token",
     "token.update": "修改自己发放的 Token",
     "token.revoke": "撤销自己发放的 Token",
+    "token.reveal": "查看自己发放的可恢复 Token",
 }
 ALL_PERMISSIONS = frozenset(PERMISSIONS)
 TOKEN_PATTERN = re.compile(r"^pdc_([0-9a-f]{32})_([A-Za-z0-9_-]{43})$")
@@ -60,6 +62,14 @@ class TokenNotFound(Exception):
 
 
 class TokenInputError(Exception):
+    pass
+
+
+class TokenRecoveryUnavailable(Exception):
+    pass
+
+
+class TokenNotRecoverable(Exception):
     pass
 
 
@@ -237,7 +247,15 @@ class TokenStore:
         finally:
             db.close()
 
-    def create(self, actor: Principal, name: str, permissions: list[str], groups: list[str] | None, expires_at: int | None):
+    @staticmethod
+    def _recoverable_value(token_id: str, recovery_key: str | None) -> str:
+        if recovery_key is None or len(recovery_key.encode("utf-8")) < 32:
+            raise TokenRecoveryUnavailable()
+        digest = hmac.digest(recovery_key.encode("utf-8"), b"product-api-token-v1\0" + bytes.fromhex(token_id), "sha256")
+        suffix = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+        return "pdc_" + token_id + "_" + suffix
+
+    def create(self, actor: Principal, name: str, permissions: list[str], groups: list[str] | None, expires_at: int | None, recoverable: bool = False, recovery_key: str | None = None):
         name = name.strip() if isinstance(name, str) else ""
         if not name or len(name) > 100:
             raise TokenInputError("Token 名称不能为空且不能超过 100 字")
@@ -248,6 +266,8 @@ class TokenStore:
         try:
             db.execute("BEGIN IMMEDIATE")
             actor = self._actor(db, actor, "token.create")
+            if recoverable and not actor.has("token.reveal"):
+                raise TokenDenied("没有查看 Token 的权限")
             _validate_grant(actor, permissions, groups, expires_at)
             if not actor.master:
                 current, depth = actor.token_id, 1
@@ -258,7 +278,7 @@ class TokenStore:
                 if depth > MAX_DEPTH:
                     raise TokenDenied("Token 授权层级过深")
             token_id = uuid4().hex
-            secret = "pdc_" + token_id + "_" + secrets.token_urlsafe(32)
+            secret = self._recoverable_value(token_id, recovery_key) if recoverable else "pdc_" + token_id + "_" + secrets.token_urlsafe(32)
             now = int(time.time())
             db.execute("""INSERT INTO scoped_tokens(id,token_hash,name,permissions,groups_json,parent_id,
                        expires_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)""",
@@ -270,6 +290,27 @@ class TokenStore:
             record = self._record(db.execute("SELECT * FROM scoped_tokens WHERE id=?", (token_id,)).fetchone())
             db.commit()
             return record, secret
+        except sqlite3.Error:
+            db.rollback()
+            raise TokenStoreUnavailable() from None
+        finally:
+            db.close()
+
+    def reveal(self, actor: Principal, token_id: str, recovery_key: str | None):
+        db = self._connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            actor = self._actor(db, actor, "token.reveal")
+            row = self._target(db, actor, token_id)
+            if row["revoked_at"] is not None:
+                raise TokenNotFound()
+            raw = self._recoverable_value(token_id, recovery_key)
+            if not hmac.compare_digest(hashlib.sha256(raw.encode("ascii")).digest(), row["token_hash"]):
+                raise TokenNotRecoverable()
+            db.execute("INSERT INTO scoped_token_events(actor_id,token_id,action,occurred_at) VALUES (?,?,?,?)",
+                       (actor.token_id, token_id, "reveal", int(time.time())))
+            db.commit()
+            return raw
         except sqlite3.Error:
             db.rollback()
             raise TokenStoreUnavailable() from None

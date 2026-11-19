@@ -73,6 +73,50 @@ def bearer(secret):
     return {"Authorization": "Bearer " + secret}
 
 
+def test_recoverable_tokens_require_permission_and_do_not_change_old_tokens(client, monkeypatch):
+    c, path = client
+    old = issue(c, name="old")
+    monkeypatch.setenv("BACKEND_TOKEN_RECOVERY_KEY", "test-only-recovery-key-0123456789abcdef")
+    get_settings.cache_clear()
+    assert c.post(f"/api/v1/tokens/{old['record']['id']}/reveal", headers=ADMIN).status_code == 409
+    assert c.get("/api/v1/products", headers=bearer(old["token"])).status_code == 200
+
+    response = c.post("/api/v1/tokens", headers=ADMIN, json={"name": "new", "permissions": ["product.read"], "recoverable": True})
+    assert response.status_code == 201
+    issued = response.json()
+    token_id, secret = issued["record"]["id"], issued["token"]
+    assert secret.encode() not in path.read_bytes()
+    for _ in range(2):
+        revealed = c.post(f"/api/v1/tokens/{token_id}/reveal", headers=ADMIN)
+        assert revealed.status_code == 200 and revealed.json()["token"] == secret
+        assert revealed.headers["cache-control"] == "no-store"
+    assert secret not in c.get("/api/v1/tokens", headers=ADMIN).text
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT count(*) FROM scoped_token_events WHERE token_id=? AND action='reveal'", (token_id,)).fetchone()[0] == 2
+
+    limited = issue(c, permissions=["token.create", "token.read", "product.read"])
+    body = {"name": "child", "permissions": ["product.read"], "recoverable": True}
+    assert c.post("/api/v1/tokens", headers=bearer(limited["token"]), json=body).status_code == 403
+    assert c.post(f"/api/v1/tokens/{token_id}/reveal", headers=bearer(limited["token"])).status_code == 403
+
+    monkeypatch.delenv("BACKEND_TOKEN_RECOVERY_KEY")
+    get_settings.cache_clear()
+    assert c.post(f"/api/v1/tokens/{token_id}/reveal", headers=ADMIN).status_code == 503
+    assert c.get("/api/v1/products", headers=bearer(secret)).status_code == 200
+
+
+def test_scoped_reveal_is_limited_to_direct_children(client, monkeypatch):
+    c, _ = client
+    monkeypatch.setenv("BACKEND_TOKEN_RECOVERY_KEY", "test-only-recovery-key-0123456789abcdef")
+    get_settings.cache_clear()
+    parent = issue(c, permissions=["token.create", "token.reveal", "product.read"])
+    other = issue(c, name="other")
+    auth = bearer(parent["token"])
+    child = c.post("/api/v1/tokens", headers=auth, json={"name": "child", "permissions": ["product.read"], "recoverable": True}).json()
+    assert c.post(f"/api/v1/tokens/{child['record']['id']}/reveal", headers=auth).json()["token"] == child["token"]
+    assert c.post(f"/api/v1/tokens/{other['record']['id']}/reveal", headers=auth).status_code == 404
+
+
 def test_request_log_records_public_token_id_but_never_secret(client, monkeypatch):
     from app.core.logging.request import request_logger
 

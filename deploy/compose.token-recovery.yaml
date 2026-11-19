@@ -1,0 +1,12 @@
+# Opt-in overlay: retain the independent key outside the product database and image.
+# The host file must be readable by the existing product-api user (1026:100).
+services:
+  product-api:
+    environment:
+      BACKEND_TOKEN_RECOVERY_KEY_FILE: /run/secrets/product_token_recovery_key
+    secrets:
+      - product_token_recovery_key
+
+secrets:
+  product_token_recovery_key:
+    file: ${PDC_TOKEN_RECOVERY_KEY_FILE:?protected recovery key file required}

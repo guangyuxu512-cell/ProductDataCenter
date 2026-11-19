@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 from app.core.config import get_settings
 from app.core.security.access import require_api_access, require_permission
 from app.core.security.scoped_tokens import (PERMISSIONS, Principal, TokenDenied, TokenInputError,
-                                             TokenInvalid, TokenNotFound, TokenStore, TokenStoreUnavailable)
+                                             TokenInvalid, TokenNotFound, TokenNotRecoverable,
+                                             TokenRecoveryUnavailable, TokenStore, TokenStoreUnavailable)
 
 router = APIRouter(prefix="/api/v1/tokens", tags=["access-tokens"], dependencies=[Depends(require_api_access)])
 
@@ -16,6 +17,7 @@ class TokenCreate(BaseModel):
     permissions: list[str] = Field(min_length=1, max_length=50)
     groupIds: list[str] | None = Field(default=None, max_length=200)
     expiresAt: int | None = None
+    recoverable: bool = False
 
 
 class TokenUpdate(BaseModel):
@@ -42,6 +44,10 @@ def _call(operation, *args):
         raise HTTPException(401, "访问未授权", headers={"WWW-Authenticate": "Bearer"}) from None
     except TokenStoreUnavailable:
         raise HTTPException(503, "Token 权限服务暂不可用") from None
+    except TokenRecoveryUnavailable:
+        raise HTTPException(503, "Token 查看密钥尚未配置") from None
+    except TokenNotRecoverable:
+        raise HTTPException(409, "该 Token 无法从当前服务恢复，请使用原有保存位置") from None
 
 
 @router.get("/permissions")
@@ -63,8 +69,17 @@ def list_tokens(response: Response, principal: Annotated[Principal, Depends(requ
 def create_token(body: TokenCreate, response: Response,
                  principal: Annotated[Principal, Depends(require_permission("token.create"))]):
     response.headers["Cache-Control"] = "no-store"
-    record, secret = _call(_store().create, principal, body.name, body.permissions, body.groupIds, body.expiresAt)
+    key = get_settings().configured_token_recovery_key() if body.recoverable else None
+    record, secret = _call(_store().create, principal, body.name, body.permissions, body.groupIds, body.expiresAt, body.recoverable, key)
     return {"token": secret, "record": record}
+
+
+@router.post("/{token_id}/reveal")
+def reveal_token(token_id: str, response: Response,
+                 principal: Annotated[Principal, Depends(require_permission("token.reveal"))]):
+    response.headers["Cache-Control"] = "no-store"
+    secret = _call(_store().reveal, principal, token_id, get_settings().configured_token_recovery_key())
+    return {"token": secret}
 
 
 @router.patch("/{token_id}")
