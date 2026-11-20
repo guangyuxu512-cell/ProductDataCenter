@@ -32,6 +32,18 @@ def test_existing_real_field_samples_keep_identical_rules_after_transport(catego
     assert [field.model_dump() for field in result.attributes] == expected
 
 
+def test_nested_material_options_survive_supported_worker_result():
+    # The input is a sanitized subset of a live page model, wrapped here in
+    # the existing result envelope; this is not a captured Worker response.
+    path = Path(__file__).parent / "fixtures" / "douyin-runtime-material-1000010274.json"
+    item = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(json.dumps(envelope([item], category_id="1000010274"), ensure_ascii=False))
+    field = read_worker_schema(payload, expected_category_id="1000010274").attributes[0]
+    assert field.control == "multi_measure"
+    assert [(option.label, option.value) for option in field.options] == [
+        ("棉", "棉"), ("牛角瓜纤维", "牛角瓜纤维"), ("木棉", "木棉"), ("亚麻", "亚麻")]
+
+
 def test_large_options_and_unknown_measure_rules_are_preserved():
     items = [
         {"id": "hidden", "hidden": True},

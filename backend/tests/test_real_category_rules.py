@@ -7,6 +7,37 @@ from app.modules.category_lookup.attribute_values import measure_valid, normaliz
 from app.modules.category_lookup.client import normalize_fields
 
 
+def test_runtime_material_enum_options_are_read_from_the_measure_template():
+    """Four of 250 options from the live page, not product attribute values."""
+    from copy import deepcopy
+
+    from app.modules.category_lookup.attribute_values import multi_measure_valid
+
+    path = Path(__file__).parent / "fixtures/douyin-runtime-material-1000010274.json"
+    item = json.loads(path.read_text(encoding="utf-8"))
+    # A top-level option can carry a different ID for the same name. The
+    # platform's composite input uses the nested enum as the option set.
+    item["options"] = [{"value_id": "123", "value_name": "棉"}]
+    field = Attribute.model_validate(normalize_fields([item])[0])
+    assert field.control == "multi_measure" and field.ruleStatus == "confirmed"
+    assert [(option.label, option.value) for option in field.options] == [
+        ("棉", "棉"), ("牛角瓜纤维", "牛角瓜纤维"), ("木棉", "木棉"), ("亚麻", "亚麻")]
+    assert multi_measure_valid("棉100%", field.multiMeasureRule, field.options) is True
+
+    # Old workers do not send the nested list; retain their top-level options.
+    old_worker = deepcopy(item)
+    del old_worker["additions"]["measure_templates"][0]["value_modules"][0]["value_options"]
+    old_field = Attribute.model_validate(normalize_fields([old_worker])[0])
+    assert [(option.label, option.value) for option in old_field.options] == [("棉", "123")]
+
+    # Do not reinterpret options of an unsupported composite form.
+    unknown = deepcopy(item)
+    unknown["additions"]["measure_templates"][0]["value_modules"][0]["input_type"] = "enum"
+    unknown_field = normalize_fields([unknown])[0]
+    assert unknown_field["ruleStatus"] == "unknown"
+    assert unknown_field["options"] == [{"label": "棉", "value": "123"}]
+
+
 def test_real_worker_multi_measure_rule_validates_existing_and_multiple_values():
     """The real device's sanitized metadata and one of 147 real options."""
     from copy import deepcopy
