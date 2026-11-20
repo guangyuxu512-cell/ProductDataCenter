@@ -905,7 +905,7 @@ test('直接展开完整类目并手动更新缓存，切换商品后不沿用�
   await expect(dialog.getByText('材质', { exact: true })).toHaveCount(0)
 })
 
-test('类目树按店铺切换，使用所选店铺读取属性', async ({ page }) => {
+test('逐级列表漏项时可按平台搜索结果选择同一路径', async ({ page }) => {
   await fixtures(page)
   const first = '00000000-0000-4000-8000-000000000111'
   const second = '00000000-0000-4000-8000-000000000222'
@@ -924,8 +924,18 @@ test('类目树按店铺切换，使用所选店铺读取属性', async ({ page 
         : shopId === second ? [{ id: '1000011128', name: '热水袋', isLeaf: true, enabled: true }] : []
     return route.fulfill({ json: { shopId, parentId: body.parentId, items, fromCache: true, shops } })
   })
+  const searchCalls: Array<{ shopId: string; keyword: string }> = []
+  await page.route('**/api/v1/category-lookup/search', (route) => {
+    searchCalls.push(route.request().postDataJSON())
+    return route.fulfill({ json: { shopId: first, candidates: [
+      { id: '1000011128', name: '热水袋', path: '居家日用 > 其他家居日用 > 热水袋' },
+      { id: '999', name: '热水袋', path: '其他一级 > 其他二级 > 热水袋' },
+    ] } })
+  })
+  let schemaFailures = 1
   await page.route('**/api/v1/category-lookup/schema', (route) => {
     schemaCalls.push(route.request().postDataJSON())
+    if (schemaFailures-- > 0) return route.fulfill({ status: 502, json: { detail: '临时失败' } })
     return route.fulfill({ json: { categoryId: '1000011128', attributes: [] } })
   })
   await page.goto('/#/products')
@@ -936,17 +946,20 @@ test('类目树按店铺切换，使用所选店铺读取属性', async ({ page 
   await picker.getByRole('button', { name: '居家日用', exact: true }).click()
   await picker.getByRole('button', { name: '其他家居日用', exact: true }).click()
   await expect(picker.getByRole('button', { name: '热水袋' })).toHaveCount(0)
-  await picker.getByLabel('类目查询店铺').click()
-  await page.locator('.n-base-select-option:visible').filter({ hasText: '乙店' }).click()
-  await picker.getByRole('button', { name: '居家日用', exact: true }).click()
-  await picker.getByRole('button', { name: '其他家居日用', exact: true }).click()
+  await picker.getByPlaceholder('搜索第 3 级类目').fill('热水袋')
+  await picker.getByRole('button', { name: '搜索平台类目' }).click()
+  await expect(picker.getByRole('button', { name: '热水袋', exact: true })).toHaveCount(1)
+  await picker.getByRole('button', { name: '热水袋', exact: true }).click()
+  await expect(page.getByText('读取类目属性失败，请重试')).toBeVisible()
+  await expect(picker.getByRole('button', { name: '确认' })).toBeDisabled()
   await picker.getByRole('button', { name: '热水袋', exact: true }).click()
   await picker.getByRole('button', { name: '确认' }).click()
   await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('居家日用 → 其他家居日用 → 热水袋')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
-  await expect.poll(() => schemaCalls.length).toBe(1)
-  expect(schemaCalls[0]).toMatchObject({ shopId: second, categoryId: '1000011128' })
-  expect(treeCalls.some((call) => call.shopId === second && call.parentId === '0')).toBe(true)
+  await expect.poll(() => schemaCalls.length).toBeGreaterThanOrEqual(1)
+  expect(schemaCalls.every((call) => call.shopId === first && call.categoryId === '1000011128')).toBe(true)
+  expect(searchCalls).toEqual([{ shopId: first, keyword: '热水袋' }])
+  expect(treeCalls.every((call) => call.shopId === first || call.shopId === null)).toBe(true)
 })
 
 test('抖音原类目直接取属性，切换商品时不使用旧响应', async ({ page }) => {
@@ -1399,7 +1412,8 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   await fixtures(page)
   let version = 'a'.repeat(64)
   let sourceAttributes: Array<{ id: string; name: string; values: string[];
-    valueItems: Array<{ valueId: string; name: string }> }> = []
+    valueItems: Array<{ valueId: string; name: string }> }> = [{ id: '989', name: '尺寸', values: ['旧尺寸'],
+      valueItems: [{ valueId: '50', name: '旧尺寸' }] }]
   let payload: ProductPatch | null = null
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, importProducts: false, categoryLookup: true,
@@ -1435,6 +1449,8 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
         ruleStatus: 'confirmed' },
       { id: '4', label: '自定义多选', required: false, options: [], control: 'multi', allowCustom: true,
         ruleStatus: 'confirmed' },
+      { id: '989', label: '尺寸', required: false, options: [{ label: '旧尺寸', value: '50' }],
+        control: 'single', allowCustom: true, ruleStatus: 'confirmed', maxValues: null },
     ],
   } }))
   await page.goto('/#/products')
@@ -1463,12 +1479,17 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   await page.getByText('添加『定制甲』', { exact: true }).click()
   await customOnly.locator('input').fill('定制乙')
   await page.getByText('添加『定制乙』', { exact: true }).click()
+  const size = dialog.locator('.n-form-item').filter({ hasText: '尺寸' })
+  await size.locator('.n-base-selection').click()
+  await size.locator('input').fill('22*14.7*9.3cm')
+  await page.getByText('添加『22*14.7*9.3cm』', { exact: true }).click()
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => payload).not.toBeNull()
   expect(payload?.attributes).toEqual([
     { id: '1', name: '面料', values: [{ name: '棉', valueId: '10' }, { name: '亚麻', valueId: '0' }] },
     { id: '3', name: '容量', values: [{ name: '12.5', valueId: '0' }] },
     { id: '4', name: '自定义多选', values: [{ name: '定制甲', valueId: '0' }, { name: '定制乙', valueId: '0' }] },
+    { id: '989', name: '尺寸', values: [{ name: '22*14.7*9.3cm', valueId: '0' }] },
   ])
 
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
@@ -1482,12 +1503,16 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
   await expect(dialog.getByRole('textbox', { name: '容量' })).toHaveValue('12.5')
   await expect(dialog.locator('.n-form-item').filter({ hasText: '自定义多选' })).toContainText('定制甲')
   await expect(dialog.locator('.n-form-item').filter({ hasText: '自定义多选' })).toContainText('定制乙')
+  await expect(dialog.locator('.n-form-item').filter({ hasText: '尺寸' })).toContainText('22*14.7*9.3cm')
 })
 
-test('真实复合材质规则的原值与自定义值保存并重新打开', async ({ page }) => {
+for (const scenario of [
+  { name: '平台返回选项', categoryId: '1000003443', options: [{ label: '聚酯纤维', value: '5673' }] },
+  { name: '平台未返回选项', categoryId: '1000003461', options: [] },
+]) test(`真实复合材质规则的原值与自定义值保存并重新打开：${scenario.name}`, async ({ page }) => {
   await fixtures(page)
   let version = 'a'.repeat(64)
-  let values = [{ valueId: '0', name: '聚酯纤维100%' }]
+  let values = [{ valueId: '0', name: '聚酯纤维100%' }, { valueId: '77', name: '原始未识别' }]
   let saved: ProductPatch | undefined
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, categoryLookup: true,
@@ -1504,15 +1529,15 @@ test('真实复合材质规则的原值与自定义值保存并重新打开', as
       version = 'b'.repeat(64)
       return route.fulfill({ json: { version } })
     }
-    return route.fulfill({ json: { product: product(firstId), sourceCategoryId: '1000003443',
+    return route.fulfill({ json: { product: product(firstId), sourceCategoryId: scenario.categoryId,
       sourceAttributes: [{ id: '785', name: '面料材质', values: values.map((item) => item.name), valueItems: values }],
       targetCategory: [], targetAttributes: [],
       skus: [{ sku_id: 'sku-1', sku_name: '规格: 默认', current_price: '19.99', image_rel_path: '', sort_order: 0 }],
       images: [{ image_type: 'main', sort_order: 0, rel_path: '', source_url: image }] } })
   })
   await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
-    shopId: '00000000-0000-4000-8000-000000000111', categoryId: '1000003443', attributes: [{
-      id: '785', label: '面料材质', required: false, options: [{ label: '聚酯纤维', value: '5673' }],
+    shopId: '00000000-0000-4000-8000-000000000111', categoryId: scenario.categoryId, attributes: [{
+      id: '785', label: '面料材质', required: false, options: scenario.options,
       control: 'multi_measure', allowCustom: true, ruleStatus: 'confirmed', maxValues: 10,
       multiMeasureRule: { units: [{ label: '%', value: '15' }], minimum: 0.01, maximum: 100, precision: 2, dataType: 'float' },
     }],
@@ -1523,24 +1548,35 @@ test('真实复合材质规则的原值与自定义值保存并重新打开', as
   await expect(dialog.getByRole('textbox', { name: '商品标题' })).toBeEditable()
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   const material = dialog.locator('[data-precheck-field="785"]')
-  await expect(material).toContainText('聚酯纤维100%')
-  // Clicking the middle of the control can hit the selected tag's delete X
-  // on narrower Linux fonts. Click its label to open without deleting it.
-  await material.getByText('聚酯纤维100%', { exact: true }).click()
-  await expect(material).toContainText('聚酯纤维100%')
-  await material.locator('input:visible').fill('棉20%')
-  await page.getByText('添加『棉20%』', { exact: true }).click()
+  await expect(material).toContainText('聚酯纤维')
+  await expect(material.getByRole('textbox', { name: '面料材质 数值 1' })).toHaveValue('100')
+  await expect(material.getByRole('textbox', { name: '面料材质 原值 2' })).toHaveValue('原始未识别')
+  await material.getByRole('button', { name: '添加', exact: true }).click()
+  const third = material.locator('.product-multi-measure__row').nth(2)
+  await third.locator('.n-base-selection').click()
+  await third.locator('input').first().fill('棉')
+  await page.getByText('添加『棉』', { exact: true }).click()
+  await third.getByRole('textbox', { name: '面料材质 数值 3' }).fill('20')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => saved?.attributes?.[0]?.values).toEqual([
-    { valueId: '0', name: '聚酯纤维100%' }, { valueId: '0', name: '棉20%' },
+    { valueId: '0', name: '聚酯纤维100%' }, { valueId: '77', name: '原始未识别' }, { valueId: '0', name: '棉20%' },
   ])
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await page.reload()
   await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
-  await expect(dialog.locator('[data-precheck-field="785"]')).toContainText('聚酯纤维100%')
-  await expect(dialog.locator('[data-precheck-field="785"]')).toContainText('棉20%')
+  const reopened = dialog.locator('[data-precheck-field="785"]')
+  await expect(reopened).toContainText('聚酯纤维')
+  await expect(reopened.getByRole('textbox', { name: '面料材质 数值 1' })).toHaveValue('100')
+  await expect(reopened.getByRole('textbox', { name: '面料材质 原值 2' })).toHaveValue('原始未识别')
+  await expect(reopened).toContainText('棉')
+  await expect(reopened.getByRole('textbox', { name: '面料材质 数值 3' })).toHaveValue('20')
+  await reopened.getByRole('button', { name: '删除面料材质第 3 项' }).click()
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => saved?.attributes?.[0]?.values).toEqual([
+    { valueId: '0', name: '聚酯纤维100%' }, { valueId: '77', name: '原始未识别' },
+  ])
 })
 
 test('列表单删和批删确认后刷新数量及选择', async ({ page }) => {

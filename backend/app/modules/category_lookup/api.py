@@ -30,6 +30,7 @@ _shop_limits: dict[UUID, BoundedSemaphore] = {}
 
 class SearchBody(BaseModel):
     keyword: str = Field(min_length=1, max_length=120)
+    shopId: UUID | None = None
 
     @field_validator("keyword")
     @classmethod
@@ -374,7 +375,17 @@ def search(body: SearchBody, response: Response,
            central: Annotated[CentralApplicationClient, Depends(get_central)],
            lookup: Annotated[DouyinCategoryClient, Depends(get_lookup)]):
     response.headers["Cache-Control"] = "no-store"
-    shop_id, candidates = _auto_shop(central, lookup, lambda shop: lookup.search(shop, body.keyword))
+    if body.shopId is None:
+        shop_id, candidates = _auto_shop(central, lookup, lambda shop: lookup.search(shop, body.keyword))
+    else:
+        if not any(shop.shop_id == body.shopId for shop in _available(central, lookup)):
+            raise HTTPException(403, "店铺未授权或登录状态不可用")
+        with _limit(body.shopId):
+            try:
+                candidates = lookup.search(body.shopId, body.keyword)
+            except LookupError as error:
+                _fail(error)
+        shop_id = body.shopId
     return SearchResponse(shopId=shop_id, candidates=candidates)
 
 

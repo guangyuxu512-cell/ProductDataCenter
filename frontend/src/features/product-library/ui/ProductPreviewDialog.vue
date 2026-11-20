@@ -24,6 +24,7 @@ import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
 import CategoryPicker from './CategoryPicker.vue'
 import ProductImageList from './ProductImageList.vue'
 import ProductMeasureInput from './ProductMeasureInput.vue'
+import ProductMultiMeasureInput from './ProductMultiMeasureInput.vue'
 import ProductRangeNavigator from './ProductRangeNavigator.vue'
 
 const props = withDefaults(defineProps<{
@@ -208,6 +209,11 @@ function setAttribute(item: CategoryAttribute, value: string | number | Array<st
       return []
     })
   }
+  if (!touchedAttributes.value.includes(item.id)) touchedAttributes.value.push(item.id)
+}
+function setMultiMeasure(item: CategoryAttribute, values: ProductAttributeValue[]) {
+  if (item.maxValues && values.length > item.maxValues && values.length > attributeValues(item).length) return
+  attributeInputs.value[item.id] = values.map((value) => ({ ...value }))
   if (!touchedAttributes.value.includes(item.id)) touchedAttributes.value.push(item.id)
 }
 function applyPddSourceAttributes() {
@@ -1058,7 +1064,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             </NFormItem>
             <NFormItem label="抖店类目" required data-precheck-field="category">
               <template v-if="categoryLookupEnabled">
-                <CategoryPicker :key="product.id" :label="categoryLabel"
+                <CategoryPicker :key="product.id" :label="categoryLabel" :title="draftTitle || product.title"
                   :disabled="categoryBusy || (editable && (!canEdit || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)))" @select="selectCategory" />
                 <AppButton v-if="(product.platform === 'pdd' || isManualProduct) && editable" size="small" :loading="predictionBusy"
                   :disabled="!canEdit || categoryBusy" @click="runPrediction">预检类目</AppButton>
@@ -1118,6 +1124,11 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   :model-value="attributeTextValue(item)" :templates="item.measureTemplates" :label="item.label"
                   :disabled="!canEdit || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)"
                   @update:model-value="setAttribute(item, $event)" />
+                <ProductMultiMeasureInput v-else-if="editable && item.control === 'multi_measure' && item.multiMeasureRule"
+                  :model-value="attributeValues(item)" :options="item.options" :rule="item.multiMeasureRule"
+                  :allow-custom="item.allowCustom === true" :max-values="item.maxValues" :label="item.label"
+                  :disabled="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)"
+                  @update:model-value="setMultiMeasure(item, $event)" />
                 <div v-else-if="editable && ['single', 'multi', 'multi_measure'].includes(item.control)" class="product-preview__attribute-input">
                   <AppSelect :model-value="attributeModelValue(item)"
                     :options="attributeOptions(item)" clearable filterable show-on-focus

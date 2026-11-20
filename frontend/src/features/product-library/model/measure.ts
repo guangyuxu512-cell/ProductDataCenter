@@ -1,6 +1,7 @@
 import type { CategoryAttribute, MeasureTemplate } from '../api/category-lookup'
 
 export interface MeasurePart { value: string; unit: string }
+export interface MultiMeasurePart { name: string; value: string; unit: string }
 
 const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 
@@ -70,4 +71,36 @@ export function validMultiMeasure(rule: CategoryAttribute['multiMeasureRule'], v
     if (name && numeric.test(number) && validNumber(number)) valid.add(JSON.stringify([name, number]))
   }
   return valid.size === 1 ? true : valid.size > 1 ? null : false
+}
+
+// Only split old composite values when the platform options or numeric rules
+// identify exactly one possible split. Ambiguous values stay untouched.
+export function parseMultiMeasure(rule: CategoryAttribute['multiMeasureRule'], value: string,
+  options: CategoryAttribute['options'] = []): MultiMeasurePart | null {
+  if (!rule?.units.length) return null
+  const source = value.trim()
+  const unit = [...rule.units].sort((a, b) => b.label.length - a.label.length)
+    .find((item) => item.label && source.endsWith(item.label))
+  if (!unit) return null
+  const text = source.slice(0, -unit.label.length).trim()
+  const numeric = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/u
+  const matches = options.filter((option) => option.label && text.startsWith(option.label))
+    .map((option) => ({ name: option.label, value: text.slice(option.label.length).trim(), unit: unit.label }))
+    .filter((part) => numeric.test(part.value))
+  if (matches.length === 1) return matches[0]
+  if (matches.length > 1) return null
+  const candidates: MultiMeasurePart[] = []
+  for (let index = 1; index < text.length; index++) {
+    const name = text.slice(0, index).trim(), number = text.slice(index).trim()
+    const valueNumber = Number(number)
+    const decimals = number.includes('.') ? number.split('.')[1].length : 0
+    if (name && numeric.test(number) && Number.isFinite(valueNumber) &&
+        (rule.dataType !== 'int' || Number.isInteger(valueNumber)) &&
+        (rule.minimum === null || valueNumber >= rule.minimum) &&
+        (rule.maximum === null || valueNumber <= rule.maximum) &&
+        (rule.precision === null || decimals <= rule.precision)) {
+      candidates.push({ name, value: number, unit: unit.label })
+    }
+  }
+  return candidates.length === 1 ? candidates[0] : null
 }

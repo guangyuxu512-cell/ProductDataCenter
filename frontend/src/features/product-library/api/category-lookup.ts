@@ -63,9 +63,9 @@ export async function fetchCategoryTree(parentId = '0', shopId: string | null = 
   )).data
 }
 
-export async function searchCategoryCandidates(keyword: string) {
+export async function searchCategoryCandidates(keyword: string, shopId: string | null = null) {
   return (await http.post<{ shopId: string; candidates: CategoryCandidate[] }>(
-    '/category-lookup/search', { keyword },
+    '/category-lookup/search', { keyword, shopId },
   )).data
 }
 
