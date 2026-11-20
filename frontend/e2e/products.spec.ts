@@ -1507,8 +1507,11 @@ test('属性下拉空输入可展开，自定义规则能保存并读回', async
 })
 
 for (const scenario of [
-  { name: '平台返回选项', categoryId: '1000003443', options: [{ label: '聚酯纤维', value: '5673' }] },
-  { name: '平台未返回选项', categoryId: '1000003461', options: [] },
+  { name: '平台返回选项', categoryId: '1000003443', options: [{ label: '聚酯纤维', value: '5673' }], selectExisting: false },
+  { name: '平台未返回选项', categoryId: '1000003461', options: [], selectExisting: false },
+  { name: '平台材质模板选项', categoryId: '1000010274', options: [
+    { label: '棉', value: '棉' }, { label: '牛角瓜纤维', value: '牛角瓜纤维' },
+  ], selectExisting: true },
 ]) test(`真实复合材质规则的原值与自定义值保存并重新打开：${scenario.name}`, async ({ page }) => {
   await fixtures(page)
   let version = 'a'.repeat(64)
@@ -1555,7 +1558,11 @@ for (const scenario of [
   const third = material.locator('.product-multi-measure__row').nth(2)
   await third.locator('.n-base-selection').click()
   await third.locator('input').first().fill('棉')
-  await page.getByText('添加『棉』', { exact: true }).click()
+  if (scenario.selectExisting) {
+    await page.locator('.n-base-select-option:visible').filter({ hasText: /^棉$/ }).click()
+  } else {
+    await page.getByText('添加『棉』', { exact: true }).click()
+  }
   await third.getByRole('textbox', { name: '面料材质 数值 3' }).fill('20')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => saved?.attributes?.[0]?.values).toEqual([
