@@ -345,6 +345,30 @@ def test_tree_reports_available_shops_and_keeps_each_shop_tree_separate(settings
     get_settings.cache_clear()
 
 
+def test_platform_search_can_use_tree_context_without_expanding_access(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    first, second = uuid4(), uuid4()
+    calls = []
+    class SearchLookup(FakeLookup):
+        def search(self, shop, keyword):
+            calls.append((shop, keyword))
+            return [{"id": "1000011128", "name": "热水袋", "path": "居家日用 > 其他家居日用 > 热水袋"}]
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: FakeCentral([first, second])
+    app.dependency_overrides[get_lookup] = lambda: SearchLookup(settings)
+    with TestClient(app) as client:
+        path = '/api/v1/category-lookup/search'
+        auth = {"Authorization": "Bearer " + PRODUCT_KEY}
+        response = client.post(path, json={"shopId": str(second), "keyword": "热水袋"}, headers=auth)
+        assert response.status_code == 200 and response.json()['shopId'] == str(second)
+        assert response.json()['candidates'][0]['id'] == '1000011128'
+        assert calls == [(second, '热水袋')]
+        assert client.post(path, json={"shopId": str(uuid4()), "keyword": "热水袋"}, headers=auth).status_code == 403
+        assert calls == [(second, '热水袋')]
+    get_settings.cache_clear()
+
+
 def test_live_schema_change_compares_same_shop_and_fences_inflight(settings):
     from app.modules.category_lookup.cache import CategoryCache
     cache = CategoryCache(settings.category_cache_file)
