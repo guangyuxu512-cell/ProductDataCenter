@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 from fastapi import Response
 
 from app.modules.category_lookup.api import AutoSchemaBody, PredictResponse, _usable_image_url, prediction_input, schema_auto
+from app.modules.category_lookup.cache import CategoryCache
 from app.modules.category_lookup.client import DouyinCategoryClient, LookupError, normalize_predictions
 from app.modules.central.client import CentralApplicationClient, CentralConnectionError
 from app.modules.products.repository import ProductRepository
@@ -232,6 +233,18 @@ class PrecheckRunner:
         result = check_product(claim["product_id"], self.service, self.central, self.lookup,
                                schema_override=schema)
         finish(result)
+        # A live precheck can discover changed platform rules while the editor
+        # still has a persistent form cache. Compare with the same shop first;
+        # on change invalidate this category so the next read fetches live rules.
+        if self.lookup is not None:
+            try:
+                shop_id = str(uuid5(NAMESPACE_URL, "ecommerce-worker:douyin:" + context.platform_shop_id))
+                CategoryCache(self.lookup.settings.category_cache_file).invalidate_changed_schema(
+                    shop_id, context.category_id, [field.model_dump(mode="json") for field in schema.attributes])
+            except Exception:
+                # The precheck has already been saved; cache trouble must not
+                # turn it into a failed delivery or cause a duplicate check.
+                log.warning("无法比较预检与属性缓存；已保留预检结果")
 
     def run(self):
         with ThreadPoolExecutor(max_workers=15, thread_name_prefix="product-check") as pool:

@@ -57,7 +57,8 @@ export async function predictManualCategory(title: string, imageUrl: string) {
 }
 
 export async function fetchCategoryTree(parentId = '0', shopId: string | null = null, refresh = false) {
-  return (await http.post<{ shopId: string; parentId: string; items: CategoryTreeItem[]; fromCache: boolean }>(
+  return (await http.post<{ shopId: string; parentId: string; items: CategoryTreeItem[]; fromCache: boolean;
+    shops: Array<{ id: string; name: string }> }>(
     '/category-lookup/tree', { parentId, shopId, refresh },
   )).data
 }

@@ -138,11 +138,17 @@ class TreeItem(BaseModel):
     enabled: bool
 
 
+class TreeShop(BaseModel):
+    id: UUID
+    name: str
+
+
 class TreeResponse(BaseModel):
     shopId: UUID
     parentId: str
     items: list[TreeItem]
     fromCache: bool
+    shops: list[TreeShop]
 
 
 class Option(BaseModel):
@@ -310,12 +316,14 @@ def category_tree(body: TreeBody, response: Response,
     if body.refresh and body.parentId != "0":
         raise HTTPException(422, "请从根类目更新类目缓存")
     cache = CategoryCache(lookup.settings.category_cache_file)
+    tree_shops = [TreeShop(id=shop.shop_id, name=shop.display_name) for shop in shops]
     candidates = [shop for shop in shops if body.shopId is None or shop.shop_id == body.shopId]
     if not body.refresh:
         for shop in candidates:
             items = _cache_call(cache.get, "tree", str(shop.shop_id), body.parentId)
             if items is not None:
-                return TreeResponse(shopId=shop.shop_id, parentId=body.parentId, items=items, fromCache=True)
+                return TreeResponse(shopId=shop.shop_id, parentId=body.parentId, items=items, fromCache=True,
+                                    shops=tree_shops)
     version = _cache_call(cache.tree_version)
     if body.shopId:
         with _limit(body.shopId):
@@ -328,7 +336,7 @@ def category_tree(body: TreeBody, response: Response,
         shop_id, items = _auto_shop(central, lookup, lambda shop: lookup.category_options(shop, body.parentId))
     _cache_call(cache.put, "tree", str(shop_id), body.parentId, items,
                 tree_version=version, refresh_tree=body.refresh)
-    return TreeResponse(shopId=shop_id, parentId=body.parentId, items=items, fromCache=False)
+    return TreeResponse(shopId=shop_id, parentId=body.parentId, items=items, fromCache=False, shops=tree_shops)
 
 
 @router.post("/resolve-products")

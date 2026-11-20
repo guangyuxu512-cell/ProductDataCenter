@@ -2,7 +2,7 @@ import json
 from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 import pytest
@@ -83,6 +83,26 @@ def test_submit_once_then_direct_result_uses_product_rules(settings):
     result_claim, result = runner.queue.complete.call_args.args
     assert result_claim == claim
     assert result["status"] == "needs_completion" and result["issues"] == ["品牌未填写"]
+
+
+def test_completed_worker_precheck_invalidates_changed_category_form(settings, tmp_path):
+    from app.modules.category_lookup.cache import CategoryCache
+    from app.modules.prechecks.worker_schema import read_worker_schema
+    settings = settings.model_copy(update={"category_cache_file": tmp_path / "cache.sqlite3"})
+    runner = make_runner(settings, lambda request: httpx.Response(500))
+    runner.lookup = SimpleNamespace(settings=settings)
+    claim = {"product_id": "12345678", "revision": 7, "attempts": 1}
+    runner.queue.claim_worker_result.return_value = ("claimed", claim)
+    item = {"id": "12", "label": "材质", "required": True, "type": "text"}
+    live = read_worker_schema(success_result([item]), expected_category_id="1000001535")
+    fields = [field.model_dump(mode="json") for field in live.attributes]
+    shop = str(uuid5(NAMESPACE_URL, "ecommerce-worker:douyin:shop-1"))
+    cache = CategoryCache(settings.category_cache_file)
+    cache.put("schema", shop, "1000001535", [{**fields[0], "required": False}])
+    assert runner.accept_worker_delivery(delivery_context(),
+        SimpleNamespace(status="success", result=success_result([item])), "a" * 64)
+    runner.queue.complete.assert_called_once()
+    assert cache.get("schema", shop, "1000001535") is None
 
 
 @pytest.mark.parametrize(("status", "result", "expected"), [
