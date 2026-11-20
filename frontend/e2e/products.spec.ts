@@ -905,6 +905,50 @@ test('直接展开完整类目并手动更新缓存，切换商品后不沿用�
   await expect(dialog.getByText('材质', { exact: true })).toHaveCount(0)
 })
 
+test('类目树按店铺切换，使用所选店铺读取属性', async ({ page }) => {
+  await fixtures(page)
+  const first = '00000000-0000-4000-8000-000000000111'
+  const second = '00000000-0000-4000-8000-000000000222'
+  const shops = [{ id: first, name: '甲店' }, { id: second, name: '乙店' }]
+  const treeCalls: Array<{ parentId: string; shopId: string | null }> = []
+  const schemaCalls: Array<{ shopId: string; categoryId: string }> = []
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: false, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route('**/api/v1/category-lookup/tree', (route) => {
+    const body = route.request().postDataJSON() as { parentId: string; shopId: string | null }
+    treeCalls.push(body)
+    const shopId = body.shopId || first
+    const items = body.parentId === '0' ? [{ id: '1000005069', name: '居家日用', isLeaf: false, enabled: true }]
+      : body.parentId === '1000005069' ? [{ id: '1000005081', name: '其他家居日用', isLeaf: false, enabled: true }]
+        : shopId === second ? [{ id: '1000011128', name: '热水袋', isLeaf: true, enabled: true }] : []
+    return route.fulfill({ json: { shopId, parentId: body.parentId, items, fromCache: true, shops } })
+  })
+  await page.route('**/api/v1/category-lookup/schema', (route) => {
+    schemaCalls.push(route.request().postDataJSON())
+    return route.fulfill({ json: { categoryId: '1000011128', attributes: [] } })
+  })
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('textbox', { name: '抖店类目' }).click()
+  const picker = page.getByRole('dialog', { name: '选择抖店类目' })
+  await picker.getByRole('button', { name: '居家日用', exact: true }).click()
+  await picker.getByRole('button', { name: '其他家居日用', exact: true }).click()
+  await expect(picker.getByRole('button', { name: '热水袋' })).toHaveCount(0)
+  await picker.getByLabel('类目查询店铺').click()
+  await page.locator('.n-base-select-option:visible').filter({ hasText: '乙店' }).click()
+  await picker.getByRole('button', { name: '居家日用', exact: true }).click()
+  await picker.getByRole('button', { name: '其他家居日用', exact: true }).click()
+  await picker.getByRole('button', { name: '热水袋', exact: true }).click()
+  await picker.getByRole('button', { name: '确认' }).click()
+  await expect(dialog.getByRole('textbox', { name: '抖店类目' })).toHaveValue('居家日用 → 其他家居日用 → 热水袋')
+  await dialog.getByRole('tab', { name: '商品属性' }).click()
+  await expect.poll(() => schemaCalls.length).toBe(1)
+  expect(schemaCalls[0]).toMatchObject({ shopId: second, categoryId: '1000011128' })
+  expect(treeCalls.some((call) => call.shopId === second && call.parentId === '0')).toBe(true)
+})
+
 test('抖音原类目直接取属性，切换商品时不使用旧响应', async ({ page }) => {
   await fixtures(page)
   const secondId = String(BigInt(firstId) + 1n)
@@ -1777,18 +1821,19 @@ test('连续保存后旧 revision 晚返回不会恢复旧缺项，刷新仍读�
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('tab', { name: '商品属性' }).click()
   await expect(dialog.getByText('自动预检待处理：品牌未填写')).toBeVisible()
+  const precheckStatus = dialog.locator('.product-preview__missing')
   await dialog.getByRole('textbox', { name: '品牌' }).fill('测试品牌')
-  await expect(dialog.getByRole('status')).not.toContainText('品牌未填写')
+  await expect(precheckStatus).not.toContainText('品牌未填写')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
-  await expect(dialog.getByRole('status')).toContainText('预检中')
+  await expect(precheckStatus).toContainText('预检中')
 
   await dialog.getByRole('tab', { name: '基本信息' }).click()
   await dialog.getByRole('textbox', { name: '商品标题' }).fill('第二次保存标题')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => saveCount).toBe(2)
   expect(runCount).toBe(0)
-  await expect(dialog.getByRole('status')).toContainText('排队中')
-  await expect(dialog.getByRole('status')).not.toContainText('品牌未填写')
+  await expect(precheckStatus).toContainText('排队中')
+  await expect(precheckStatus).not.toContainText('品牌未填写')
   await expect(dialog.getByText('自动预检：已通过')).toBeVisible({ timeout: 7_000 })
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await page.reload()

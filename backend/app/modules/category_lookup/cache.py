@@ -14,6 +14,19 @@ class CacheUnavailable(Exception):
 SCHEMA_FORMAT_VERSION = 3
 
 
+def _schema_signature(attributes: list[dict]) -> list[str]:
+    """Compare rules independently of platform field and option ordering."""
+    signature = []
+    for original in attributes:
+        field = dict(original)
+        options = field.get("options")
+        if isinstance(options, list):
+            field["options"] = sorted(options, key=lambda item: json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        signature.append(json.dumps(field, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    return sorted(signature)
+
+
 class CategoryCache:
     def __init__(self, path: Path | None):
         self.path = path
@@ -132,6 +145,34 @@ class CategoryCache:
             with self._transaction() as db:
                 db.execute("INSERT OR IGNORE INTO category_cache_meta(name, version) VALUES (?, 0)", ("schema:" + key,))
                 return int(db.execute("SELECT version FROM category_cache_meta WHERE name=?", ("schema:" + key,)).fetchone()[0])
+        except (sqlite3.Error, OSError, ValueError, TypeError):
+            raise CacheUnavailable() from None
+
+    def invalidate_changed_schema(self, shop_id: str, key: str, attributes: list[dict]) -> bool:
+        """Invalidate cached forms for a category after that shop's form changes.
+
+        Never write a precheck response into the cache: it may have started before
+        a manual refresh. The version fence also prevents older in-flight reads
+        from repopulating the invalidated category.
+        """
+        try:
+            live_signature = _schema_signature(attributes)
+            with self._transaction() as db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute("SELECT payload FROM category_cache WHERE kind='schema' AND shop_id=? AND cache_key=?",
+                                 (shop_id, key)).fetchone()
+                if row is None:
+                    return False
+                cached = json.loads(row[0])
+                if (not isinstance(cached, dict) or cached.get("formatVersion") != SCHEMA_FORMAT_VERSION
+                        or not isinstance(cached.get("attributes"), list)):
+                    return False
+                if _schema_signature(cached["attributes"]) == live_signature:
+                    return False
+                db.execute("INSERT OR IGNORE INTO category_cache_meta(name,version) VALUES (?,0)", ("schema:" + key,))
+                db.execute("UPDATE category_cache_meta SET version=version+1 WHERE name=?", ("schema:" + key,))
+                db.execute("DELETE FROM category_cache WHERE kind='schema' AND cache_key=?", (key,))
+                return True
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
 

@@ -317,6 +317,55 @@ def test_old_inflight_tree_result_cannot_repopulate_after_manual_refresh(setting
     assert cache.get("schema", "other-shop", "123") is None
 
 
+def test_tree_reports_available_shops_and_keeps_each_shop_tree_separate(settings, monkeypatch):
+    monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
+    get_settings.cache_clear()
+    first, second = sorted((uuid4(), uuid4()), key=str)
+    class Shops(FakeCentral):
+        def list_shops(self):
+            return [CentralShop(shop_id=first, display_name="甲店", platform="douyin", session_status="valid"),
+                    CentralShop(shop_id=second, display_name="乙店", platform="douyin", session_status="valid")]
+    class Lookup(FakeLookup):
+        def category_options(self, shop, parent):
+            return ([{"id": "1000011128", "name": "热水袋", "isLeaf": True, "enabled": True}]
+                    if shop == second else [])
+    app = create_application()
+    app.dependency_overrides[get_central] = lambda: Shops([first, second])
+    app.dependency_overrides[get_lookup] = lambda: Lookup(settings)
+    with TestClient(app) as client:
+        headers = {"Authorization": "Bearer " + PRODUCT_KEY}
+        path = '/api/v1/category-lookup/tree'
+        first_response = client.post(path, json={"shopId": str(first)}, headers=headers).json()
+        second_response = client.post(path, json={"shopId": str(second)}, headers=headers).json()
+        assert first_response['items'] == []
+        assert second_response['items'][0]['name'] == '热水袋'
+        assert first_response['shops'] == [{"id": str(first), "name": "甲店"}, {"id": str(second), "name": "乙店"}]
+        assert client.post(path, json={"shopId": str(second)}, headers=headers).json()['fromCache'] is True
+        assert client.post(path, json={"shopId": str(uuid4())}, headers=headers).status_code == 403
+    get_settings.cache_clear()
+
+
+def test_live_schema_change_compares_same_shop_and_fences_inflight(settings):
+    from app.modules.category_lookup.cache import CategoryCache
+    cache = CategoryCache(settings.category_cache_file)
+    fields = [{"id": "1", "label": "品牌", "required": True,
+               "options": [{"label": "乙", "value": "2"}, {"label": "甲", "value": "1"}]}]
+    cache.put("schema", "first", "123", fields)
+    cache.put("schema", "second", "123", fields)
+    cache.put("schema", "second", "124", fields)
+    version = cache.schema_version("123")
+    reordered = [{**fields[0], "options": list(reversed(fields[0]['options']))}]
+    assert not cache.invalidate_changed_schema("first", "123", reordered)
+    assert cache.get("schema", "first", "123") == fields
+    assert cache.invalidate_changed_schema("first", "123", [{**reordered[0], "required": False}])
+    assert cache.get("schema", "first", "123") is None
+    assert cache.get("schema", "second", "123") is None
+    assert cache.get("schema", "second", "124") == fields
+    cache.put("schema", "first", "123", fields, schema_version=version)
+    assert cache.get("schema", "first", "123") is None
+    assert not cache.invalidate_changed_schema("missing", "123", fields)
+
+
 def test_legacy_schema_cache_is_one_time_miss_and_v3_keeps_controls(settings):
     import json
     from app.modules.category_lookup.cache import CategoryCache

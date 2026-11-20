@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { NInput, NModal, NSpin, NText, useMessage } from 'naive-ui'
-import { AppButton } from '@/shared/ui'
+import { AppButton, AppSelect, type AppOptionValue } from '@/shared/ui'
 import { APP_OVERLAY_HOST_SELECTOR } from '@/shared/ui/overlay-host'
 import { fetchCategoryTree, type CategoryTreeItem } from '../api/category-lookup'
 
@@ -12,11 +12,13 @@ const show = ref(false)
 const busy = ref(false)
 const error = ref(false)
 const shopId = ref<string | null>(null)
+const shops = ref<Array<{ id: string; name: string }>>([])
 const columns = ref<CategoryTreeItem[][]>([])
 const path = ref<CategoryTreeItem[]>([])
 const searches = ref<string[]>([])
 const columnCount = computed(() => Math.max(4, columns.value.length))
 const selected = computed(() => path.value.at(-1))
+const shopOptions = computed(() => shops.value.map((shop) => ({ value: shop.id, label: shop.name })))
 let requestId = 0
 
 async function open() {
@@ -28,19 +30,24 @@ async function open() {
 }
 function close() { show.value = false; requestId += 1; busy.value = false }
 
-async function loadRoot(refresh: boolean) {
+async function loadRoot(refresh: boolean, selectedShop: string | null = shopId.value) {
   const request = ++requestId
   busy.value = true; error.value = false
   try {
-    const result = await fetchCategoryTree('0', null, refresh)
+    const result = await fetchCategoryTree('0', selectedShop, refresh)
     if (request !== requestId) return
     columns.value = [result.items]; path.value = []; searches.value = []; shopId.value = result.shopId
+    shops.value = result.shops ?? []
   } catch {
     if (request === requestId) {
       if (columns.value.length) message.error('更新失败，仍可使用已缓存的类目')
       else error.value = true
     }
   } finally { if (request === requestId) busy.value = false }
+}
+
+function changeShop(value: AppOptionValue | null) {
+  if (typeof value === 'string' && value !== shopId.value) void loadRoot(false, value)
 }
 
 async function choose(item: CategoryTreeItem, index: number) {
@@ -82,7 +89,12 @@ function confirm() {
   <NModal :show="show" preset="card" title="选择抖店类目" aria-label="选择抖店类目" class="category-picker" :to="APP_OVERLAY_HOST_SELECTOR"
     :style="{ width: 'min(960px, calc(100vw - 48px))', maxHeight: 'calc(100vh - 48px)' }"
     :mask-closable="false" @update:show="!$event && close()">
-    <div class="category-picker__header"><NText depth="3">选择完整类目后确认；已读取的类目优先使用缓存</NText>
+    <div class="category-picker__header"><div class="category-picker__shop">
+      <NText depth="3">查询店铺</NText>
+      <AppSelect v-if="shops.length" :model-value="shopId" :options="shopOptions" :disabled="busy"
+        aria-label="类目查询店铺" @update:model-value="changeShop" />
+      <NText v-else depth="3">选择完整类目后确认；已读取的类目优先使用缓存</NText>
+    </div>
       <AppButton size="small" :loading="busy" @click="loadRoot(true)">更新类目</AppButton>
     </div>
     <div v-if="error" class="category-picker__empty"><NText depth="3">类目读取失败</NText>
@@ -116,6 +128,8 @@ function confirm() {
 <style scoped>
 .category-picker__header,.category-picker__footer { display:flex; align-items:center; justify-content:space-between; gap:var(--space-3); }
 .category-picker__header { margin-bottom:var(--space-3); }
+.category-picker__shop { display:flex; align-items:center; gap:var(--space-2); min-width:0; }
+.category-picker__shop .app-field { width:200px; }
 .category-picker__columns { position:relative; display:flex; height:min(420px,50vh); min-height:220px; overflow-x:auto; border:1px solid var(--border-subtle); }
 .category-picker__column { display:flex; flex-direction:column; flex:0 0 25%; min-width:180px; border-right:1px solid var(--border-subtle); }
 .category-picker__search { width:calc(100% - 24px); margin:var(--space-3); flex:none; }
