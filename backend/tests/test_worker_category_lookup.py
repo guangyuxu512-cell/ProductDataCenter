@@ -38,6 +38,7 @@ def test_interactive_category_result_is_returned_directly_without_central_sessio
     data = worker_lookup.lookup(settings, operation="tree", category_id="0", title="商品", shop_id=shop_id)
     assert data == [{"id": "1", "name": "家居", "isLeaf": False, "enabled": True}]
     assert seen[0][3]["delivery"] == "product" and seen[0][3]["shop_id"] == shop_id
+    assert seen[0][3]["full_category_tree"] is True
     assert CategoryCache(settings.category_cache_file).take_worker_result(str(task_id)) is None
 
 
@@ -89,6 +90,7 @@ def test_product_category_routes_all_use_direct_worker_results(tmp_path, monkeyp
         def submit_worker_precheck(self, claim, category_id, title, **options):
             operation = options["operation"]
             assert options["delivery"] == "product" and options["shop_id"] == shop_id
+            assert options.get("full_category_tree", False) is (operation == "tree")
             operations.append(operation)
             task_id = uuid4()
             context = SimpleNamespace(task_id=task_id, device_id=device_id, category_id=category_id,

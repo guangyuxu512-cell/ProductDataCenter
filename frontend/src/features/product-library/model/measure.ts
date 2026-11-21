@@ -104,3 +104,15 @@ export function parseMultiMeasure(rule: CategoryAttribute['multiMeasureRule'], v
   }
   return candidates.length === 1 ? candidates[0] : null
 }
+
+export function fabricCompositionProblem(rule: CategoryAttribute['multiMeasureRule'], values: string[],
+  options: CategoryAttribute['options'] = []): string | null {
+  if (!rule || rule.units.length !== 1 || rule.units[0].label !== '%' || !values.length ||
+      values.some((value) => validMultiMeasure(rule, value, options) !== true)) return null
+  const parts = values.map((value) => parseMultiMeasure(rule, value, options))
+  if (parts.some((part) => part === null)) return null
+  const known = parts.filter((part): part is MultiMeasurePart => part !== null)
+  if (new Set(known.map((part) => part.name)).size !== known.length) return '不可重复'
+  const total = known.reduce((sum, part) => sum + Number(part.value), 0)
+  return Math.abs(total - 100) > 1e-8 ? '含量总和需为100%' : null
+}

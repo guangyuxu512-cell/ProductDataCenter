@@ -98,7 +98,8 @@ def lookup(settings, *, operation: str, category_id: str, title: str,
     claim = {"product_id": "lookup:" + uuid4().hex, "revision": 1, "attempts": 1}
     try:
         ticket = central.submit_worker_precheck(claim, category_id, title, delivery="product",
-                                                operation=operation, image_url=image_url, shop_id=shop_id)
+                                                operation=operation, image_url=image_url, shop_id=shop_id,
+                                                **({"full_category_tree": True} if operation == "tree" else {}))
     except CentralConnectionError as error:
         raise LookupError("worker_unavailable" if error.reason == "upstream_unavailable" else error.reason) from None
     cache = CategoryCache(settings.category_cache_file)

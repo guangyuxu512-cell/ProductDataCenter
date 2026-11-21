@@ -152,7 +152,8 @@ function confirm() {
           <button v-for="item in visibleItems(columnNumber - 1)" :key="item.id" type="button" class="category-picker__item"
             :class="{ 'category-picker__item--active': path[columnNumber - 1]?.id === item.id }"
             :disabled="!item.enabled || busy" :title="item.name" @click="choose(item, columnNumber - 1)">
-            <span>{{ item.name }}</span><span v-if="!item.isLeaf" aria-hidden="true">›</span>
+            <span>{{ item.name }}<small v-if="item.industryStatus === 2" class="category-picker__status"> 当前店铺未开通</small></span>
+            <span v-if="!item.isLeaf" aria-hidden="true">›</span>
           </button>
           <button v-for="item in platformIndex === columnNumber - 1 ? platformResults : []" :key="item.id"
             type="button" class="category-picker__item" :disabled="busy" :title="item.path"
@@ -186,6 +187,7 @@ function confirm() {
 .category-picker__item { display:flex; justify-content:space-between; gap:var(--space-2); width:100%; padding:var(--space-2) var(--space-3); text-align:left; border:0; background:transparent; color:var(--text-primary); cursor:pointer; }
 .category-picker__item:hover,.category-picker__item--active { background:var(--bg-surface-raised); color:var(--color-primary); }
 .category-picker__item:disabled { opacity:.5; cursor:not-allowed; }
+.category-picker__status { color:var(--text-secondary); }
 .category-picker__empty,.category-picker__actions { display:flex; align-items:center; gap:var(--space-2); }
 .category-picker__spinner { position:absolute; right:var(--space-3); bottom:var(--space-3); }
 </style>

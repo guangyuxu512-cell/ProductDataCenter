@@ -81,13 +81,18 @@ class CentralApplicationClient:
     def submit_worker_precheck(self, claim: dict, category_id: str, title: str, *,
                                delivery: Literal["central", "product"] = "central",
                                operation: Literal["schema", "tree", "search", "predict"] = "schema",
-                               image_url: str | None = None, shop_id: UUID | None = None) -> CentralWorkerPrecheckTicket:
+                               image_url: str | None = None, shop_id: UUID | None = None,
+                               full_category_tree: bool = False) -> CentralWorkerPrecheckTicket:
         body = {"kind": "douyin.category_schema",
                 "context": {"product_id": claim["product_id"], "revision": claim["revision"],
                             "attempt": claim["attempts"]},
                 "input": {"category_id": category_id, "title": title}}
         if operation != "schema":
             body["input"]["operation"] = operation
+        if full_category_tree:
+            if operation != "tree":
+                raise ValueError("full_category_tree is only valid for tree lookups")
+            body["input"]["full_category_tree"] = True
         if image_url is not None:
             body["input"]["image_url"] = image_url
         if shop_id is not None:

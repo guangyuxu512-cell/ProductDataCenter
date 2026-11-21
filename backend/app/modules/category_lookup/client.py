@@ -46,8 +46,12 @@ def normalize_category_options(value, parent_id: str) -> list[dict]:
         if identity in seen:
             continue
         seen.add(identity)
-        result.append({"id": identity, "name": name.strip(), "isLeaf": leaf,
-                       "enabled": item.get("enable", 1) not in (0, False)})
+        status = item.get("industry_status")
+        normalized = {"id": identity, "name": name.strip(), "isLeaf": leaf,
+                      "enabled": item.get("enable", 1) not in (0, False)}
+        if isinstance(status, int) and not isinstance(status, bool):
+            normalized["industryStatus"] = status
+        result.append(normalized)
     return result
 
 
@@ -275,5 +279,13 @@ def normalize_fields(items: list) -> list[dict]:
             field["measureTemplates"] = measure_templates
         if multi_measure:
             field["multiMeasureRule"] = multi_measure
+        picture = item.get("property_picture")
+        if (isinstance(picture, dict) and str(picture.get("id", "")) == str(key)
+                and isinstance(picture.get("label"), str) and picture["label"].strip()
+                and type(picture.get("required")) is bool):
+            tips = picture.get("label_tips")
+            field["pictureRule"] = {"id": str(key)[:100], "label": picture["label"][:200],
+                                    "required": picture["required"],
+                                    "labelTips": tips[:500] if isinstance(tips, str) else ""}
         fields.append(field)
     return fields

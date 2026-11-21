@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MeasureTemplate } from '../api/category-lookup'
-import { formatMeasure, parseMeasure, parseMultiMeasure, validMeasure, validMultiMeasure } from './measure'
+import { fabricCompositionProblem, formatMeasure, parseMeasure, parseMultiMeasure, validMeasure, validMultiMeasure } from './measure'
 
 // Sanitized measure template from category 1000001535's getSchema response.
 const template: MeasureTemplate = { id: '53', name: '三脚架长宽高度量衡模板', modules: [48, 49, 50].map((id, index) => ({
@@ -37,4 +37,8 @@ it('依据真实复合多值规则检查材质和百分比', () => {
   expect(parseMultiMeasure(rule, '棉20%', options)).toEqual({ name: '棉', value: '20', unit: '%' })
   expect(parseMultiMeasure(rule, '自定义99%', options)).toBeNull()
   expect(parseMultiMeasure(rule, '原始未知值', options)).toBeNull()
+  expect(fabricCompositionProblem(rule, ['聚酯纤维80%', '棉20%'], options)).toBeNull()
+  expect(fabricCompositionProblem(rule, ['聚酯纤维80%', '棉10%'], options)).toBe('含量总和需为100%')
+  expect(fabricCompositionProblem(rule, ['棉50%', '棉50%'], options)).toBe('不可重复')
+  expect(fabricCompositionProblem(rule, ['自定义99%'], options)).toBeNull()
 })

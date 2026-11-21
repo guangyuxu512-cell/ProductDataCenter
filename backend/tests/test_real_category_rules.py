@@ -54,6 +54,10 @@ def test_real_worker_multi_measure_rule_validates_existing_and_multiple_values()
         assert not multi_measure_valid(invalid, field.multiMeasureRule, field.options)
     assert multi_measure_valid("自定义99%", field.multiMeasureRule, field.options) is None
     assert _attribute_problem(field, [{"valueId": "0", "name": "棉1%"}] * 11) == "最多选10项"
+    assert _attribute_problem(field, [{"valueId": "0", "name": "聚酯纤维80%"},
+                                      {"valueId": "0", "name": "棉10%"}]) == "含量总和需为100%"
+    assert _attribute_problem(field, [{"valueId": "0", "name": "棉50%"},
+                                      {"valueId": "0", "name": "棉50%"}]) == "不可重复"
     unsupported = deepcopy(raw)
     unsupported["additions"]["measure_templates"][0]["value_modules"][0]["input_type"] = "enum"
     assert normalize_fields([unsupported])[0]["ruleStatus"] == "unknown"

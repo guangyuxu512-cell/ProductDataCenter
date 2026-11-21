@@ -37,11 +37,40 @@ def test_nested_material_options_survive_supported_worker_result():
     # the existing result envelope; this is not a captured Worker response.
     path = Path(__file__).parent / "fixtures" / "douyin-runtime-material-1000010274.json"
     item = json.loads(path.read_text(encoding="utf-8"))
+    item["property_picture"] = {"id": "785", "label": "水洗标/吊牌图", "required": False,
+                                "label_tips": "上传图片可智能识别并预填材质信息"}
     payload = json.loads(json.dumps(envelope([item], category_id="1000010274"), ensure_ascii=False))
     field = read_worker_schema(payload, expected_category_id="1000010274").attributes[0]
     assert field.control == "multi_measure"
+    assert field.pictureRule.model_dump() == {"id": "785", "label": "水洗标/吊牌图", "required": False,
+                                             "labelTips": "上传图片可智能识别并预填材质信息"}
     assert [(option.label, option.value) for option in field.options] == [
         ("棉", "棉"), ("牛角瓜纤维", "牛角瓜纤维"), ("木棉", "木棉"), ("亚麻", "亚麻")]
+
+
+def test_unmatched_or_incomplete_picture_rules_are_not_invented():
+    for picture in ({"id": "different", "label": "水洗标", "required": False},
+                    {"id": "785", "label": "水洗标"}, {"id": "785", "required": False}):
+        item = {"id": "785", "label": "面料材质", "property_picture": picture}
+        assert normalize_fields([item])[0].get("pictureRule") is None
+
+
+def test_precheck_reports_only_explicitly_required_missing_property_pictures():
+    from app.modules.category_lookup.api import SchemaResponse
+
+    detail = {"product": {"source_platform": "douyin", "title": "商品", "main_image_url": "https://example.test/a"},
+              "images": [], "skus": [{"current_price": "9.90"}], "sourceCategoryId": "1000010274",
+              "sourceAttributes": [], "targetCategory": [], "targetAttributes": [], "attributePictures": []}
+    service = SimpleNamespace(repository=SimpleNamespace(detail=lambda _: deepcopy(detail)))
+    item = {"id": "785", "label": "面料材质", "required": False, "options": [],
+            "control": "text", "ruleStatus": "confirmed", "pictureRule": {
+                "id": "785", "label": "水洗标/吊牌图", "required": True}}
+    schema = SchemaResponse(categoryId="1000010274", attributes=[Attribute.model_validate(item)])
+    result = check_product("12345678", service, None, None, schema_override=schema)
+    assert result["status"] == "needs_completion"
+    assert result["issueDetails"][0]["fieldId"] == "picture-785"
+    detail["attributePictures"] = [{"id": "785", "url": "https://example.test/wash.jpg"}]
+    assert check_product("12345678", service, None, None, schema_override=schema)["status"] == "ready"
 
 
 def test_large_options_and_unknown_measure_rules_are_preserved():

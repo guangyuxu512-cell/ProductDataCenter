@@ -32,8 +32,9 @@ export interface CategoryAttribute {
     precision: number | null
     dataType: 'float' | 'int'
   } | null
+  pictureRule?: { id: string; label: string; required: boolean; labelTips: string } | null
 }
-export interface CategoryTreeItem { id: string; name: string; isLeaf: boolean; enabled: boolean }
+export interface CategoryTreeItem { id: string; name: string; isLeaf: boolean; enabled: boolean; industryStatus?: number | null }
 export interface PredictedCategory extends CategoryCandidate {
   levels: Array<{ id: string; name: string }>
   selectable: boolean | null

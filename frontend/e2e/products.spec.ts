@@ -905,6 +905,33 @@ test('直接展开完整类目并手动更新缓存，切换商品后不沿用�
   await expect(dialog.getByText('材质', { exact: true })).toHaveCount(0)
 })
 
+test('完整类目树显示热水袋及当前店铺状态', async ({ page }) => {
+  await fixtures(page)
+  const shop = '00000000-0000-4000-8000-000000000111'
+  await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
+    groupWrites: true, export: true, productEdit: false, importProducts: false, categoryLookup: true,
+  } }))
+  await page.route('**/api/v1/category-lookup/tree', (route) => {
+    const body = route.request().postDataJSON() as { parentId: string }
+    const item = body.parentId === '0' ? { id: '1000005069', name: '居家日用', isLeaf: false, enabled: true }
+      : body.parentId === '1000005069' ? { id: '1000005081', name: '其他家居日用', isLeaf: false, enabled: true }
+        : { id: '1000011128', name: '热水袋', isLeaf: true, enabled: true, industryStatus: 2 }
+    return route.fulfill({ json: { shopId: shop, parentId: body.parentId, items: [item], fromCache: false } })
+  })
+  await page.route('**/api/v1/category-lookup/schema', (route) => route.fulfill({ json: {
+    categoryId: '1000011128', attributes: [],
+  } }))
+  await page.goto('/#/products')
+  await page.getByRole('button', { name: '编辑', exact: true }).first().click()
+  await page.getByRole('dialog').getByRole('textbox', { name: '抖店类目' }).click()
+  const picker = page.getByRole('dialog', { name: '选择抖店类目' })
+  await picker.getByRole('button', { name: '居家日用', exact: true }).click()
+  await picker.getByRole('button', { name: '其他家居日用', exact: true }).click()
+  await expect(picker.getByText('当前店铺未开通')).toBeVisible()
+  await picker.getByRole('button', { name: /热水袋/ }).click()
+  await expect(picker.getByText('已选：居家日用 → 其他家居日用 → 热水袋')).toBeVisible()
+})
+
 test('逐级列表漏项时可按平台搜索结果选择同一路径', async ({ page }) => {
   await fixtures(page)
   const first = '00000000-0000-4000-8000-000000000111'
@@ -1516,12 +1543,14 @@ for (const scenario of [
   await fixtures(page)
   let version = 'a'.repeat(64)
   let values = [{ valueId: '0', name: '聚酯纤维100%' }, { valueId: '77', name: '原始未识别' }]
+  let pictureUrl = ''
   let saved: ProductPatch | undefined
   await page.route('**/api/v1/capabilities', (route) => route.fulfill({ json: {
     groupWrites: true, export: true, productEdit: true, categoryLookup: true,
   } }))
   await page.route(`**/api/v1/products/${firstId}/edit`, (route) => route.fulfill({ json: {
     version, specImageGroup: '规格', specImages: [{ id: '11', name: '默认', url: '' }],
+    sourceCategoryId: scenario.categoryId, attributePictures: pictureUrl ? [{ id: '785', url: pictureUrl, label: '水洗标/吊牌图' }] : [],
     specGroups: [{ index: 0, name: '规格', movable: false, values: [{ id: '11', name: '默认', url: '' }] }],
     skus: [{ skuId: 'sku-1', specIds: ['11'], price: '19.99', stock: 9, enabled: true, merchantCode: '' }],
   } }))
@@ -1529,6 +1558,7 @@ for (const scenario of [
     if (route.request().method() === 'PATCH') {
       saved = route.request().postDataJSON() as ProductPatch
       values = saved.attributes?.[0]?.values ?? values
+      pictureUrl = saved.attributePictures?.[0]?.url ?? pictureUrl
       version = 'b'.repeat(64)
       return route.fulfill({ json: { version } })
     }
@@ -1541,10 +1571,15 @@ for (const scenario of [
   await page.route('**/api/v1/category-lookup/schema/auto', (route) => route.fulfill({ json: {
     shopId: '00000000-0000-4000-8000-000000000111', categoryId: scenario.categoryId, attributes: [{
       id: '785', label: '面料材质', required: false, options: scenario.options,
+      pictureRule: scenario.selectExisting ? { id: '785', label: '水洗标/吊牌图', required: false, labelTips: '' } : null,
       control: 'multi_measure', allowCustom: true, ruleStatus: 'confirmed', maxValues: 10,
       multiMeasureRule: { units: [{ label: '%', value: '15' }], minimum: 0.01, maximum: 100, precision: 2, dataType: 'float' },
     }],
   } }))
+  await page.route('**/api/v1/product-images', (route) => route.fulfill({ status: 201,
+    json: { url: 'https://example.test/wash.png' } }))
+  await page.route('https://example.test/wash.png', (route) => route.fulfill({ contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aZkAAAAASUVORK5CYII=', 'base64') }))
   await page.goto('/#/products')
   await page.getByRole('button', { name: '编辑', exact: true }).first().click()
   let dialog = page.getByRole('dialog')
@@ -1554,6 +1589,12 @@ for (const scenario of [
   await expect(material).toContainText('聚酯纤维')
   await expect(material.getByRole('textbox', { name: '面料材质 数值 1' })).toHaveValue('100')
   await expect(material.getByRole('textbox', { name: '面料材质 原值 2' })).toHaveValue('原始未识别')
+  if (scenario.selectExisting) {
+    const picture = dialog.locator('.n-form-item').filter({ hasText: '水洗标/吊牌图' })
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), picture.getByRole('button', { name: '本地替换' }).click()])
+    await chooser.setFiles({ name: 'wash.png', mimeType: 'image/png', buffer: Buffer.from('synthetic image') })
+    await expect(picture.getByRole('img', { name: '水洗标/吊牌图' })).toBeVisible()
+  }
   await material.getByRole('button', { name: '添加', exact: true }).click()
   const third = material.locator('.product-multi-measure__row').nth(2)
   await third.locator('.n-base-selection').click()
@@ -1568,6 +1609,7 @@ for (const scenario of [
   await expect.poll(() => saved?.attributes?.[0]?.values).toEqual([
     { valueId: '0', name: '聚酯纤维100%' }, { valueId: '77', name: '原始未识别' }, { valueId: '0', name: '棉20%' },
   ])
+  if (scenario.selectExisting) expect(saved?.attributePictures).toEqual([{ id: '785', url: 'https://example.test/wash.png', label: '水洗标/吊牌图' }])
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await page.reload()
   await page.getByRole('button', { name: '编辑', exact: true }).first().click()
@@ -1579,6 +1621,7 @@ for (const scenario of [
   await expect(reopened.getByRole('textbox', { name: '面料材质 原值 2' })).toHaveValue('原始未识别')
   await expect(reopened).toContainText('棉')
   await expect(reopened.getByRole('textbox', { name: '面料材质 数值 3' })).toHaveValue('20')
+  if (scenario.selectExisting) await expect(dialog.getByRole('img', { name: '水洗标/吊牌图' })).toBeVisible()
   await reopened.getByRole('button', { name: '删除面料材质第 3 项' }).click()
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
   await expect.poll(() => saved?.attributes?.[0]?.values).toEqual([

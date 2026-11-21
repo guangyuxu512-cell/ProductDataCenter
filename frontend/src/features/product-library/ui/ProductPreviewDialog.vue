@@ -17,7 +17,7 @@ import { previewImageUrl } from '../model/preview-image-url'
 import { sourceSpecLayout } from '../model/source-spec-layout'
 import { orderSkuRows, skuGroupRowSpans } from '../model/sku-order'
 import { normalizeMultiValues, originalAttributeValues, pddAttributeValues } from '../model/source-attributes'
-import { validMeasure, validMultiMeasure } from '../model/measure'
+import { fabricCompositionProblem, validMeasure, validMultiMeasure } from '../model/measure'
 import { titleUnits } from '../model/title'
 import type { AutoPrecheck, CategoryPrediction, PrecheckIssue } from '../model/precheck'
 import DeferredPreviewThumbnail from './DeferredPreviewThumbnail.vue'
@@ -103,6 +103,11 @@ const initialSkuDrafts = ref<SkuDraft[]>([])
 const selectedParts = ref<CategoryTreeItem[] | null>(null)
 const attributeInputs = ref<Record<string, ProductAttributeValue[]>>({})
 const touchedAttributes = ref<string[]>([])
+const attributePictures = ref<Record<string, string>>({})
+const initialAttributePictures = ref<Record<string, string>>({})
+const pictureCategory = ref<string | null>(null)
+const initialPictureCategory = ref<string | null>(null)
+const touchedPictures = ref<string[]>([])
 const imagePreviewSource = ref('')
 const renderPreviewToolbar = useImagePreviewToolbar(() => imagePreviewSource.value)
 type ImageLinkTarget = { kind: 'main' | 'detail' | 'sku'; index?: number; skuId?: string; request: number }
@@ -116,7 +121,7 @@ let editRequest = 0
 const canEdit = computed(() => props.editable && !!editVersion.value && !editBusy.value && !saving.value && !uploading.value)
 const canEditSpecImages = computed(() => canEdit.value && specImagesEditable.value)
 const dirty = computed(() => !!props.product && (
-  draftTitle.value !== initialTitle.value || selectedParts.value !== null || touchedAttributes.value.length > 0 ||
+  draftTitle.value !== initialTitle.value || selectedParts.value !== null || touchedAttributes.value.length > 0 || touchedPictures.value.length > 0 ||
   JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value) ||
   JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value) ||
   imageGroupIndex.value !== 0 || JSON.stringify(specGroups.value) !== JSON.stringify(initialSpecGroups.value) ||
@@ -127,6 +132,7 @@ watch([() => props.show, () => props.editable, () => props.product?.id], () => {
   const product = props.product
   editVersion.value = ''; editBusy.value = false; saving.value = false
   selectedParts.value = null; attributeInputs.value = {}; touchedAttributes.value = []
+  attributePictures.value = {}; initialAttributePictures.value = {}; pictureCategory.value = null; initialPictureCategory.value = null; touchedPictures.value = []
   imagePreviewSource.value = ''
   imageLinkTarget.value = null; imageLinkValue.value = ''
   specInputMode.value = null
@@ -160,6 +166,11 @@ watch([() => props.show, () => props.editable, () => props.product?.id], () => {
 
 function setEditSnapshot(result: EditSnapshot) {
   editVersion.value = result.version
+  pictureCategory.value = result.category?.at(-1)?.id ?? result.sourceCategoryId ?? null
+  initialPictureCategory.value = pictureCategory.value
+  attributePictures.value = Object.fromEntries((result.attributePictures ?? []).map((picture) => [picture.id, picture.url]))
+  initialAttributePictures.value = { ...attributePictures.value }
+  touchedPictures.value = []
   specImagesEditable.value = result.specImagesEditable !== false
   const groups = result.specGroups?.length ? result.specGroups :
     [{ index: 0, name: result.specImageGroup, values: result.specImages, movable: false }]
@@ -278,6 +289,10 @@ function attributeProblem(item: CategoryAttribute): string | null {
   if (attributeControl(item) === 'single' && values.length !== 1) return '只能选择一项'
   if (['multi', 'multi_measure'].includes(attributeControl(item)) && item.maxValues && values.length > item.maxValues) return `最多选${item.maxValues}项`
   if (item.control === 'multi_measure' && values.some((value) => validMultiMeasure(item.multiMeasureRule, value.name, item.options) === false)) return '格式无效'
+  if (item.id === '785' && item.control === 'multi_measure') {
+    const problem = fabricCompositionProblem(item.multiMeasureRule, values.map((value) => value.name), item.options)
+    if (problem) return problem
+  }
   if (attributeControl(item) === 'measure' && (values.length !== 1 ||
       !(item.measureTemplates ?? []).some((template) => validMeasure(template, values[0].name)))) return '格式无效'
   if (attributeControl(item) === 'number' && values.some((value) => !value.name.trim() || !Number.isFinite(Number(value.name)))) return '数字无效'
@@ -483,14 +498,33 @@ function confirmImageLink() {
   }
   imageLinkTarget.value = null
 }
-type UploadTarget = { kind: 'main' | 'detail' | 'sku'; index?: number; skuId?: string; request: number }
+type UploadTarget = { kind: 'main' | 'detail' | 'sku' | 'attribute'; index?: number; skuId?: string; attributeId?: string; categoryId?: string | null; request: number }
 let uploadTarget: UploadTarget | null = null
-function chooseLocalImage(kind: UploadTarget['kind'], index?: number) {
+function chooseLocalImage(kind: 'main' | 'detail' | 'sku', index?: number) {
   if (!canEdit.value) return
   if (kind === 'sku' && !canEditSpecImages.value) return
   const skuId = kind === 'sku' ? specImages.value[index ?? -1]?.id : undefined
   if (kind === 'sku' && !skuId) return
   uploadTarget = { kind, index, skuId, request: editRequest }
+  uploadInput.value?.click()
+}
+function pictureUrl(item: CategoryAttribute) {
+  return selectedCategory.value === pictureCategory.value ? attributePictures.value[item.id] ?? '' : ''
+}
+function assignAttributePicture(id: string, url: string) {
+  if (!selectedCategory.value) return
+  if (pictureCategory.value !== selectedCategory.value) {
+    attributePictures.value = {}; pictureCategory.value = selectedCategory.value; touchedPictures.value = []
+  }
+  attributePictures.value[id] = url
+  if (!touchedPictures.value.includes(id)) touchedPictures.value.push(id)
+}
+function setAttributePicture(id: string, url: string) {
+  if (canEdit.value) assignAttributePicture(id, url)
+}
+function chooseAttributePicture(item: CategoryAttribute) {
+  if (!canEdit.value || !selectedCategory.value) return
+  uploadTarget = { kind: 'attribute', attributeId: item.id, categoryId: selectedCategory.value, request: editRequest }
   uploadInput.value?.click()
 }
 async function receiveLocalImage(event: Event) {
@@ -506,7 +540,9 @@ async function receiveLocalImage(event: Event) {
     const result = await uploadProductImage(file)
     if (target.request !== editRequest || !props.show) return
     if (!validImageUrl(result.url)) throw new Error('图片地址无效，请重试')
-    if (target.kind === 'sku') {
+    if (target.kind === 'attribute') {
+      if (target.attributeId && target.categoryId === selectedCategory.value) assignAttributePicture(target.attributeId, result.url)
+    } else if (target.kind === 'sku') {
       const spec = specImages.value.find((item) => item.id === target.skuId)
       if (spec) { spec.url = result.url; specImageEnabled.value = true }
     } else {
@@ -546,6 +582,10 @@ async function submitEdit() {
   const patch: ProductPatch = { expectedVersion: editVersion.value }
   if (props.creating || draftTitle.value !== initialTitle.value) patch.title = draftTitle.value.trim()
   if (selectedParts.value) patch.category = selectedParts.value.map(({ id, name }) => ({ id, name }))
+  if (touchedPictures.value.length && pictureCategory.value === selectedCategory.value) {
+    patch.attributePictures = touchedPictures.value.map((id) => ({ id, url: attributePictures.value[id] ?? '',
+      label: categoryAttributes.value.find((item) => item.id === id)?.pictureRule?.label ?? '' }))
+  }
   if (JSON.stringify(draftMain.value) !== JSON.stringify(initialMain.value)) patch.mainImages = [...draftMain.value]
   if (JSON.stringify(draftDetail.value) !== JSON.stringify(initialDetail.value)) patch.detailImages = [...draftDetail.value]
   if (structureDirty.value) {
@@ -638,7 +678,7 @@ async function submitEdit() {
     draftTitle.value = draftTitle.value.trim()
     editVersion.value = result.version; initialTitle.value = draftTitle.value
     message.success('商品已保存')
-    selectedParts.value = null; touchedAttributes.value = []
+    selectedParts.value = null; touchedAttributes.value = []; touchedPictures.value = []
     initialMain.value = [...draftMain.value]; initialDetail.value = [...draftDetail.value]
     emit('saved', product.id, result.precheckRevision)
     try {
@@ -751,6 +791,7 @@ function selectCategory(value: { id: string; path: string; shopId: string; level
       ? props.product.targetCategory?.at(-1)?.id : props.product?.sourceCategoryId
     selectedParts.value = value.id === original ? null : value.levels
     attributeInputs.value = {}; touchedAttributes.value = []
+    attributePictures.value = { ...initialAttributePictures.value }; pictureCategory.value = initialPictureCategory.value; touchedPictures.value = []
   }
   void loadAttributes()
 }
@@ -833,6 +874,8 @@ const draftIssues = computed<PrecheckIssue[]>(() => {
     const problem = attributeProblem(field)
     if (problem) issues.push({ code: problem === '未填写' ? 'attribute_missing' : 'attribute_invalid',
       message: `${field.label}${problem}`, tab: 'attributes', fieldId: field.id })
+    if (field.pictureRule?.required && !pictureUrl(field)) issues.push({ code: 'attribute_picture_missing',
+      message: `${field.pictureRule.label}未填写`, tab: 'attributes', fieldId: `picture-${field.id}` })
   }
   return issues
 })
@@ -1118,17 +1161,27 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
             <NText v-else-if="categorySchemaLoaded && product.platform !== 'pdd'" depth="3">当前类目的属性尚未从原包自动对应</NText>
             <NText v-if="editable && categorySchemaLoaded && missingRequired" type="warning">还有 {{ missingRequired }} 项必填属性未填写</NText>
             <div class="product-preview__attributes">
-              <NFormItem v-for="item in categoryAttributes" :key="item.id" :label="item.label" :required="item.required"
+              <template v-for="item in categoryAttributes" :key="item.id">
+              <NFormItem v-if="item.pictureRule" :label="item.pictureRule.label" :required="item.pictureRule.required"
+                :data-precheck-field="`picture-${item.id}`">
+                <ProductImageList :items="[{ key: item.id, src: pictureUrl(item), label: item.pictureRule.label,
+                  canLocal: true, canDelete: true }]" :editable="canEdit" :uploading="uploading"
+                  @preview="openImagePreview" @local="chooseAttributePicture(item)" @remove="setAttributePicture(item.id, '')" />
+              </NFormItem>
+              <NFormItem :label="item.label" :required="item.required"
                 :data-precheck-field="item.id">
                 <ProductMeasureInput v-if="item.control === 'measure' && item.measureTemplates?.length"
                   :model-value="attributeTextValue(item)" :templates="item.measureTemplates" :label="item.label"
                   :disabled="!canEdit || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)"
                   @update:model-value="setAttribute(item, $event)" />
-                <ProductMultiMeasureInput v-else-if="editable && item.control === 'multi_measure' && item.multiMeasureRule"
+                <div v-else-if="editable && item.control === 'multi_measure' && item.multiMeasureRule" class="product-preview__attribute-input">
+                <ProductMultiMeasureInput
                   :model-value="attributeValues(item)" :options="item.options" :rule="item.multiMeasureRule"
                   :allow-custom="item.allowCustom === true" :max-values="item.maxValues" :label="item.label"
                   :disabled="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)"
                   @update:model-value="setMultiMeasure(item, $event)" />
+                <NText v-if="attributeProblem(item) && attributeProblem(item) !== '未填写'" type="error">{{ attributeProblem(item) }}</NText>
+                </div>
                 <div v-else-if="editable && ['single', 'multi', 'multi_measure'].includes(item.control)" class="product-preview__attribute-input">
                   <AppSelect :model-value="attributeModelValue(item)"
                     :options="attributeOptions(item)" clearable filterable show-on-focus
@@ -1145,6 +1198,7 @@ const skuColumns = computed<DataTableColumns<ProductSku>>(() => {
                   :inputmode="attributeControl(item) === 'number' ? 'decimal' : undefined"
                   :readonly="!canEdit || item.ruleStatus !== 'confirmed' || !['douyin', 'pdd', 'jushuitan'].includes(product.platform)" @update:model-value="setAttribute(item, $event)" />
               </NFormItem>
+              </template>
               <NFormItem v-for="item in categorySchemaLoaded ? [] : product.attributes" :key="item.name" :label="item.name">
                 <AppInput :model-value="item.value" readonly />
               </NFormItem>

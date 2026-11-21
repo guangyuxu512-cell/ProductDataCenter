@@ -137,6 +137,7 @@ class TreeItem(BaseModel):
     name: str
     isLeaf: bool
     enabled: bool
+    industryStatus: int | None = None
 
 
 class TreeShop(BaseModel):
@@ -185,6 +186,13 @@ class MultiMeasureRule(BaseModel):
     dataType: Literal["float", "int"]
 
 
+class PropertyPictureRule(BaseModel):
+    id: str
+    label: str
+    required: bool
+    labelTips: str = ""
+
+
 class Attribute(BaseModel):
     id: str
     label: str
@@ -196,6 +204,7 @@ class Attribute(BaseModel):
     maxValues: int | None = None
     measureTemplates: list[MeasureTemplate] = Field(default_factory=list)
     multiMeasureRule: MultiMeasureRule | None = None
+    pictureRule: PropertyPictureRule | None = None
 
 
 class SearchResponse(BaseModel):

@@ -74,6 +74,12 @@ class TargetCategoryPart(BaseModel):
     name: str
 
 
+class AttributePictureRead(BaseModel):
+    id: str
+    url: str
+    label: str = ""
+
+
 class ProductDetail(BaseModel):
     product: ProductRead
     skus: list[SkuRead]
@@ -82,6 +88,7 @@ class ProductDetail(BaseModel):
     sourceAttributes: list[SourceAttribute] = Field(default_factory=list)
     targetCategory: list[TargetCategoryPart] = Field(default_factory=list)
     targetAttributes: list[SourceAttribute] = Field(default_factory=list)
+    attributePictures: list[AttributePictureRead] = Field(default_factory=list)
 
 
 class GroupRead(BaseModel):
@@ -179,6 +186,28 @@ class AttributeEdit(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
     values: list[AttributeValueEdit]
+
+
+class AttributePictureEdit(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    url: str = Field(default="", max_length=10000)
+    label: str = Field(default="", max_length=200)
+
+    @field_validator("url")
+    @classmethod
+    def valid_url(cls, value: str) -> str:
+        from urllib.parse import urlsplit
+        if value:
+            parsed = urlsplit(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("属性图片地址无效")
+        return value
+
+    @model_validator(mode="after")
+    def require_label_for_image(self):
+        if self.url and not self.label.strip():
+            raise ValueError("属性图片名称不能为空")
+        return self
 
 
 class SpecImageEdit(BaseModel):
@@ -285,6 +314,7 @@ class ProductEdit(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=10000)
     category: list[CategoryPart] | None = Field(default=None, min_length=1, max_length=4)
     attributes: list[AttributeEdit] | None = Field(default=None, max_length=300)
+    attributePictures: list[AttributePictureEdit] | None = Field(default=None, max_length=300)
     mainImages: list[str] | None = Field(default=None, max_length=100)
     detailImages: list[str] | None = Field(default=None, max_length=100)
     specImages: list[SpecImageEdit] | None = Field(default=None, max_length=500)
@@ -316,12 +346,14 @@ class ProductEdit(BaseModel):
 
     @model_validator(mode="after")
     def valid_edit(self):
-        if all(value is None for value in (self.title, self.category, self.attributes, self.mainImages, self.detailImages, self.specImages, self.specImageGroupIndex, self.skus, self.specStructure)):
+        if all(value is None for value in (self.title, self.category, self.attributes, self.attributePictures, self.mainImages, self.detailImages, self.specImages, self.specImageGroupIndex, self.skus, self.specStructure)):
             raise ValueError("没有需要保存的修改")
         if self.specStructure is not None and any(value is not None for value in (self.skus, self.specImages, self.specImageGroupIndex)):
             raise ValueError("规格结构和单项规格修改不能同时提交")
         if self.attributes is not None and len({item.id for item in self.attributes}) != len(self.attributes):
             raise ValueError("属性 ID 不能重复")
+        if self.attributePictures is not None and len({item.id for item in self.attributePictures}) != len(self.attributePictures):
+            raise ValueError("属性图片 ID 不能重复")
         if self.specImages is not None and len({item.specId for item in self.specImages}) != len(self.specImages):
             raise ValueError("规格 ID 不能重复")
         if self.skus is not None and len({tuple(item.specIds) for item in self.skus}) != len(self.skus):

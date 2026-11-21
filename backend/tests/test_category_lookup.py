@@ -317,6 +317,31 @@ def test_old_inflight_tree_result_cannot_repopulate_after_manual_refresh(setting
     assert cache.get("schema", "other-shop", "123") is None
 
 
+def test_old_partial_tree_is_not_reused_as_complete_tree(settings):
+    import json
+    from app.modules.category_lookup.cache import CategoryCache
+    cache = CategoryCache(settings.category_cache_file)
+    partial = [{"id": "1", "name": "旧类目", "isLeaf": True, "enabled": True}]
+    with cache._transaction() as db:
+        db.execute("INSERT INTO category_cache(kind,shop_id,cache_key,payload) VALUES ('tree','shop','1000005081',?)",
+                   (json.dumps(partial),))
+    assert cache.get("tree", "shop", "1000005081") is None
+    assert cache.tree_branches(["1000005081"]) == {}
+    complete = [{"id": "1000011128", "name": "热水袋", "isLeaf": True,
+                 "enabled": True, "industryStatus": 2}]
+    cache.put("tree", "shop", "1000005081", complete)
+    assert cache.get("tree", "shop", "1000005081") == complete
+    assert cache.tree_branches(["1000005081"]) == {"shop": {"1000005081": complete}}
+
+
+def test_platform_tree_preserves_unopened_industry_status():
+    from app.modules.category_lookup.client import normalize_category_options
+    result = normalize_category_options([{"id": 1000011128, "name": "热水袋",
+        "parent_cid": 1000005081, "is_leaf": True, "enable": 1, "industry_status": 2}], "1000005081")
+    assert result == [{"id": "1000011128", "name": "热水袋", "isLeaf": True,
+                       "enabled": True, "industryStatus": 2}]
+
+
 def test_tree_reports_available_shops_and_keeps_each_shop_tree_separate(settings, monkeypatch):
     monkeypatch.setenv("BACKEND_API_TOKEN", PRODUCT_KEY)
     get_settings.cache_clear()
@@ -390,7 +415,7 @@ def test_live_schema_change_compares_same_shop_and_fences_inflight(settings):
     assert not cache.invalidate_changed_schema("missing", "123", fields)
 
 
-def test_legacy_schema_cache_is_one_time_miss_and_v3_keeps_controls(settings):
+def test_legacy_schema_cache_is_one_time_miss_and_current_version_keeps_controls(settings):
     import json
     from app.modules.category_lookup.cache import CategoryCache
     cache = CategoryCache(settings.category_cache_file)
@@ -401,6 +426,10 @@ def test_legacy_schema_cache_is_one_time_miss_and_v3_keeps_controls(settings):
     with cache._transaction() as db:
         db.execute("UPDATE category_cache SET payload=? WHERE kind='schema' AND shop_id='shop' AND cache_key='legacy'",
                    (json.dumps({"formatVersion": 2, "attributes": [{"id": "1", "control": "unknown"}]}),))
+    assert cache.get("schema", "shop", "legacy") is None
+    with cache._transaction() as db:
+        db.execute("UPDATE category_cache SET payload=? WHERE kind='schema' AND shop_id='shop' AND cache_key='legacy'",
+                   (json.dumps({"formatVersion": 3, "attributes": [{"id": "785", "control": "multi_measure"}]}),))
     assert cache.get("schema", "shop", "legacy") is None
     value = [{"id": "1", "control": "multi", "allowCustom": True, "ruleStatus": "confirmed"}]
     cache.put("schema", "shop", "legacy", value)
