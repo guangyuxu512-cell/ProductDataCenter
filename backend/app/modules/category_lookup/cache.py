@@ -12,15 +12,8 @@ class CacheUnavailable(Exception):
 
 
 SCHEMA_FORMAT_VERSION = 4
-TREE_FORMAT_VERSION = 2
-
-
-def _tree_items(value):
-    """Do not reuse tree branches saved before complete-tree support."""
-    if (isinstance(value, dict) and value.get("formatVersion") == TREE_FORMAT_VERSION
-            and isinstance(value.get("items"), list)):
-        return value["items"]
-    return None
+# Keep old partial trees untouched so rollback can still read its own format.
+TREE_CACHE_KIND = "tree_complete_v2"
 
 
 def _schema_signature(attributes: list[dict]) -> list[str]:
@@ -71,12 +64,11 @@ class CategoryCache:
 
     def get(self, kind: str, shop_id: str, key: str):
         try:
+            cache_kind = TREE_CACHE_KIND if kind == "tree" else kind
             with self._transaction() as db:
                 row = db.execute("SELECT payload FROM category_cache WHERE kind=? AND shop_id=? AND cache_key=?",
-                                 (kind, shop_id, key)).fetchone()
+                                 (cache_kind, shop_id, key)).fetchone()
             value = json.loads(row[0]) if row else None
-            if kind == "tree":
-                return _tree_items(value)
             if kind != "schema" or value is None:
                 return value
             # Older rows discarded nested material options or picture rules.
@@ -135,8 +127,8 @@ class CategoryCache:
             with self._transaction() as db:
                 rows = db.execute(
                     f"SELECT shop_id, cache_key, payload FROM category_cache "
-                    f"WHERE kind='tree' AND cache_key IN ({placeholders}) ORDER BY shop_id",
-                    tuple(parents),
+                    f"WHERE kind=? AND cache_key IN ({placeholders}) ORDER BY shop_id",
+                    (TREE_CACHE_KIND, *parents),
                 ).fetchall()
             shops: dict[str, dict[str, list]] = {}
             for shop, parent, raw in rows:
@@ -144,9 +136,8 @@ class CategoryCache:
                     value = json.loads(raw)
                 except (ValueError, TypeError):
                     continue
-                items = _tree_items(value)
-                if items is not None:
-                    shops.setdefault(shop, {})[parent] = items
+                if isinstance(value, list):
+                    shops.setdefault(shop, {})[parent] = value
             return shops
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
@@ -192,14 +183,14 @@ class CategoryCache:
             refresh_schema: bool = False, schema_version: int | None = None) -> None:
         try:
             stored = ({"formatVersion": SCHEMA_FORMAT_VERSION, "attributes": value}
-                      if kind == "schema" else {"formatVersion": TREE_FORMAT_VERSION, "items": value}
-                      if kind == "tree" else value)
+                      if kind == "schema" else value)
+            cache_kind = TREE_CACHE_KIND if kind == "tree" else kind
             payload = json.dumps(stored, ensure_ascii=False, separators=(",", ":"))
             with self._transaction() as db:
                 db.execute("BEGIN IMMEDIATE")
                 if refresh_tree:
                     db.execute("UPDATE category_cache_meta SET version=version+1 WHERE name='tree'")
-                    db.execute("DELETE FROM category_cache WHERE kind IN ('tree', 'tree_probe')")
+                    db.execute("DELETE FROM category_cache WHERE kind IN (?, 'tree_probe')", (TREE_CACHE_KIND,))
                 elif kind == 'tree' and tree_version is not None:
                     current = int(db.execute("SELECT version FROM category_cache_meta WHERE name='tree'").fetchone()[0])
                     if current != tree_version:
@@ -214,6 +205,6 @@ class CategoryCache:
                         return
                 db.execute("""INSERT INTO category_cache(kind,shop_id,cache_key,payload) VALUES (?,?,?,?)
                     ON CONFLICT(kind,shop_id,cache_key) DO UPDATE SET
-                    payload=excluded.payload, updated_at=CURRENT_TIMESTAMP""", (kind, shop_id, key, payload))
+                    payload=excluded.payload, updated_at=CURRENT_TIMESTAMP""", (cache_kind, shop_id, key, payload))
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None

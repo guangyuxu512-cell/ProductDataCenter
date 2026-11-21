@@ -332,6 +332,10 @@ def test_old_partial_tree_is_not_reused_as_complete_tree(settings):
     cache.put("tree", "shop", "1000005081", complete)
     assert cache.get("tree", "shop", "1000005081") == complete
     assert cache.tree_branches(["1000005081"]) == {"shop": {"1000005081": complete}}
+    cache.put("tree", "shop", "0", [], refresh_tree=True)
+    with cache._transaction() as db:
+        old = db.execute("SELECT payload FROM category_cache WHERE kind='tree' AND shop_id='shop' AND cache_key='1000005081'").fetchone()
+    assert json.loads(old[0]) == partial  # An old API can still read its own cache after rollback.
 
 
 def test_platform_tree_preserves_unopened_industry_status():
