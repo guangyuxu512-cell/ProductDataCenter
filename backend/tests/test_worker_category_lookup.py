@@ -91,6 +91,7 @@ def test_product_category_routes_all_use_direct_worker_results(tmp_path, monkeyp
             operation = options["operation"]
             assert options["delivery"] == "product" and options["shop_id"] == shop_id
             assert options.get("full_category_tree", False) is (operation == "tree")
+            assert options.get("require_schema_metadata", False) is (operation == "schema")
             operations.append(operation)
             task_id = uuid4()
             context = SimpleNamespace(task_id=task_id, device_id=device_id, category_id=category_id,

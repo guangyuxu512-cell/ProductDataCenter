@@ -82,7 +82,8 @@ class CentralApplicationClient:
                                delivery: Literal["central", "product"] = "central",
                                operation: Literal["schema", "tree", "search", "predict"] = "schema",
                                image_url: str | None = None, shop_id: UUID | None = None,
-                               full_category_tree: bool = False) -> CentralWorkerPrecheckTicket:
+                               full_category_tree: bool = False,
+                               require_schema_metadata: bool = False) -> CentralWorkerPrecheckTicket:
         body = {"kind": "douyin.category_schema",
                 "context": {"product_id": claim["product_id"], "revision": claim["revision"],
                             "attempt": claim["attempts"]},
@@ -93,6 +94,10 @@ class CentralApplicationClient:
             if operation != "tree":
                 raise ValueError("full_category_tree is only valid for tree lookups")
             body["input"]["full_category_tree"] = True
+        if require_schema_metadata:
+            if operation != "schema":
+                raise ValueError("require_schema_metadata is only valid for schema lookups")
+            body["input"]["require_schema_metadata"] = True
         if image_url is not None:
             body["input"]["image_url"] = image_url
         if shop_id is not None:

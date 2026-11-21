@@ -115,7 +115,8 @@ class PrecheckRunner:
             category_id, title = schema_body.categoryId, schema_body.title
         try:
             self.central.submit_worker_precheck(claim, category_id, title, delivery="product",
-                                                operation=operation, image_url=image_url)
+                                                operation=operation, image_url=image_url,
+                                                **({"require_schema_metadata": True} if operation == "schema" else {}))
         except CentralConnectionError as error:
             if error.reason == "upstream_unavailable":
                 # An unavailable device or service is not an active check.
