@@ -73,7 +73,7 @@ def _is_precheck_neutral_edit(edit) -> bool:
     """Recognize changes outside the current category, title and SKU checks."""
     safe_skus = edit.skus is None or all(item.price is None and not item.delete for item in edit.skus)
     return (any(value is not None for value in (edit.mainImages, edit.detailImages, edit.specImages, edit.skus))
-            and safe_skus and all(value is None for value in (edit.title, edit.category, edit.attributes,
+            and safe_skus and all(value is None for value in (edit.title, edit.category, edit.attributes, edit.attributePictures,
                                                                edit.specStructure, edit.specImageGroupIndex)))
 
 
@@ -120,6 +120,26 @@ def _target_fields(target):
     return category, attributes
 
 
+def _property_pictures(pictures, category_id):
+    from urllib.parse import urlsplit
+
+    values = pictures.get("values") if isinstance(pictures, dict) and pictures.get("categoryId") == category_id else None
+    result = []
+    if isinstance(values, dict):
+        for identity, entry in values.items():
+            urls = entry.get("urls") if isinstance(entry, dict) else None
+            if not isinstance(identity, str) or not isinstance(urls, list) or len(urls) != 1 or not isinstance(urls[0], str):
+                continue
+            try:
+                parsed = urlsplit(urls[0])
+            except ValueError:
+                continue
+            if parsed.scheme in {"http", "https"} and parsed.hostname:
+                label = entry.get("label") if isinstance(entry.get("label"), str) else ""
+                result.append({"id": identity, "url": urls[0], "label": label})
+    return result
+
+
 def _snapshot_category_attributes(package: dict, platform: str, row) -> dict:
     """Build PATCH-compatible fields from the same package as the version."""
     from app.modules.category_lookup.resolver import CategoryResolutionError, category_ids
@@ -158,7 +178,9 @@ def _snapshot_category_attributes(package: dict, platform: str, row) -> dict:
                 source_id = source[-1]["id"]
         else:
             source_id = None
-    return {"category": category, "sourceCategoryId": source_id,
+    selected_category = source_id if platform == "douyin" else category[-1]["id"] if category else None
+    attribute_pictures = _property_pictures(package.get("_productDataCenterPropertyPictures"), selected_category)
+    return {"category": category, "sourceCategoryId": source_id, "attributePictures": attribute_pictures,
             "attributes": [{"id": item["id"], "name": item["name"],
                             "values": [{"id": value["valueId"], "name": value["name"]}
                                        for value in item["valueItems"]]} for item in attributes],
@@ -282,6 +304,7 @@ class ProductRepository:
                 return None
             product = self._display_source_category(product)
             source_category_id = None
+            picture_block = None
             attributes = []
             target_category, target_attributes = [], []
             if product["source_platform"] in {"douyin", "jushuitan"}:
@@ -291,10 +314,11 @@ class ProductRepository:
                     uu_json #>> '{goodsInfo,catId3}', uu_json #>> '{goodsInfo,catId2}',
                     uu_json #>> '{goodsInfo,catId1}', uu_json #> '{category_properties_value,value}',
                     uu_json #> '{goodsDetailInfo,product_format}', uu_json #> '{douyinTarget}',
-                    uu_json #> '{_productDataCenterJushuitanSource}'
+                    uu_json #> '{_productDataCenterJushuitanSource}', uu_json #> '{_productDataCenterPropertyPictures}'
                     FROM products WHERE product_id=:id"""),
                     {"id": product_id}).one()
                 source_category_id = _original_category_id(levels[:4])
+                picture_block = levels[8]
                 attributes = source_attributes(levels[4], levels[5])
                 if product["source_platform"] == "jushuitan":
                     target_category, target_attributes = _target_fields(levels[6])
@@ -303,9 +327,10 @@ class ProductRepository:
                         source_category_id = source_parts[-1]["id"]
                         product["category_path"] = " → ".join(part["name"] for part in source_parts)
             elif product["source_platform"] == "pinduoduo":
-                target, pdd_values, pdd_formats, pdd_properties = conn.execute(text("""SELECT
+                target, pdd_values, pdd_formats, pdd_properties, picture_block = conn.execute(text("""SELECT
                     uu_json #> '{douyinTarget}', uu_json #> '{category_properties_value,value}',
-                    uu_json #> '{goodsDetailInfo,product_format}', uu_json #> '{product,properties}'
+                    uu_json #> '{goodsDetailInfo,product_format}', uu_json #> '{product,properties}',
+                    uu_json #> '{_productDataCenterPropertyPictures}'
                     FROM products WHERE product_id=:id"""), {"id": product_id}).one()
                 attributes = source_attributes(pdd_values, pdd_formats, pdd_properties)
                 target_category, target_attributes = _target_fields(target)
@@ -314,9 +339,11 @@ class ProductRepository:
             images = conn.execute(text("""SELECT image_type, sort_order, rel_path, source_url
                 FROM product_images WHERE product_id=:id ORDER BY image_type, sort_order"""), {"id": product_id}).mappings().all()
             product["target_category_path"] = " → ".join(part["name"] for part in target_category)
+            selected_category = source_category_id if product["source_platform"] == "douyin" else target_category[-1]["id"] if target_category else None
             return {"product": product, "skus": skus, "images": images,
                     "sourceCategoryId": source_category_id, "sourceAttributes": attributes,
-                    "targetCategory": target_category, "targetAttributes": target_attributes}
+                    "targetCategory": target_category, "targetAttributes": target_attributes,
+                    "attributePictures": _property_pictures(picture_block, selected_category)}
 
     def groups(self, allowed_groups=None) -> list[dict]:
         with self.engine.connect() as conn:

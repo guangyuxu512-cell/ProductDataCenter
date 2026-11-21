@@ -18,6 +18,7 @@ export interface EditSnapshot {
   category?: Array<{ id: string; name: string }>
   sourceCategoryId?: string | null
   attributes?: Array<{ id: string | null; name: string; values: Array<{ id: string; name: string }> }>
+  attributePictures?: Array<{ id: string; url: string; label: string }>
   specImageGroup: string
   specImages: SpecImage[]
   specGroups?: SpecGroup[]
@@ -29,6 +30,7 @@ export interface ProductPatch {
   title?: string
   category?: Array<{ id: string; name: string }>
   attributes?: Array<{ id: string; name: string; values: Array<{ valueId: string; name: string }> }>
+  attributePictures?: Array<{ id: string; url: string; label: string }>
   mainImages?: string[]
   detailImages?: string[]
   specImages?: Array<{ specId: string; url: string }>

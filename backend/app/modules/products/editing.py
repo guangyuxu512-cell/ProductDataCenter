@@ -478,6 +478,33 @@ def _edit_douyin_target(data: dict, edit: ProductEdit) -> None:
             values[item.id] = {"name": item.name, "values": [value.model_dump() for value in item.values]}
 
 
+def _edit_attribute_pictures(data: dict, platform: str, edit: ProductEdit) -> None:
+    if edit.attributePictures is None:
+        return
+    if platform == "douyin":
+        goods = _mapping(data.get("goodsInfo"), "商品信息无效")
+        category_id = next((str(goods.get(f"catId{level}")) for level in range(4, 0, -1)
+                            if goods.get(f"catId{level}") not in (None, "", "0", 0)), "")
+    else:
+        target = data.get("douyinTarget")
+        parts = target.get("category") if isinstance(target, dict) else None
+        category_id = str(parts[-1].get("id", "")) if isinstance(parts, list) and parts and isinstance(parts[-1], dict) else ""
+    if not re.fullmatch(r"[0-9]{1,20}", category_id) or not category_id.strip("0"):
+        raise ProductRequestError("请先选择抖店类目")
+    key = "_productDataCenterPropertyPictures"
+    original = data.get(key)
+    if original is not None and not isinstance(original, dict):
+        raise ProductRequestError("属性图片数据格式无效")
+    block = original if original and original.get("categoryId") == category_id else {"categoryId": category_id, "values": {}}
+    values = _mapping(block.setdefault("values", {}), "属性图片数据格式无效")
+    for picture in edit.attributePictures:
+        if picture.url:
+            values[picture.id] = {"label": picture.label.strip(), "urls": [picture.url]}
+        else:
+            values.pop(picture.id, None)
+    data[key] = block
+
+
 def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
     """Return a modified copy; reject shapes we cannot faithfully translate."""
     data = deepcopy(_mapping(source, "商品数据包格式无效"))
@@ -546,4 +573,5 @@ def apply_edit(source: dict, platform: str, edit: ProductEdit) -> dict:
             _edit_shared_text_images(data, goods, edit)
     else:
         raise ProductRequestError("暂不支持编辑该来源平台的数据包")
+    _edit_attribute_pictures(data, platform, edit)
     return data

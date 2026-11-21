@@ -1,0 +1,38 @@
+{
+  "id": "785",
+  "label": "面料材质",
+  "required": true,
+  "rules": [{"type": "max_input_num", "value": 10}],
+  "additions": {
+    "ui_type": "multi_value_measure",
+    "diy_type": 1,
+    "measure_templates": [{
+      "template_id": 873,
+      "display_name": "面料材质",
+      "value_modules": [{
+        "module_id": 1854,
+        "input_type": "enum_diy",
+        "prefix": "",
+        "suffix": "",
+        "value_required": true,
+        "unit_options": [],
+        "validate_rule": {"data_type": "string", "min": null, "max": null, "precision": null},
+        "value_options": [
+          {"label": "棉", "value": "棉"},
+          {"label": "牛角瓜纤维", "value": "牛角瓜纤维"},
+          {"label": "木棉", "value": "木棉"},
+          {"label": "亚麻", "value": "亚麻"}
+        ]
+      }, {
+        "module_id": 1855,
+        "input_type": "input",
+        "prefix": "",
+        "suffix": "",
+        "value_required": true,
+        "unit_options": [{"label": "%", "value": 15}],
+        "validate_rule": {"data_type": "float", "min": 0.01, "max": 100, "precision": 2},
+        "value_options": []
+      }]
+    }]
+  }
+}

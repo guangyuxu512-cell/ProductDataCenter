@@ -50,6 +50,42 @@ def test_shop_inventory_only_comes_from_authorized_worker_mappings(configured):
     assert not hasattr(client, "read_session")
 
 
+@pytest.mark.parametrize("status", [422, 503])
+def test_complete_tree_is_explicit_and_unsupported_worker_fails_closed(configured, status):
+    import json
+    requests = []
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(status, json={"detail": "unavailable"})
+    client = mock_client(configured, handler)
+    with pytest.raises(CentralConnectionError) as error:
+        client.submit_worker_precheck({"product_id": "lookup:test", "revision": 1, "attempts": 1},
+            "1000005081", "商品", operation="tree", delivery="product", full_category_tree=True)
+    assert error.value.reason == "upstream_unavailable"
+    assert requests[0]["input"]["full_category_tree"] is True
+    with pytest.raises(ValueError):
+        client.submit_worker_precheck({"product_id": "lookup:test", "revision": 1, "attempts": 1},
+            "1", "商品", operation="schema", full_category_tree=True)
+
+
+@pytest.mark.parametrize("status", [422, 503])
+def test_schema_metadata_is_explicit_and_unsupported_worker_fails_closed(configured, status):
+    import json
+    requests = []
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(status, json={"detail": "unavailable"})
+    client = mock_client(configured, handler)
+    with pytest.raises(CentralConnectionError) as error:
+        client.submit_worker_precheck({"product_id": "lookup:test", "revision": 1, "attempts": 1},
+            "1000010274", "商品", operation="schema", delivery="product", require_schema_metadata=True)
+    assert error.value.reason == "upstream_unavailable"
+    assert requests[0]["input"]["require_schema_metadata"] is True
+    with pytest.raises(ValueError):
+        client.submit_worker_precheck({"product_id": "lookup:test", "revision": 1, "attempts": 1},
+            "1", "商品", operation="tree", require_schema_metadata=True)
+
+
 
 
 

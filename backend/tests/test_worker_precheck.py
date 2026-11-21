@@ -78,7 +78,8 @@ def test_submit_once_then_direct_result_uses_product_rules(settings):
         assert runner.accept_worker_delivery(delivery_context(),
             SimpleNamespace(status="success", result=success_result(items)), "a" * 64)
     assert len(requests) == 1 and requests[0]["delivery"] == "product"
-    assert requests[0]["input"] == {"category_id": "1000001535", "title": "测试商品"}
+    assert requests[0]["input"] == {"category_id": "1000001535", "title": "测试商品",
+                                     "require_schema_metadata": True}
     runner.queue.wait_for_worker.assert_called_once_with(claim)
     result_claim, result = runner.queue.complete.call_args.args
     assert result_claim == claim

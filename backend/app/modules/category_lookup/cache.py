@@ -11,7 +11,16 @@ class CacheUnavailable(Exception):
     pass
 
 
-SCHEMA_FORMAT_VERSION = 3
+SCHEMA_FORMAT_VERSION = 4
+TREE_FORMAT_VERSION = 2
+
+
+def _tree_items(value):
+    """Do not reuse tree branches saved before complete-tree support."""
+    if (isinstance(value, dict) and value.get("formatVersion") == TREE_FORMAT_VERSION
+            and isinstance(value.get("items"), list)):
+        return value["items"]
+    return None
 
 
 def _schema_signature(attributes: list[dict]) -> list[str]:
@@ -66,12 +75,13 @@ class CategoryCache:
                 row = db.execute("SELECT payload FROM category_cache WHERE kind=? AND shop_id=? AND cache_key=?",
                                  (kind, shop_id, key)).fetchone()
             value = json.loads(row[0]) if row else None
+            if kind == "tree":
+                return _tree_items(value)
             if kind != "schema" or value is None:
                 return value
-            # Version-one rows are plain normalized lists and have already
-            # discarded the platform control metadata.  Treat each such row
-            # as one cache miss; the successful live response below replaces
-            # it with the versioned representation and normal caching resumes.
+            # Older rows discarded nested material options or picture rules.
+            # Treat each as one miss; a successful refreshed schema replaces
+            # it and normal persistent caching resumes.
             if (not isinstance(value, dict) or value.get("formatVersion") != SCHEMA_FORMAT_VERSION
                     or not isinstance(value.get("attributes"), list)):
                 return None
@@ -134,8 +144,9 @@ class CategoryCache:
                     value = json.loads(raw)
                 except (ValueError, TypeError):
                     continue
-                if isinstance(value, list):
-                    shops.setdefault(shop, {})[parent] = value
+                items = _tree_items(value)
+                if items is not None:
+                    shops.setdefault(shop, {})[parent] = items
             return shops
         except (sqlite3.Error, OSError, ValueError, TypeError):
             raise CacheUnavailable() from None
@@ -181,7 +192,8 @@ class CategoryCache:
             refresh_schema: bool = False, schema_version: int | None = None) -> None:
         try:
             stored = ({"formatVersion": SCHEMA_FORMAT_VERSION, "attributes": value}
-                      if kind == "schema" else value)
+                      if kind == "schema" else {"formatVersion": TREE_FORMAT_VERSION, "items": value}
+                      if kind == "tree" else value)
             payload = json.dumps(stored, ensure_ascii=False, separators=(",", ":"))
             with self._transaction() as db:
                 db.execute("BEGIN IMMEDIATE")

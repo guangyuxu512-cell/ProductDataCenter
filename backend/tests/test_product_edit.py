@@ -138,6 +138,46 @@ def test_jushuitan_target_category_preserves_source_category_and_sku(douyin):
     assert saved["douyinTarget"]["attributes"]["12"]["values"][0]["valueId"] == "13"
 
 
+@pytest.mark.parametrize("platform", ["douyin", "jushuitan"])
+def test_attribute_picture_is_saved_under_the_selected_category_and_reopened(douyin, platform):
+    original = deepcopy(douyin)
+    edit = ProductEdit(expectedVersion=VERSION, category=[{"id": "1000010274", "name": "连体袜"}],
+                       attributePictures=[{"id": "785", "label": "水洗标/吊牌图", "url": "https://example.test/wash.jpg"}])
+    saved = apply_edit(douyin, platform, edit)
+    assert douyin == original and saved["goodsSkuInfo"] == original["goodsSkuInfo"]
+    assert saved["_productDataCenterPropertyPictures"] == {"categoryId": "1000010274",
+        "values": {"785": {"label": "水洗标/吊牌图", "urls": ["https://example.test/wash.jpg"]}}}
+    row = {"category_level_1": "连体袜", "category_path": "连体袜"}
+    assert _snapshot_category_attributes(saved, platform, row)["attributePictures"] == [
+        {"id": "785", "label": "水洗标/吊牌图", "url": "https://example.test/wash.jpg"}]
+    removed = apply_edit(saved, platform, ProductEdit(expectedVersion=VERSION,
+        attributePictures=[{"id": "785", "url": ""}]))
+    assert _snapshot_category_attributes(removed, platform, row)["attributePictures"] == []
+    changed = apply_edit(saved, platform, ProductEdit(expectedVersion=VERSION,
+        category=[{"id": "1000001535", "name": "新类目"}]))
+    assert _snapshot_category_attributes(changed, platform, row)["attributePictures"] == []
+    assert changed["_productDataCenterPropertyPictures"] == saved["_productDataCenterPropertyPictures"]
+
+
+def test_attribute_picture_rejects_invalid_urls_and_requires_a_category(douyin):
+    with pytest.raises(ValidationError):
+        ProductEdit(expectedVersion=VERSION, attributePictures=[{"id": "785", "url": "file:///secret"}])
+    douyin["goodsInfo"].update({f"catId{level}": "0" for level in range(1, 5)})
+    with pytest.raises(ProductRequestError, match="选择抖店类目"):
+        apply_edit(douyin, "douyin", ProductEdit(expectedVersion=VERSION,
+            attributePictures=[{"id": "785", "label": "水洗标/吊牌图", "url": "https://example.test/wash.jpg"}]))
+
+
+def test_jushuitan_listing_projection_keeps_the_attribute_picture(douyin):
+    from app.modules.products.rpa_api import _jushuitan_listing_package
+
+    saved = apply_edit(douyin, "jushuitan", ProductEdit(expectedVersion=VERSION,
+        category=[{"id": "1000010274", "name": "连体袜"}],
+        attributePictures=[{"id": "785", "label": "水洗标/吊牌图", "url": "https://example.test/wash.jpg"}]))
+    projected = _jushuitan_listing_package(deepcopy(saved), {"product_id": "manual:12345678", "source_product_id": None})
+    assert projected["_productDataCenterPropertyPictures"] == saved["_productDataCenterPropertyPictures"]
+
+
 def test_pdd_shared_package_edits_preserve_source_category_and_skus():
     package = {"goodsInfo": {"goodsName": "拼多多商品", "goodsImageList": ["https://example.test/a"],
                              "catId1": "77", "skuInfoMap": {"1": {"sku_id": "100"}}},

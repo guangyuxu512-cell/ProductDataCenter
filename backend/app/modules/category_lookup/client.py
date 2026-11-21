@@ -46,8 +46,12 @@ def normalize_category_options(value, parent_id: str) -> list[dict]:
         if identity in seen:
             continue
         seen.add(identity)
-        result.append({"id": identity, "name": name.strip(), "isLeaf": leaf,
-                       "enabled": item.get("enable", 1) not in (0, False)})
+        status = item.get("industry_status")
+        normalized = {"id": identity, "name": name.strip(), "isLeaf": leaf,
+                      "enabled": item.get("enable", 1) not in (0, False)}
+        if isinstance(status, int) and not isinstance(status, bool):
+            normalized["industryStatus"] = status
+        result.append(normalized)
     return result
 
 
@@ -180,6 +184,22 @@ def normalize_multi_measure(raw) -> dict | None:
     return {key: measure[key] for key in ("units", "minimum", "maximum", "precision", "dataType")}
 
 
+def normalize_options(raw) -> list[dict]:
+    """Normalize option IDs and labels without inferring platform values."""
+    options, option_ids = [], set()
+    for option in raw if isinstance(raw, list) else []:
+        if not isinstance(option, dict):
+            continue
+        name = option.get("value_name") or option.get("label") or option.get("name") or option.get("text")
+        val = option.get("value_id", option.get("value", option.get("id")))
+        if isinstance(name, str) and isinstance(val, (str, int)) and not isinstance(val, bool):
+            identity = str(val)[:200]
+            if identity not in option_ids:
+                option_ids.add(identity)
+                options.append({"label": name[:200], "value": identity})
+    return options
+
+
 def normalize_fields(items: list) -> list[dict]:
     fields = []
     # The platform response is already capped by MAX_BYTES. Do not silently
@@ -193,18 +213,7 @@ def normalize_fields(items: list) -> list[dict]:
         label = item.get("label") or item.get("name") or str(key)
         if not isinstance(label, str):
             continue
-        options = []
-        option_ids = set()
-        for option in item.get("options", []) if isinstance(item.get("options"), list) else []:
-            if not isinstance(option, dict):
-                continue
-            name = option.get("value_name") or option.get("label") or option.get("name") or option.get("text")
-            val = option.get("value_id", option.get("value", option.get("id")))
-            if isinstance(name, str) and isinstance(val, (str, int)) and not isinstance(val, bool):
-                identity = str(val)[:200]
-                if identity not in option_ids:
-                    option_ids.add(identity)
-                    options.append({"label": name[:200], "value": identity})
+        options = normalize_options(item.get("options"))
 
         # The current Douyin form response keeps the actual editor capability
         # in ``additions``.  In particular, ``ui_type=multi_select`` controls
@@ -240,6 +249,15 @@ def normalize_fields(items: list) -> list[dict]:
             multi_measure = normalize_multi_measure(additions.get("measure_templates"))
             if multi_measure:
                 control, allow_custom, rule_status = "multi_measure", True, "confirmed"
+                # For this confirmed platform control, the enum module owns
+                # the choices.  Its values are not necessarily the numeric
+                # IDs found in the attribute's top-level options.  Prefer the
+                # nested list as one set, avoiding duplicate labels with two
+                # different IDs.  Older Worker results omit it entirely.
+                enum = additions["measure_templates"][0]["value_modules"][0]
+                nested_options = normalize_options(enum.get("value_options"))
+                if nested_options:
+                    options = nested_options
         elif ui_type is None:
             field_type = item.get("type")
             if options and isinstance(item.get("multiple"), bool):
@@ -261,5 +279,13 @@ def normalize_fields(items: list) -> list[dict]:
             field["measureTemplates"] = measure_templates
         if multi_measure:
             field["multiMeasureRule"] = multi_measure
+        picture = item.get("property_picture")
+        if (isinstance(picture, dict) and str(picture.get("id", "")) == str(key)
+                and isinstance(picture.get("label"), str) and picture["label"].strip()
+                and type(picture.get("required")) is bool):
+            tips = picture.get("label_tips")
+            field["pictureRule"] = {"id": str(key)[:100], "label": picture["label"][:200],
+                                    "required": picture["required"],
+                                    "labelTips": tips[:500] if isinstance(tips, str) else ""}
         fields.append(field)
     return fields

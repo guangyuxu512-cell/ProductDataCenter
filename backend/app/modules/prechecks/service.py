@@ -9,7 +9,7 @@ from app.modules.category_lookup.api import (
     AutoSchemaBody, PredictBody, PredictManualBody, PredictResponse, SchemaResponse, predict, predict_manual, schema_auto,
 )
 from app.modules.category_lookup.client import DouyinCategoryClient
-from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, multi_measure_valid, normalize_multi_values
+from app.modules.category_lookup.attribute_values import UNVERIFIED, measure_valid, multi_measure_parts, multi_measure_valid, normalize_multi_values
 from app.modules.central.client import CentralApplicationClient
 from app.modules.products.service import ProductService
 from app.modules.products.title import title_units
@@ -64,6 +64,17 @@ def _attribute_problem(field, values: list[dict]) -> str | None:
             return UNVERIFIED
         if not all(checks):
             return "格式无效"
+        # The platform's fabric composition property explicitly requires the
+        # percentages to total 100%. Do not apply this to other measure fields.
+        rule = getattr(field, "multiMeasureRule", None)
+        if field.id == "785" and rule and len(rule.units) == 1 and rule.units[0].label == "%":
+            parts = [multi_measure_parts(value["name"], rule, field.options) for value in values]
+            if any(part is None for part in parts):
+                return UNVERIFIED
+            if len({part[0] for part in parts}) != len(parts):
+                return "不可重复"
+            if sum(part[1] for part in parts) != Decimal("100"):
+                return "含量总和需为100%"
     if control == "measure" and (len(values) != 1 or not measure_valid(values[0]["name"], getattr(field, "measureTemplates", []))):
         return "格式无效"
     if control == "number":
@@ -177,6 +188,12 @@ def check_product(product_id: str, service: ProductService, central: CentralAppl
             continue
         _add_issue(result, "attribute_invalid" if problem != "未填写" else "attribute_missing",
                    f"{field.label}{problem}", "attributes", fieldId=field.id)
+    pictures = {item.get("id") for item in detail.get("attributePictures", []) if item.get("url")}
+    for field in schema.attributes:
+        picture = getattr(field, "pictureRule", None)
+        if picture is not None and picture.required and picture.id not in pictures:
+            _add_issue(result, "attribute_picture_missing", f"{picture.label}未填写", "attributes",
+                       fieldId=f"picture-{field.id}")
     if unverified:
         # This is our incomplete check, not a rejection reported by the platform.
         # Keep the saved values untouched and do not claim a successful check.

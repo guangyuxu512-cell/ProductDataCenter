@@ -113,3 +113,37 @@ def multi_measure_valid(value: str, rule, options=()) -> bool | None:
                   if text[:index].strip() and numeric.fullmatch(text[index:].strip())}
     valid = [(name, number) for name, number in candidates if valid_number(number)]
     return True if len(valid) == 1 else None if len(valid) > 1 else False
+
+
+def multi_measure_parts(value: str, rule, options=()) -> tuple[str, Decimal] | None:
+    """Resolve a valid material value only when the name/amount boundary is unique."""
+    if multi_measure_valid(value, rule, options) is not True:
+        return None
+    text = value.strip()
+    units = sorted((unit.label for unit in rule.units if unit.label), key=len, reverse=True)
+    unit = next((unit for unit in units if text.endswith(unit)), None)
+    if not unit:
+        return None
+    text = text[:-len(unit)].strip()
+    numeric = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
+    known = {(option.label, text[len(option.label):].strip()) for option in options
+             if option.label and text.startswith(option.label)
+             and numeric.fullmatch(text[len(option.label):].strip())}
+    if len(known) == 1:
+        name, number = next(iter(known))
+        return name, Decimal(number)
+    if len(known) > 1:
+        return None
+    candidates = []
+    for index in range(1, len(text)):
+        name, number = text[:index].strip(), text[index:].strip()
+        if not name or not numeric.fullmatch(number):
+            continue
+        decimal = Decimal(number)
+        digits = max(-decimal.as_tuple().exponent, 0)
+        if (decimal.is_finite() and (rule.dataType != "int" or decimal == decimal.to_integral_value())
+                and (rule.minimum is None or decimal >= Decimal(str(rule.minimum)))
+                and (rule.maximum is None or decimal <= Decimal(str(rule.maximum)))
+                and (rule.precision is None or digits <= rule.precision)):
+            candidates.append((name, decimal))
+    return candidates[0] if len(candidates) == 1 else None
